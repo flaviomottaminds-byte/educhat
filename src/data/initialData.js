@@ -1,9 +1,9 @@
 export const INITIAL_COLLABORATORS = [
-  { id: 'u1', name: 'Flávio Motta', role: 'Diretor / Gestor', avatar: '👨‍💼', online: true },
-  { id: 'u2', name: 'Fernanda Silva', role: 'Financeiro & Splits', avatar: '👩‍💻', online: true },
-  { id: 'u3', name: 'Carlos Eduardo', role: 'Suporte a Polos', avatar: '👨‍🔧', online: true },
-  { id: 'u4', name: 'Juliana Mendes', role: 'Secretaria Acadêmica', avatar: '👩‍🏫', online: false },
-  { id: 'u5', name: 'Roberto Lima', role: 'Comercial & Matrículas', avatar: '👨‍💼', online: true },
+  { id: 'u1', name: 'Flávio Motta', role: 'Diretor / Gestor', avatar: '👨‍💼', online: true, department: 'Diretoria' },
+  { id: 'u2', name: 'Fernanda Silva', role: 'Financeiro & Splits', avatar: '👩‍💻', online: true, department: 'Financeiro' },
+  { id: 'u3', name: 'Carlos Eduardo', role: 'Suporte a Polos', avatar: '👨‍🔧', online: true, department: 'Atendimento' },
+  { id: 'u4', name: 'Juliana Mendes', role: 'Secretaria Acadêmica', avatar: '👩‍🏫', online: false, department: 'Acadêmico' },
+  { id: 'u5', name: 'Roberto Lima', role: 'Comercial & Matrículas', avatar: '👨‍💼', online: true, department: 'Comercial' },
 ];
 
 export const INITIAL_CHANNELS = [
@@ -15,6 +15,7 @@ export const INITIAL_CHANNELS = [
 ];
 
 export const INITIAL_MESSAGES = {
+  // Canais Departamentais (Múltiplos Colaboradores)
   'c-financeiro': [
     {
       id: 'm1',
@@ -66,6 +67,72 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Equipe, a partir de hoje todas as comunicações internas e alinhamentos de demandas serão centralizados aqui no EduChat. WhatsApp apenas para atendimento a clientes externos!',
       timestamp: '09:00',
+      actionExtracted: false,
+    }
+  ],
+
+  // Conversas Privadas 1 a 1 (Estilo WhatsApp) entre Flávio e cada colaborador
+  'dm-u2': [
+    {
+      id: 'dm1_1',
+      senderId: 'u2',
+      senderName: 'Fernanda Silva',
+      text: 'Oi Flávio, boa tarde! Você tem 5 minutinhos para alinharmos o fechamento de comissões dos polos do mês passado?',
+      timestamp: '15:10',
+      actionExtracted: false,
+    },
+    {
+      id: 'dm1_2',
+      senderId: 'u1',
+      senderName: 'Flávio Motta',
+      text: 'Oi Fernanda! Pode falar. Os relatórios do Asaas já bateram com o extrato?',
+      timestamp: '15:12',
+      actionExtracted: false,
+    },
+    {
+      id: 'dm1_3',
+      senderId: 'u2',
+      senderName: 'Fernanda Silva',
+      text: 'Sim, tudo conciliado. Só preciso que você aprove a transferência de R$ 4.200 do Polo Salvador.',
+      timestamp: '15:14',
+      actionExtracted: false,
+    }
+  ],
+  'dm-u3': [
+    {
+      id: 'dm2_1',
+      senderId: 'u3',
+      senderName: 'Carlos Eduardo',
+      text: 'Flávio, o coordenador do polo de Manaus ligou elogiando a nova velocidade de liberação de cursos no eAula!',
+      timestamp: '13:05',
+      actionExtracted: false,
+    },
+    {
+      id: 'dm2_2',
+      senderId: 'u1',
+      senderName: 'Flávio Motta',
+      text: 'Excelente notícia Carlos! Esse era o nosso objetivo principal com a automação.',
+      timestamp: '13:10',
+      actionExtracted: false,
+    }
+  ],
+  'dm-u4': [
+    {
+      id: 'dm3_1',
+      senderId: 'u4',
+      senderName: 'Juliana Mendes',
+      text: 'Flávio, deixei na sua mesa virtual o documento de colação de grau para colher sua assinatura digital.',
+      timestamp: '10:30',
+      actionExtracted: false,
+    }
+  ],
+  'dm-u5': [
+    {
+      id: 'dm4_1',
+      senderId: 'u5',
+      senderName: 'Roberto Lima',
+      text: 'Fechamos mais 15 matrículas corporativas hoje com o polo de Curitiba! 🎉',
+      timestamp: '16:00',
       actionExtracted: false,
     }
   ]

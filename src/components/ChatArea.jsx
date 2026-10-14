@@ -1,15 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Smile, Sparkles, Hash, CheckSquare, PlusCircle } from 'lucide-react';
+import { Send, Paperclip, Sparkles, Hash, Lock, Circle, Phone, Video } from 'lucide-react';
 
 export default function ChatArea({
-  channel,
+  chatMeta, // { type: 'channel' | 'dm', data: Channel | Collaborator }
   messages,
   onSendMessage,
   onCreateTaskFromMessage,
-  onSummarizeChannel
+  onSummarizeChat
 }) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
+
+  const isDM = chatMeta.type === 'dm';
+  const target = chatMeta.data;
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -17,7 +20,7 @@ export default function ChatArea({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, chatMeta]);
 
   const handleSend = (e) => {
     e.preventDefault();
@@ -28,37 +31,70 @@ export default function ChatArea({
 
   return (
     <section className="flex-1 flex flex-col h-full bg-chatBg relative">
-      {/* Header do Canal */}
+      {/* Header do Chat (Canal ou 1 a 1) */}
       <div className="h-16 px-6 bg-chatPanel border-b border-chatBorder flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[#111b21] flex items-center justify-center text-brand-500 font-bold border border-chatBorder">
-            <Hash size={20} />
-          </div>
+          {isDM ? (
+            <div className="relative text-2xl">
+              <span>{target.avatar}</span>
+              <span
+                className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-chatPanel ${
+                  target.online ? 'bg-brand-500' : 'bg-gray-500'
+                }`}
+              />
+            </div>
+          ) : (
+            <div className="w-10 h-10 rounded-full bg-[#111b21] flex items-center justify-center text-brand-500 font-bold border border-chatBorder">
+              <Hash size={20} />
+            </div>
+          )}
+
           <div>
             <h2 className="text-white font-bold text-base leading-tight flex items-center gap-2">
-              #{channel.name}
+              {isDM ? target.name : `#${target.name}`}
+              {isDM && (
+                <span className="text-[10px] bg-purple-500/20 text-purple-300 font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border border-purple-500/30">
+                  <Lock size={10} /> Privada (1 a 1)
+                </span>
+              )}
             </h2>
-            <p className="text-xs text-[#8696a0]">{channel.desc}</p>
+            <p className="text-xs text-[#8696a0]">
+              {isDM ? `${target.role} · ${target.online ? 'Online agora' : 'Offline'}` : target.desc}
+            </p>
           </div>
         </div>
 
-        {/* Botão Resumo IA do Canal */}
-        <button
-          onClick={onSummarizeChannel}
-          className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 border border-purple-500/30 text-xs font-semibold transition"
-        >
-          <Sparkles size={15} className="text-purple-400" />
-          <span>Resumir com IA</span>
-        </button>
+        {/* Botão Resumo IA e Ações */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onSummarizeChat}
+            className="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 border border-purple-500/30 text-xs font-semibold transition"
+          >
+            <Sparkles size={15} className="text-purple-400" />
+            <span>{isDM ? 'Resumir Conversa' : 'Resumir Canal'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Lista de Mensagens */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-[#8696a0]">
-            <Hash size={40} className="mb-2 opacity-50" />
-            <p className="text-sm">Nenhuma mensagem neste canal ainda.</p>
-            <p className="text-xs mt-1">Inicie a conversa interna com sua equipe!</p>
+            {isDM ? (
+              <>
+                <span className="text-4xl mb-2">{target.avatar}</span>
+                <p className="text-sm font-semibold text-white">Início da conversa com {target.name}</p>
+                <p className="text-xs mt-1">
+                  Esta é uma conversa direta e privada entre você e {target.name.split(' ')[0]}.
+                </p>
+              </>
+            ) : (
+              <>
+                <Hash size={40} className="mb-2 opacity-50" />
+                <p className="text-sm">Nenhuma mensagem neste canal ainda.</p>
+                <p className="text-xs mt-1">Inicie a conversa interna com sua equipe!</p>
+              </>
+            )}
           </div>
         ) : (
           messages.map((m) => {
@@ -68,7 +104,7 @@ export default function ChatArea({
                 key={m.id}
                 className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}
               >
-                {!isMe && (
+                {!isMe && !isDM && (
                   <span className="text-[11px] font-semibold text-[#00a884] ml-2 mb-1">
                     {m.senderName}
                   </span>
@@ -127,10 +163,10 @@ export default function ChatArea({
             /tarefa [descrição]
           </button>
           <button
-            onClick={() => onSendMessage('🤖 @IA, liste as pendências do financeiro para hoje')}
+            onClick={() => onSendMessage(isDM ? `Oi ${target.name.split(' ')[0]}, preciso que você ` : '@IA listar pendências')}
             className="text-[11px] text-purple-400 hover:underline bg-purple-500/10 px-2 py-0.5 rounded"
           >
-            @IA listar pendências
+            {isDM ? `Cobrar ${target.name.split(' ')[0]}` : '@IA listar pendências'}
           </button>
         </div>
 
@@ -147,7 +183,11 @@ export default function ChatArea({
             type="text"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
-            placeholder="Digite uma mensagem interna para a equipe..."
+            placeholder={
+              isDM
+                ? `Mensagem privada para ${target.name.split(' ')[0]}...`
+                : `Mensagem no canal #${target.name}...`
+            }
             className="flex-1 bg-chatSidebar text-white text-sm placeholder-[#8696a0] px-4 py-2.5 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 transition"
           />
 
