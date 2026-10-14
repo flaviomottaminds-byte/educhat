@@ -6,6 +6,7 @@ import GestaoDashboard from './components/GestaoDashboard';
 import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
+import WhatsAppDossierModal from './components/WhatsAppDossierModal';
 import { Shield } from 'lucide-react';
 import {
   INITIAL_CHANNELS,
@@ -61,6 +62,7 @@ export default function App() {
   const [pops, setPops] = useState(INITIAL_POPS);
   const [customAIPrompt, setCustomAIPrompt] = useState(DEFAULT_AI_PROMPT);
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
+  const [isDossierOpen, setIsDossierOpen] = useState(false);
 
   // Chat ativo: canal ou DM
   const [activeChat, setActiveChat] = useState({
@@ -248,6 +250,50 @@ export default function App() {
     }
   };
 
+  // Importar tarefas a partir do Dossiê do WhatsApp
+  const handleCreateTasksFromDossier = (tasksToAdd) => {
+    const mapped = tasksToAdd.map((t, idx) => ({
+      ...t,
+      id: 'dossier_t_' + Date.now() + '_' + idx,
+      status: 'backlog',
+      assigneeAvatar: t.assignee.includes('Fernanda') ? '👩‍💻' : t.assignee.includes('Juliana') ? '👩‍🏫' : '👨‍🔧',
+      channel: t.department === 'Financeiro' ? '#financeiro' : '#secretaria-pedagogica',
+      sourceMessage: `Dossiê WhatsApp: "${t.desc}"`
+    }));
+    setTasks((prev) => [...mapped, ...prev]);
+  };
+
+  // Auto-alimentar memória da IA com insights e procedimentos minerados da conversa
+  const handleFeedAIMemory = (learnings) => {
+    // 1. Incorporar novo POP se identificado
+    if (learnings.discoveredPop) {
+      setPops((prev) => [
+        {
+          id: 'pop_' + Date.now(),
+          title: learnings.discoveredPop.title,
+          steps: learnings.discoveredPop.steps
+        },
+        ...prev
+      ]);
+    }
+    // 2. Incorporar novo SLA se identificado
+    if (learnings.slaInsight) {
+      setSlas((prev) => [
+        {
+          id: 'sla_' + Date.now(),
+          department: 'Secretaria Acadêmica',
+          demand: 'Certificação de Concurseiros (Pós)',
+          slaTime: '48 horas (Prioritário)'
+        },
+        ...prev
+      ]);
+    }
+    // 3. Acrescentar fatos aprendidos às Diretrizes Gerais da IA
+    if (learnings.newFacts && learnings.newFacts.length > 0) {
+      setCustomAIPrompt((prev) => `${prev}\n\nREGRAS APRENDIDAS VIA HISTÓRICO DO WHATSAPP:\n- ${learnings.newFacts.join('\n- ')}`);
+    }
+  };
+
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
@@ -287,6 +333,7 @@ export default function App() {
           onSendMessage={handleSendMessage}
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
           onSummarizeChat={handleSummarizeChat}
+          onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
         />
       )}
 
@@ -372,6 +419,14 @@ export default function App() {
         onRemovePop={(id) => setPops((prev) => prev.filter((p) => p.id !== id))}
         customPrompt={customAIPrompt}
         onSaveCustomPrompt={(newPrompt) => setCustomAIPrompt(newPrompt)}
+      />
+
+      {/* Modal de Dossiê 360º & Auto-Aprendizado do WhatsApp */}
+      <WhatsAppDossierModal
+        isOpen={isDossierOpen}
+        onClose={() => setIsDossierOpen(false)}
+        onCreateTasks={handleCreateTasksFromDossier}
+        onFeedAIMemory={handleFeedAIMemory}
       />
     </div>
   );

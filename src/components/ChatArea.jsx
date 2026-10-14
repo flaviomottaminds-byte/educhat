@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, Sparkles, Hash, Lock, Smile, Mic } from 'lucide-react';
+import { Send, Paperclip, Sparkles, Hash, Lock, Smile, Mic, FileText } from 'lucide-react';
 
 export default function ChatArea({
   chatMeta, // { type: 'channel' | 'dm', data: Channel | Collaborator }
   messages,
   onSendMessage,
   onCreateTaskFromMessage,
-  onSummarizeChat
+  onSummarizeChat,
+  onOpenWhatsAppDossier
 }) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
@@ -66,14 +67,23 @@ export default function ChatArea({
           </div>
         </div>
 
-        {/* Botão Resumo IA e Ações */}
+        {/* Botões de Inteligência e Ações */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenWhatsAppDossier}
+            title="Importar e analisar histórico longo do WhatsApp com IA para gerar Dossiê e Cards"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900/50 border border-brand-200 dark:border-brand-500/30 text-xs font-semibold shadow-xs transition"
+          >
+            <FileText size={14} className="text-brand-600 dark:text-brand-400" />
+            <span>Analisar Histórico WhatsApp</span>
+          </button>
+
           <button
             onClick={onSummarizeChat}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-purple-600/20 text-purple-700 dark:text-purple-300 hover:bg-slate-50 dark:hover:bg-purple-600/30 border border-slate-200 dark:border-purple-500/30 text-xs font-medium shadow-xs transition"
           >
             <Sparkles size={14} className="text-purple-600 dark:text-purple-400" />
-            <span>{isDM ? 'Resumir Conversa' : 'Resumo do Canal'}</span>
+            <span>{isDM ? 'Resumir' : 'Resumo Canal'}</span>
           </button>
         </div>
       </div>
