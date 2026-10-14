@@ -20,6 +20,25 @@ const INITIAL_VIP_CLIENTS = [
   { id: 'vip4', name: 'FM Educacional', plan: 'Plano Fixo Ilimitado', since: '2026' },
 ];
 
+const INITIAL_SLAS = [
+  { id: 's1', department: 'Secretaria Acadêmica', demand: 'Reposições de Aulas e Notas', slaTime: '48 horas' },
+  { id: 's2', department: 'Financeiro & Splits', demand: 'Retificação de Fatura / Nota Fiscal', slaTime: '24 horas' },
+  { id: 's3', department: 'Suporte a Polos', demand: 'Liberação de Cursos no eAula', slaTime: '12 horas' },
+];
+
+const INITIAL_POPS = [
+  {
+    id: 'p1',
+    title: 'POP - Retificação de Fatura Asaas e Envio de 2ª Via',
+    steps: '1. Localizar a cobrança original no painel Asaas;\n2. Cancelar e emitir nova cobrança com os valores e splits corrigidos;\n3. Gerar link e enviar no chat privado do polo;\n4. Atualizar o Card no Kanban para Concluído.'
+  },
+  {
+    id: 'p2',
+    title: 'POP - Validação de Documentação de Pós e Emissão de Certificado',
+    steps: '1. Conferir RG e histórico acadêmico no eAula;\n2. Solicitar assinatura digital da diretoria;\n3. Fazer upload do PDF e liberar acesso ao aluno no portal.'
+  }
+];
+
 const DEFAULT_AI_PROMPT = `REGRAS DE CLASSIFICAÇÃO DA IA:
 1. CLIENTES VIP (PLANO FIXO): Se a conversa mencionar Polos cadastrados como VIP (ex: Campinas, Salvador, Fama, FM Educacional), classifique a demanda como Prioridade MÁXIMA (VIP), ative a tag 👑 VIP e defina SLA prioritário de até 4 horas.
 2. CLIENTES AVULSOS: Se o cliente for avulso ou comum, classifique como Prioridade Média/Baixa com prazo de 48 horas.
@@ -32,8 +51,10 @@ export default function App() {
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
 
-  // Base de Conhecimento e Memória da IA
+  // Base de Conhecimento, SLAs e Memória da IA
   const [vipClients, setVipClients] = useState(INITIAL_VIP_CLIENTS);
+  const [slas, setSlas] = useState(INITIAL_SLAS);
+  const [pops, setPops] = useState(INITIAL_POPS);
   const [customAIPrompt, setCustomAIPrompt] = useState(DEFAULT_AI_PROMPT);
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
 
@@ -297,6 +318,12 @@ export default function App() {
         vipClients={vipClients}
         onAddVipClient={(newVip) => setVipClients((prev) => [...prev, newVip])}
         onRemoveVipClient={(id) => setVipClients((prev) => prev.filter((v) => v.id !== id))}
+        slas={slas}
+        onAddSla={(newSla) => setSlas((prev) => [...prev, newSla])}
+        onRemoveSla={(id) => setSlas((prev) => prev.filter((s) => s.id !== id))}
+        pops={pops}
+        onAddPop={(newPop) => setPops((prev) => [...prev, newPop])}
+        onRemovePop={(id) => setPops((prev) => prev.filter((p) => p.id !== id))}
         customPrompt={customAIPrompt}
         onSaveCustomPrompt={(newPrompt) => setCustomAIPrompt(newPrompt)}
       />

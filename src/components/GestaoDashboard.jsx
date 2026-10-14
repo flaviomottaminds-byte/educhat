@@ -1,11 +1,10 @@
 import React from 'react';
-import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck, Sparkles, MessageCircle, ArrowUpRight, BookOpen } from 'lucide-react';
 
 export default function GestaoDashboard({ tasks, channels, collaborators }) {
   const totalTasks = tasks.length;
   const doneTasks = tasks.filter((t) => t.status === 'done').length;
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress').length;
-  const waitingTasks = tasks.filter((t) => t.status === 'waiting' || t.status === 'backlog').length;
 
   return (
     <div className="flex-1 flex flex-col h-full bg-chatBg p-8 overflow-y-auto">
@@ -13,10 +12,10 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
       <div className="mb-8">
         <h2 className="text-3xl font-bold text-white flex items-center gap-3">
           <BarChart3 className="text-brand-500" />
-          Painel de Gestão & Produtividade
+          Painel de Gestão & Inteligência Operacional
         </h2>
         <p className="text-sm text-[#8696a0] mt-1">
-          Visão executiva das operações internas: processos, gargalos e tempo poupado fora do WhatsApp
+          Métricas de SLA por departamento, mineração de conversas recorrentes e oportunidades de melhoria contínua
         </p>
       </div>
 
@@ -25,10 +24,10 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
         <div className="bg-chatPanel border border-chatBorder rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between text-[#8696a0] mb-2">
             <span className="text-xs font-semibold uppercase">Total de Demandas</span>
-            <CheckSquareIcon className="text-brand-500" />
+            <CheckCircle className="text-brand-500" />
           </div>
           <p className="text-3xl font-bold text-white">{totalTasks}</p>
-          <p className="text-xs text-brand-500 mt-2 font-medium">100% rastreadas via EduChat</p>
+          <p className="text-xs text-brand-500 mt-2 font-medium">100% registradas via EduChat</p>
         </div>
 
         <div className="bg-chatPanel border border-chatBorder rounded-xl p-5 shadow-sm">
@@ -37,7 +36,7 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
             <Clock className="text-yellow-400" />
           </div>
           <p className="text-3xl font-bold text-yellow-400">{inProgressTasks}</p>
-          <p className="text-xs text-[#8696a0] mt-2">Dentro do prazo acordado</p>
+          <p className="text-xs text-[#8696a0] mt-2">Monitoradas pela IA</p>
         </div>
 
         <div className="bg-chatPanel border border-chatBorder rounded-xl p-5 shadow-sm">
@@ -46,7 +45,9 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
             <CheckCircle className="text-emerald-400" />
           </div>
           <p className="text-3xl font-bold text-emerald-400">{doneTasks}</p>
-          <p className="text-xs text-emerald-400 mt-2 font-medium">Taxa de resolução: {totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0}%</p>
+          <p className="text-xs text-emerald-400 mt-2 font-medium">
+            Taxa de resolução: {totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0}%
+          </p>
         </div>
 
         <div className="bg-chatPanel border border-chatBorder rounded-xl p-5 shadow-sm">
@@ -55,78 +56,135 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
             <TrendingUp className="text-purple-400" />
           </div>
           <p className="text-3xl font-bold text-purple-300">~14h / sem</p>
-          <p className="text-xs text-purple-400 mt-2 font-medium">Sem ruído no WhatsApp</p>
+          <p className="text-xs text-purple-400 mt-2 font-medium">Fora do WhatsApp pessoal</p>
         </div>
       </div>
 
-      {/* Seção Central: Status por Setor & Carga por Colaborador */}
+      {/* SEÇÃO NOVA: INTELIGÊNCIA OPERACIONAL (CONVERSAS REPETITIVAS & SLAS) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        {/* Demandas por Setor */}
-        <div className="bg-chatPanel border border-chatBorder rounded-xl p-6 shadow-sm">
-          <h3 className="text-base font-bold text-white mb-4 flex items-center gap-2">
-            <span>Volume de Processos por Setor</span>
-          </h3>
-          <div className="space-y-4">
+        {/* Mineração de Assuntos mais Repetidos nas Conversas */}
+        <div className="bg-chatPanel border border-chatBorder rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <MessageCircle size={18} className="text-brand-500" />
+              <span>Assuntos & Solicitações Mais Repetidas</span>
+            </h3>
+            <span className="text-[10px] bg-brand-500/10 text-brand-500 font-semibold px-2 py-0.5 rounded-full">
+              Últimos 30 dias
+            </span>
+          </div>
+          <p className="text-xs text-[#8696a0]">
+            A IA agrupa automaticamente as mensagens trocadas para identificar onde sua equipe perde mais tempo:
+          </p>
+
+          <div className="space-y-3.5 pt-2">
             <div>
               <div className="flex justify-between text-xs text-[#d1d7db] mb-1">
-                <span>Financeiro (#financeiro)</span>
-                <span className="font-bold text-white">2 demandas ativas</span>
+                <span className="font-medium">1. Divergências de Faturas & Splits de Polos</span>
+                <span className="font-bold text-white">38% (24 conversas)</span>
               </div>
               <div className="w-full h-2 bg-chatSidebar rounded-full overflow-hidden">
-                <div className="bg-brand-500 h-full rounded-full" style={{ width: '60%' }} />
+                <div className="bg-red-500 h-full rounded-full" style={{ width: '38%' }} />
               </div>
             </div>
 
             <div>
               <div className="flex justify-between text-xs text-[#d1d7db] mb-1">
-                <span>Secretaria & Certificados (#secretaria-pedagogica)</span>
-                <span className="font-bold text-white">2 demandas ativas</span>
+                <span className="font-medium">2. Reposições de Aulas & Notas (Secretaria)</span>
+                <span className="font-bold text-white">29% (18 conversas)</span>
               </div>
               <div className="w-full h-2 bg-chatSidebar rounded-full overflow-hidden">
-                <div className="bg-yellow-500 h-full rounded-full" style={{ width: '60%' }} />
+                <div className="bg-yellow-500 h-full rounded-full" style={{ width: '29%' }} />
               </div>
             </div>
 
             <div>
               <div className="flex justify-between text-xs text-[#d1d7db] mb-1">
-                <span>Diretoria & Estratégia (#diretoria-estrategica)</span>
-                <span className="font-bold text-white">1 concluída</span>
+                <span className="font-medium">3. Emissão de Certificados de Pós-Graduação</span>
+                <span className="font-bold text-white">21% (13 conversas)</span>
               </div>
               <div className="w-full h-2 bg-chatSidebar rounded-full overflow-hidden">
-                <div className="bg-purple-500 h-full rounded-full" style={{ width: '25%' }} />
+                <div className="bg-brand-500 h-full rounded-full" style={{ width: '21%' }} />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-xs text-[#d1d7db] mb-1">
+                <span className="font-medium">4. Dúvidas de Acesso e Login no eAula</span>
+                <span className="font-bold text-white">12% (8 conversas)</span>
+              </div>
+              <div className="w-full h-2 bg-chatSidebar rounded-full overflow-hidden">
+                <div className="bg-blue-500 h-full rounded-full" style={{ width: '12%' }} />
               </div>
             </div>
           </div>
+
+          {/* Dica de IA para POP */}
+          <div className="p-3 bg-purple-950/20 border border-purple-500/30 rounded-lg flex items-start gap-2.5 mt-3">
+            <Sparkles size={16} className="text-yellow-300 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-purple-200 leading-relaxed">
+              <strong>Oportunidade de Melhoria detectada pela IA:</strong> 38% das conversas tratam de conferência manual de splits. Criar um POP padronizado ou conectar com a rotina automática pode poupar até 6 horas semanais da equipe financeira!
+            </p>
+          </div>
         </div>
 
-        {/* Produtividade da Equipe */}
-        <div className="bg-chatPanel border border-chatBorder rounded-xl p-6 shadow-sm">
-          <h3 className="text-base font-bold text-white mb-4">
-            Distribuição de Tarefas na Equipe
-          </h3>
-          <div className="space-y-3">
-            {collaborators.map((c) => {
-              const userTasks = tasks.filter((t) => t.assignee === c.name);
-              return (
-                <div
-                  key={c.id}
-                  className="flex items-center justify-between p-2.5 rounded-lg bg-chatSidebar border border-chatBorder/50"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">{c.avatar}</span>
-                    <div>
-                      <p className="text-xs font-semibold text-white">{c.name}</p>
-                      <p className="text-[10px] text-[#8696a0]">{c.role}</p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-xs font-bold text-brand-500 bg-brand-500/10 px-2 py-0.5 rounded-full">
-                      {userTasks.length} tarefa(s)
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
+        {/* Análise de Tempo de Resolução Real vs. SLA Definido */}
+        <div className="bg-chatPanel border border-chatBorder rounded-xl p-6 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Clock size={18} className="text-yellow-400" />
+              <span>Tempo de Resolução Real vs. SLA Definido</span>
+            </h3>
+            <span className="text-[10px] bg-yellow-500/10 text-yellow-400 font-semibold px-2 py-0.5 rounded-full">
+              Por Departamento
+            </span>
+          </div>
+          <p className="text-xs text-[#8696a0]">
+            Comparação entre o prazo que a gestão combinou e o tempo que o setor realmente leva para concluir:
+          </p>
+
+          <div className="space-y-3 pt-2">
+            {/* Secretaria */}
+            <div className="p-3 bg-chatSidebar rounded-lg border border-red-500/30">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold text-white">Secretaria Acadêmica (Reposições)</span>
+                <span className="text-[10px] font-bold text-red-400 bg-red-500/20 px-2 py-0.5 rounded">
+                  ⚠️ SLA Estourado (+1.6 dias)
+                </span>
+              </div>
+              <div className="flex justify-between text-[11px] text-[#8696a0]">
+                <span>SLA Acordado: <strong>48 horas</strong></span>
+                <span>Tempo Médio Real: <strong className="text-red-400">3.6 dias</strong></span>
+              </div>
+            </div>
+
+            {/* Financeiro */}
+            <div className="p-3 bg-chatSidebar rounded-lg border border-emerald-500/30">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold text-white">Financeiro & Faturas Asaas</span>
+                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded">
+                  ✅ No Prazo
+                </span>
+              </div>
+              <div className="flex justify-between text-[11px] text-[#8696a0]">
+                <span>SLA Acordado: <strong>24 horas</strong></span>
+                <span>Tempo Médio Real: <strong className="text-emerald-400">1.1 dias</strong></span>
+              </div>
+            </div>
+
+            {/* Suporte */}
+            <div className="p-3 bg-chatSidebar rounded-lg border border-emerald-500/30">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold text-white">Suporte aos Polos</span>
+                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded">
+                  ⚡ Excelente
+                </span>
+              </div>
+              <div className="flex justify-between text-[11px] text-[#8696a0]">
+                <span>SLA Acordado: <strong>12 horas</strong></span>
+                <span>Tempo Médio Real: <strong className="text-emerald-400">4.5 horas</strong></span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -144,24 +202,5 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
         </div>
       </div>
     </div>
-  );
-}
-
-function CheckSquareIcon(props) {
-  return (
-    <svg
-      {...props}
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <polyline points="9 11 12 14 22 4" />
-      <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-    </svg>
   );
 }
