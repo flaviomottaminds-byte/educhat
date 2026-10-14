@@ -5,12 +5,25 @@ import KanbanBoard from './components/KanbanBoard';
 import GestaoDashboard from './components/GestaoDashboard';
 import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
+import AIMemoryModal from './components/AIMemoryModal';
 import {
   INITIAL_CHANNELS,
   INITIAL_COLLABORATORS,
   INITIAL_MESSAGES,
   INITIAL_TASKS
 } from './data/initialData';
+
+const INITIAL_VIP_CLIENTS = [
+  { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
+  { id: 'vip2', name: 'Polo Salvador', plan: 'Plano Fixo Ilimitado', since: '2025' },
+  { id: 'vip3', name: 'Faculdade Fama', plan: 'Contrato Corporativo', since: '2026' },
+  { id: 'vip4', name: 'FM Educacional', plan: 'Plano Fixo Ilimitado', since: '2026' },
+];
+
+const DEFAULT_AI_PROMPT = `REGRAS DE CLASSIFICAÇÃO DA IA:
+1. CLIENTES VIP (PLANO FIXO): Se a conversa mencionar Polos cadastrados como VIP (ex: Campinas, Salvador, Fama, FM Educacional), classifique a demanda como Prioridade MÁXIMA (VIP), ative a tag 👑 VIP e defina SLA prioritário de até 4 horas.
+2. CLIENTES AVULSOS: Se o cliente for avulso ou comum, classifique como Prioridade Média/Baixa com prazo de 48 horas.
+3. EXCEÇÕES CRÍTICAS: Questões sobre divergência de nota fiscal, bloqueio indevido no eAula ou erro de split devem ter prioridade Alta mesmo para avulsos.`;
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
@@ -19,7 +32,12 @@ export default function App() {
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
 
-  // Chat ativo: pode ser um canal em grupo ou conversa direta 1 a 1 com um colaborador!
+  // Base de Conhecimento e Memória da IA
+  const [vipClients, setVipClients] = useState(INITIAL_VIP_CLIENTS);
+  const [customAIPrompt, setCustomAIPrompt] = useState(DEFAULT_AI_PROMPT);
+  const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
+
+  // Chat ativo: canal ou DM
   const [activeChat, setActiveChat] = useState({
     type: 'channel', // 'channel' | 'dm'
     id: 'c-financeiro'
@@ -78,30 +96,34 @@ export default function App() {
       return;
     }
 
-    // GATILHO 2: MODO AUTÔNOMO DA IA (A IA cria SOZINHA ao detectar ação/prazo)
+    // GATILHO 2: MODO AUTÔNOMO DA IA COM DETECÇÃO INTELIGENTE DE CLIENTES VIP
     if (aiAutonomous) {
       const lower = text.toLowerCase();
       const taskKeywords = [
         'preciso que', 'favor', 'gere', 'gerar', 'envie', 'enviar',
         'verifique', 'até amanhã', 'até sexta', 'fazer', 'emitir',
-        'corrigir', 'cobrar', 'retificar', 'urgente', 'aprove', 'aprovar'
+        'corrigir', 'cobrar', 'retificar', 'urgente', 'aprove', 'aprovar', 'atender'
       ];
 
+      // Checa se mencionou algum cliente VIP
+      const matchedVip = vipClients.find((v) => lower.includes(v.name.toLowerCase()));
       const hasAction = taskKeywords.some((kw) => lower.includes(kw));
 
-      if (hasAction && text.length > 12) {
+      if ((hasAction || matchedVip) && text.length > 10) {
         setTimeout(() => {
-          createAutoTask(text, text, timeStr, true);
+          createAutoTask(text, text, timeStr, true, matchedVip);
         }, 600);
       }
     }
   };
 
-  const createAutoTask = (rawTitle, fullText, timeStr, wasAutonomous = false) => {
-    // Se estiver em DM (1 a 1), o responsável padrão é a própria pessoa da conversa!
-    let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : 'Fernanda Silva';
+  const createAutoTask = (rawTitle, fullText, timeStr, wasAutonomous = false, matchedVip = null) => {
+    // 1. Verifica se é cliente VIP cadastrado na base de conhecimento
+    const isVip = !!matchedVip || vipClients.some(v => fullText.toLowerCase().includes(v.name.toLowerCase()));
+    const vipInfo = matchedVip || vipClients.find(v => fullText.toLowerCase().includes(v.name.toLowerCase()));
 
-    // Senão, tenta achar pelo primeiro nome no texto
+    // 2. Define o responsável
+    let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : 'Fernanda Silva';
     const foundUser = collaborators.find(c =>
       fullText.toLowerCase().includes(c.name.split(' ')[0].toLowerCase())
     );
@@ -111,28 +133,34 @@ export default function App() {
       ? `#${chatMeta.data.name}`
       : `Privado (${chatMeta.data.name.split(' ')[0]})`;
 
+    // 3. Aplica a Regra VIP: se for VIP, vira prioridade Máxima com SLA urgente!
     const autoTask = {
       id: 't_' + Date.now(),
       title: rawTitle.length > 60 ? rawTitle.slice(0, 57) + '...' : rawTitle,
-      desc: `Demanda criada pela IA a partir de conversa com ${chatMeta.data.name}`,
+      desc: isVip
+        ? `⭐ ATENDIMENTO EXCLUSIVO VIP (${vipInfo?.name} - ${vipInfo?.plan}). Demanda prioritária com SLA rápido.`
+        : `Demanda de rotina aberta via EduChat a partir de conversa no ${channelTag}.`,
       status: 'backlog',
-      priority: fullText.toLowerCase().includes('urgente') ? 'alta' : 'media',
+      priority: isVip ? 'vip' : fullText.toLowerCase().includes('urgente') ? 'alta' : 'baixa',
+      isVip: isVip,
       assignee: targetAssignee,
       assigneeAvatar: '👤',
-      dueDate: 'Em 48h',
+      dueDate: isVip ? 'Prioridade VIP (Hoje, 4h)' : 'Em 48h',
       channel: channelTag,
       sourceMessage: `Flávio: "${fullText}"`
     };
 
     setTasks((prev) => [autoTask, ...prev]);
 
-    // O Bot avisa no chat que a tarefa foi aberta sozinho no Kanban!
+    // O Bot dá o feedback inteligente no chat destacando o status VIP
     const botReply = {
       id: 'bot_' + Date.now(),
       senderId: 'bot',
       senderName: '🤖 Copiloto EduChat',
-      text: wasAutonomous
-        ? `✨ [IA Autônoma] Detectei uma demanda nesta conversa e já abri o Card no Kanban:\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}\n📅 Prazo estimado: ${autoTask.dueDate}`
+      text: isVip
+        ? `👑 [CLIENTE VIP DETECTADO: ${vipInfo?.name.toUpperCase()}]\nIdentifiquei que este parceiro possui o ${vipInfo?.plan} (Plano Fixo Exclusivo)!\n📌 Demanda criada com PRIORIDADE MÁXIMA no Kanban: "${autoTask.title}"\n👤 Atribuído a: ${autoTask.assignee}\n⏱️ SLA VIP: ${autoTask.dueDate}`
+        : wasAutonomous
+        ? `✨ [IA Autônoma] Demanda criada no Kanban:\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}\n📅 Prioridade: Comum (Avulso)`
         : `✨ Demanda criada com sucesso no Kanban!\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}`,
       timestamp: timeStr,
       actionExtracted: true,
@@ -210,6 +238,7 @@ export default function App() {
         onOpenAICopilot={() =>
           setAiModal({ isOpen: true, mode: 'bottlenecks', sourceMessage: null })
         }
+        onOpenAIMemory={() => setIsAIMemoryOpen(true)}
         onOpenNewChannel={() => setModalItem({ isOpen: true, type: 'channel' })}
         onOpenNewCollaborator={() => setModalItem({ isOpen: true, type: 'collaborator' })}
       />
@@ -243,7 +272,7 @@ export default function App() {
         />
       )}
 
-      {/* Modal Inteligente da IA */}
+      {/* Modal Inteligente da IA (Copiloto) */}
       <AICopilotModal
         isOpen={aiModal.isOpen}
         onClose={() => setAiModal({ ...aiModal, isOpen: false })}
@@ -259,6 +288,17 @@ export default function App() {
         type={modalItem.type}
         onClose={() => setModalItem({ ...modalItem, isOpen: false })}
         onSave={modalItem.type === 'channel' ? handleSaveChannel : handleSaveCollaborator}
+      />
+
+      {/* Modal de Memória e Aprendizado da IA (Regras VIP) */}
+      <AIMemoryModal
+        isOpen={isAIMemoryOpen}
+        onClose={() => setIsAIMemoryOpen(false)}
+        vipClients={vipClients}
+        onAddVipClient={(newVip) => setVipClients((prev) => [...prev, newVip])}
+        onRemoveVipClient={(id) => setVipClients((prev) => prev.filter((v) => v.id !== id))}
+        customPrompt={customAIPrompt}
+        onSaveCustomPrompt={(newPrompt) => setCustomAIPrompt(newPrompt)}
       />
     </div>
   );

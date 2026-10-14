@@ -36,14 +36,21 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
     }
   };
 
-  const getPriorityBadge = (priority) => {
+  const getPriorityBadge = (priority, isVip) => {
+    if (isVip || priority === 'vip') {
+      return (
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 flex items-center gap-1 shadow-sm animate-pulse">
+          <span>👑</span> VIP (PLANO FIXO)
+        </span>
+      );
+    }
     switch (priority) {
       case 'alta':
         return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30">ALTA</span>;
       case 'media':
         return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">MÉDIA</span>;
       default:
-        return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">BAIXA</span>;
+        return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">BAIXA (AVULSO)</span>;
     }
   };
 
@@ -119,7 +126,7 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
                     >
                       {/* Topo do Card: Prioridade e Canal */}
                       <div className="flex items-center justify-between">
-                        {getPriorityBadge(t.priority)}
+                        {getPriorityBadge(t.priority, t.isVip)}
                         <span className="text-[10px] text-brand-500 font-medium">
                           {t.channel}
                         </span>

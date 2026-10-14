@@ -1,5 +1,5 @@
 import React from 'react';
-import { MessageSquare, CheckSquare, BarChart3, Hash, Users, Sparkles, Circle, Plus, Bot, Lock } from 'lucide-react';
+import { MessageSquare, CheckSquare, BarChart3, Hash, Users, Sparkles, Circle, Plus, Bot, Lock, Brain } from 'lucide-react';
 
 export default function Sidebar({
   activeView,
@@ -10,6 +10,7 @@ export default function Sidebar({
   onSelectChannel,
   onSelectCollaborator,
   onOpenAICopilot,
+  onOpenAIMemory,
   onOpenNewChannel,
   onOpenNewCollaborator,
   aiAutonomous,
@@ -32,14 +33,23 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* AI Copilot Quick Button */}
-        <button
-          onClick={onOpenAICopilot}
-          title="Abrir Copiloto de IA"
-          className="p-2 rounded-full bg-gradient-to-r from-purple-600/30 to-brand-500/30 text-purple-300 hover:text-white hover:scale-105 transition-all border border-purple-500/30"
-        >
-          <Sparkles size={18} className="text-purple-400" />
-        </button>
+        {/* Action Buttons: AI Memory & Copilot */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onOpenAIMemory}
+            title="Ensinar a IA / Cadastrar Clientes VIP"
+            className="p-2 rounded-full bg-yellow-500/10 text-yellow-400 hover:text-white hover:bg-yellow-500/30 hover:scale-105 transition-all border border-yellow-500/30"
+          >
+            <Brain size={18} />
+          </button>
+          <button
+            onClick={onOpenAICopilot}
+            title="Abrir Copiloto de IA"
+            className="p-2 rounded-full bg-gradient-to-r from-purple-600/30 to-brand-500/30 text-purple-300 hover:text-white hover:scale-105 transition-all border border-purple-500/30"
+          >
+            <Sparkles size={18} className="text-purple-400" />
+          </button>
+        </div>
       </div>
 
       {/* Main Navigation Views */}
