@@ -14,7 +14,8 @@ import {
   Sun,
   Moon,
   Search,
-  Filter
+  Filter,
+  ShieldCheck
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -32,18 +33,26 @@ export default function Sidebar({
   aiAutonomous,
   setAiAutonomous,
   theme,
-  onToggleTheme
+  onToggleTheme,
+  currentUser,
+  onSwitchUser
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const isDirector = currentUser?.roleType === 'diretor';
+
+  // Canais visíveis por perfil (Diretor vê todos; Colaborador vê gerais e do seu setor)
+  const accessibleChannels = isDirector
+    ? channels
+    : channels.filter(c => c.department === 'Todos' || c.department === currentUser?.department);
 
   // Filtragem pela busca estilo WhatsApp
-  const filteredChannels = channels.filter((c) =>
+  const filteredChannels = accessibleChannels.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     c.desc?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const filteredCollaborators = collaborators.filter((u) =>
-    u.id !== 'u1' && (
+    u.id !== currentUser?.id && (
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       u.role.toLowerCase().includes(searchQuery.toLowerCase())
     )
@@ -70,13 +79,15 @@ export default function Sidebar({
 
         {/* Botões de Ação: IA & Base de Conhecimento */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={onOpenAIMemory}
-            title="Base de Conhecimento da IA (Clientes VIP, SLAs e POPs)"
-            className="p-2 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
-          >
-            <Brain size={20} className="text-yellow-600 dark:text-yellow-400" />
-          </button>
+          {isDirector && (
+            <button
+              onClick={onOpenAIMemory}
+              title="Base de Conhecimento da IA (Clientes VIP, SLAs e POPs)"
+              className="p-2 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
+            >
+              <Brain size={20} className="text-yellow-600 dark:text-yellow-400" />
+            </button>
+          )}
 
           <button
             onClick={onOpenAICopilot}
@@ -122,6 +133,7 @@ export default function Sidebar({
         >
           <BarChart3 size={15} />
           Gestão
+          {!isDirector && <Lock size={10} className="text-chatTextMuted ml-0.5" />}
         </button>
       </div>
 
@@ -139,7 +151,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Modo IA Autônoma (Badge elegante) */}
+      {/* Modo IA Autônoma */}
       <div className="px-3 pt-2">
         <div className="bg-[#f0f2f5] dark:bg-purple-950/20 border border-slate-200 dark:border-purple-500/20 rounded-lg p-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -172,14 +184,16 @@ export default function Sidebar({
         {/* Canais Operacionais */}
         <div>
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
-            <span>Canais Operacionais</span>
-            <button
-              onClick={onOpenNewChannel}
-              title="Criar novo canal operacional"
-              className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
-            >
-              <Plus size={13} /> Novo
-            </button>
+            <span>Canais ({accessibleChannels.length})</span>
+            {isDirector && (
+              <button
+                onClick={onOpenNewChannel}
+                title="Criar novo canal operacional"
+                className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
+              >
+                <Plus size={13} /> Novo
+              </button>
+            )}
           </div>
 
           <div className="space-y-0.5">
@@ -223,13 +237,15 @@ export default function Sidebar({
         <div>
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
             <span>Conversas 1 a 1 (WhatsApp)</span>
-            <button
-              onClick={onOpenNewCollaborator}
-              title="Cadastrar novo colaborador"
-              className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
-            >
-              <Plus size={13} /> Convidar
-            </button>
+            {isDirector && (
+              <button
+                onClick={onOpenNewCollaborator}
+                title="Cadastrar novo colaborador"
+                className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
+              >
+                <Plus size={13} /> Convidar
+              </button>
+            )}
           </div>
 
           <div className="space-y-0.5">
@@ -272,28 +288,53 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Rodapé: Perfil de Flávio Motta + Alternador Sol/Lua Discreto */}
-      <div className="p-3 bg-chatPanel border-t border-chatBorder flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-full bg-brand-700 flex items-center justify-center text-lg shadow-xs">
-            👨‍💼
+      {/* Rodapé: Perfil Ativo + Simulador de Usuário (Opção 1) + Alternador Sol/Lua */}
+      <div className="p-3 bg-chatPanel border-t border-chatBorder space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 truncate">
+            <div className="w-8 h-8 rounded-full bg-brand-700 flex items-center justify-center text-base shadow-xs shrink-0">
+              {currentUser?.avatar || '👤'}
+            </div>
+            <div className="truncate">
+              <p className="text-xs font-semibold text-chatTextTitle leading-tight truncate">
+                {currentUser?.name}
+              </p>
+              <p className="text-[10px] text-brand-600 dark:text-brand-500 font-medium truncate flex items-center gap-1">
+                <Circle size={6} fill="currentColor" /> {currentUser?.role}
+              </p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs font-semibold text-chatTextTitle">Flávio Motta</p>
-            <p className="text-[10px] text-brand-600 dark:text-brand-500 flex items-center gap-1 font-medium">
-              <Circle size={7} fill="currentColor" /> Diretor (Online)
-            </p>
-          </div>
+
+          {/* Botão Sol/Lua Discreto */}
+          <button
+            onClick={onToggleTheme}
+            title={theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
+            className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition"
+          >
+            {theme === 'light' ? <Moon size={15} /> : <Sun size={15} className="text-yellow-400" />}
+          </button>
         </div>
 
-        {/* Botão Sol/Lua Discreto no rodapé (Opção A) */}
-        <button
-          onClick={onToggleTheme}
-          title={theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
-          className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition border border-transparent hover:border-chatBorder"
-        >
-          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} className="text-yellow-400" />}
-        </button>
+        {/* Simulador de Acesso: Permite ao Diretor testar a visão de qualquer colaborador */}
+        <div className="flex items-center gap-1.5 bg-white dark:bg-chatCard p-1 rounded-lg border border-slate-300 dark:border-chatBorder shadow-xs">
+          <span className="text-[10px] text-chatTextMuted font-medium px-1 shrink-0 flex items-center gap-1">
+            <Users size={11} /> Simular:
+          </span>
+          <select
+            value={currentUser?.id}
+            onChange={(e) => {
+              const selected = collaborators.find(u => u.id === e.target.value);
+              if (selected) onSwitchUser(selected);
+            }}
+            className="w-full bg-transparent text-[11px] text-chatTextTitle font-semibold focus:outline-none cursor-pointer"
+          >
+            {collaborators.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name} ({u.roleType === 'diretor' ? 'Diretor' : u.department})
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </aside>
   );

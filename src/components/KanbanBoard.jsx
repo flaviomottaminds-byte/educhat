@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Clock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { Plus, Clock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Shield, UserCheck, Building2, Lock } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const COLUMNS = [
@@ -9,13 +9,36 @@ const COLUMNS = [
   { id: 'done', title: 'Concluído', color: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10' },
 ];
 
-export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
+export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, currentUser }) {
+  const isDirector = currentUser?.roleType === 'diretor';
+
+  // Estados de filtro para o Diretor
   const [filterAssignee, setFilterAssignee] = useState('todos');
 
+  // Estado de aba para o Colaborador ('my_tasks' | 'dept_tasks')
+  const [collabTab, setCollabTab] = useState('my_tasks');
+
+  // Filtragem estrita com base no Perfil (Opção 1)
   const filteredTasks = tasks.filter((t) => {
-    if (filterAssignee !== 'todos' && t.assignee !== filterAssignee) return false;
-    return true;
+    if (isDirector) {
+      // Diretor pode ver todas ou filtrar por responsável específico
+      if (filterAssignee !== 'todos' && t.assignee !== filterAssignee) return false;
+      return true;
+    } else {
+      // Colaborador comum: só vê o que é dele ou do seu departamento
+      if (collabTab === 'my_tasks') {
+        return t.assignee === currentUser.name;
+      }
+      if (collabTab === 'dept_tasks') {
+        return t.department === currentUser.department || t.assignee === currentUser.name;
+      }
+      return false;
+    }
   });
+
+  // Métricas para os botões do colaborador
+  const myTasksCount = tasks.filter((t) => t.assignee === currentUser?.name).length;
+  const deptTasksCount = tasks.filter((t) => t.department === currentUser?.department || t.assignee === currentUser?.name).length;
 
   const handleMove = (taskId, currentStatus, direction) => {
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
@@ -39,7 +62,7 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
   const getPriorityBadge = (priority, isVip) => {
     if (isVip || priority === 'vip') {
       return (
-        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-500/20 text-yellow-800 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-500/40 flex items-center gap-1 shadow-sm animate-pulse">
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-500/20 text-yellow-800 dark:text-yellow-300 border border-yellow-300 dark:border-yellow-500/40 flex items-center gap-1 shadow-xs animate-pulse">
           <span>👑</span> VIP (PLANO FIXO)
         </span>
       );
@@ -50,42 +73,88 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
       case 'media':
         return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-100 dark:bg-yellow-500/20 text-amber-800 dark:text-yellow-400 border border-amber-200 dark:border-yellow-500/30">MÉDIA</span>;
       default:
-        return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-500/30">BAIXA (AVULSO)</span>;
+        return <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-500/30">BAIXA</span>;
     }
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-chatBg p-6 overflow-hidden transition-colors">
-      {/* Header do Kanban */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 shrink-0">
+    <div className="flex-1 flex flex-col h-full bg-[#f0f2f5] dark:bg-chatBg p-6 overflow-hidden transition-colors">
+      {/* Header do Kanban com Badge de Nível de Acesso */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-5 shrink-0">
         <div>
-          <h2 className="text-2xl font-bold text-chatTextTitle flex items-center gap-2">
-            📋 Quadro de Demandas Internas
-          </h2>
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-2xl font-bold text-chatTextTitle flex items-center gap-2">
+              📋 Quadro de Demandas
+            </h2>
+            {isDirector ? (
+              <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
+                <Shield size={12} /> Visão Geral da Diretoria (Todos os Setores)
+              </span>
+            ) : (
+              <span className="text-[11px] font-semibold bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-purple-200 dark:border-purple-500/30">
+                <Lock size={12} /> Acesso Restrito: {currentUser.name} ({currentUser.department})
+              </span>
+            )}
+          </div>
           <p className="text-xs text-chatTextMuted">
-            Processos e tarefas gerados a partir das conversas do EduChat
+            {isDirector
+              ? 'Acompanhamento executivo de todos os processos e colaboradores da empresa'
+              : 'Demandas atribuídas a você e processos internos do seu setor'}
           </p>
         </div>
 
-        {/* Filtros e Nova Demanda */}
-        <div className="flex items-center gap-3">
-          <select
-            value={filterAssignee}
-            onChange={(e) => setFilterAssignee(e.target.value)}
-            className="bg-chatCard text-chatTextTitle text-xs border border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-sm"
-          >
-            <option value="todos">Todos os Responsáveis</option>
-            <option value="Flávio Motta">Flávio Motta</option>
-            <option value="Fernanda Silva">Fernanda Silva</option>
-            <option value="Carlos Eduardo">Carlos Eduardo</option>
-            <option value="Juliana Mendes">Juliana Mendes</option>
-          </select>
+        {/* Controles de Visibilidade e Filtro baseados no Perfil */}
+        <div className="flex items-center gap-2.5">
+          {isDirector ? (
+            /* Filtros do Diretor: pode filtrar por quem quiser */
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-chatTextMuted font-medium">Filtrar por:</span>
+              <select
+                value={filterAssignee}
+                onChange={(e) => setFilterAssignee(e.target.value)}
+                className="bg-white dark:bg-chatCard text-chatTextTitle text-xs border border-slate-300 dark:border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-xs"
+              >
+                <option value="todos">🌐 Todos os Colaboradores ({tasks.length})</option>
+                <option value="Flávio Motta">Flávio Motta (Diretoria)</option>
+                <option value="Fernanda Silva">Fernanda Silva (Financeiro)</option>
+                <option value="Juliana Mendes">Juliana Mendes (Secretaria)</option>
+                <option value="Carlos Eduardo">Carlos Eduardo (Suporte)</option>
+                <option value="Roberto Lima">Roberto Lima (Comercial)</option>
+              </select>
+            </div>
+          ) : (
+            /* Abas de visualização restrita do Colaborador */
+            <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs">
+              <button
+                onClick={() => setCollabTab('my_tasks')}
+                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                  collabTab === 'my_tasks'
+                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle'
+                }`}
+              >
+                <UserCheck size={14} />
+                <span>Minhas Demandas ({myTasksCount})</span>
+              </button>
+              <button
+                onClick={() => setCollabTab('dept_tasks')}
+                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                  collabTab === 'dept_tasks'
+                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle'
+                }`}
+              >
+                <Building2 size={14} />
+                <span>Setor: {currentUser.department} ({deptTasksCount})</span>
+              </button>
+            </div>
+          )}
 
           <button
             onClick={onAddTask}
-            className="bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs px-4 py-2 rounded-lg flex items-center gap-1.5 shadow-md transition"
+            className="bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition"
           >
-            <Plus size={16} />
+            <Plus size={15} />
             <span>Nova Demanda</span>
           </button>
         </div>
@@ -98,16 +167,16 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
           return (
             <div
               key={col.id}
-              className="bg-slate-200/50 dark:bg-chatSidebar border border-chatBorder rounded-xl flex flex-col h-full overflow-hidden shadow-sm transition-colors"
+              className="bg-slate-200/50 dark:bg-chatSidebar border border-slate-300 dark:border-chatBorder rounded-xl flex flex-col h-full overflow-hidden shadow-xs transition-colors"
             >
               {/* Cabeçalho da Coluna */}
-              <div className="p-3 bg-chatCard border-b border-chatBorder flex items-center justify-between">
+              <div className="p-3 bg-white dark:bg-chatCard border-b border-slate-200 dark:border-chatBorder flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-bold px-2 py-0.5 rounded border ${col.color}`}>
                     {col.title}
                   </span>
                 </div>
-                <span className="text-xs font-bold text-chatTextMuted bg-slate-100 dark:bg-chatSidebar px-2 py-0.5 rounded-full border border-chatBorder">
+                <span className="text-xs font-bold text-chatTextMuted bg-slate-100 dark:bg-chatSidebar px-2 py-0.5 rounded-full border border-slate-200 dark:border-chatBorder">
                   {colTasks.length}
                 </span>
               </div>
@@ -115,14 +184,14 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
               {/* Lista de Cards da Coluna */}
               <div className="flex-1 p-3 overflow-y-auto space-y-3">
                 {colTasks.length === 0 ? (
-                  <div className="h-32 flex items-center justify-center border-2 border-dashed border-chatBorder rounded-lg text-xs text-chatTextMuted">
-                    Vazio
+                  <div className="h-32 flex items-center justify-center border-2 border-dashed border-slate-300 dark:border-chatBorder rounded-lg text-xs text-chatTextMuted">
+                    Nenhuma tarefa
                   </div>
                 ) : (
                   colTasks.map((t) => (
                     <div
                       key={t.id}
-                      className="bg-chatCard border border-chatBorder hover:border-brand-500/50 rounded-lg p-3.5 shadow-sm space-y-2.5 transition group"
+                      className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder hover:border-brand-500/50 rounded-lg p-3.5 shadow-xs space-y-2.5 transition group"
                     >
                       {/* Topo do Card: Prioridade e Canal */}
                       <div className="flex items-center justify-between">
@@ -155,11 +224,11 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
                       )}
 
                       {/* Rodapé: Responsável, Prazo e Ações */}
-                      <div className="pt-2 border-t border-chatBorder flex items-center justify-between text-xs">
+                      <div className="pt-2 border-t border-slate-100 dark:border-chatBorder flex items-center justify-between text-xs">
                         <div className="flex items-center gap-1.5" title={`Responsável: ${t.assignee}`}>
                           <span className="text-sm">{t.assigneeAvatar || '👤'}</span>
-                          <span className="text-[11px] text-chatTextBody truncate w-20">
-                            {t.assignee}
+                          <span className="text-[11px] font-medium text-chatTextBody truncate w-24">
+                            {t.assignee === currentUser.name ? '👉 Você' : t.assignee}
                           </span>
                         </div>
 
@@ -179,7 +248,7 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask }) {
                         >
                           <ArrowLeft size={14} />
                         </button>
-                        <span className="text-[10px] text-chatTextMuted">Mover</span>
+                        <span className="text-[10px] text-chatTextMuted">Avançar</span>
                         <button
                           onClick={() => handleMove(t.id, t.status, 'next')}
                           disabled={t.status === 'done'}

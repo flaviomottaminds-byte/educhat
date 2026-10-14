@@ -6,6 +6,7 @@ import GestaoDashboard from './components/GestaoDashboard';
 import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
+import { Shield } from 'lucide-react';
 import {
   INITIAL_CHANNELS,
   INITIAL_COLLABORATORS,
@@ -48,8 +49,9 @@ export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
-  const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [collaborators, setCollaborators] = useState(INITIAL_COLLABORATORS);
+  const [currentUser, setCurrentUser] = useState(INITIAL_COLLABORATORS[0]); // Flávio Motta (Diretor)
+  const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
 
@@ -100,8 +102,8 @@ export default function App() {
 
     const newMsg = {
       id: 'm_' + Date.now(),
-      senderId: 'u1', // Flávio
-      senderName: 'Flávio Motta',
+      senderId: currentUser.id,
+      senderName: currentUser.name,
       text,
       timestamp: timeStr,
       actionExtracted: false,
@@ -239,6 +241,13 @@ export default function App() {
     setActiveView('chat');
   };
 
+  const handleSwitchUser = (newUser) => {
+    setCurrentUser(newUser);
+    if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
+      setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
+    }
+  };
+
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
@@ -266,6 +275,8 @@ export default function App() {
         onOpenNewCollaborator={() => setModalItem({ isOpen: true, type: 'collaborator' })}
         theme={theme}
         onToggleTheme={toggleTheme}
+        currentUser={currentUser}
+        onSwitchUser={handleSwitchUser}
       />
 
       {/* Área Central Baseada na Visualização Ativa */}
@@ -282,6 +293,7 @@ export default function App() {
       {activeView === 'kanban' && (
         <KanbanBoard
           tasks={tasks}
+          currentUser={currentUser}
           onUpdateTaskStatus={handleUpdateTaskStatus}
           onAddTask={() =>
             setAiModal({ isOpen: true, mode: 'extract_task', sourceMessage: null })
@@ -290,11 +302,41 @@ export default function App() {
       )}
 
       {activeView === 'gestao' && (
-        <GestaoDashboard
-          tasks={tasks}
-          channels={channels}
-          collaborators={collaborators}
-        />
+        currentUser.roleType === 'diretor' ? (
+          <GestaoDashboard
+            tasks={tasks}
+            channels={channels}
+            collaborators={collaborators}
+          />
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] dark:bg-chatBg p-8 text-center transition-colors">
+            <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
+              <div className="w-14 h-14 bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 rounded-full flex items-center justify-center mx-auto">
+                <Shield size={28} />
+              </div>
+              <h3 className="text-lg font-bold text-chatTextTitle">Acesso Restrito à Diretoria</h3>
+              <p className="text-xs text-chatTextMuted leading-relaxed">
+                O Painel de Gestão e Inteligência Operacional é confidencial e exclusivo para a Diretoria Executiva da empresa.
+                <br /><br />
+                Você está simulando o acesso como <strong>{currentUser.name}</strong> ({currentUser.department}).
+              </p>
+              <div className="pt-2 flex justify-center gap-2">
+                <button
+                  onClick={() => setActiveView('chat')}
+                  className="px-4 py-2 bg-slate-100 dark:bg-chatSidebar hover:bg-slate-200 text-chatTextTitle text-xs font-semibold rounded-lg transition"
+                >
+                  Voltar para Conversas
+                </button>
+                <button
+                  onClick={() => handleSwitchUser(collaborators[0])}
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+                >
+                  Alternar para Flávio Motta (Diretor)
+                </button>
+              </div>
+            </div>
+          </div>
+        )
       )}
 
       {/* Modal Inteligente da IA (Copiloto) */}

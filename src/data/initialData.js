@@ -1,17 +1,17 @@
 export const INITIAL_COLLABORATORS = [
-  { id: 'u1', name: 'Flávio Motta', role: 'Diretor / Gestor', avatar: '👨‍💼', online: true, department: 'Diretoria' },
-  { id: 'u2', name: 'Fernanda Silva', role: 'Financeiro & Splits', avatar: '👩‍💻', online: true, department: 'Financeiro' },
-  { id: 'u3', name: 'Carlos Eduardo', role: 'Suporte a Polos', avatar: '👨‍🔧', online: true, department: 'Atendimento' },
-  { id: 'u4', name: 'Juliana Mendes', role: 'Secretaria Acadêmica', avatar: '👩‍🏫', online: false, department: 'Acadêmico' },
-  { id: 'u5', name: 'Roberto Lima', role: 'Comercial & Matrículas', avatar: '👨‍💼', online: true, department: 'Comercial' },
+  { id: 'u1', name: 'Flávio Motta', role: 'Diretor / Gestor', roleType: 'diretor', avatar: '👨‍💼', online: true, department: 'Diretoria' },
+  { id: 'u2', name: 'Fernanda Silva', role: 'Financeiro & Splits', roleType: 'colaborador', avatar: '👩‍💻', online: true, department: 'Financeiro' },
+  { id: 'u3', name: 'Carlos Eduardo', role: 'Suporte a Polos', roleType: 'colaborador', avatar: '👨‍🔧', online: true, department: 'Atendimento' },
+  { id: 'u4', name: 'Juliana Mendes', role: 'Secretaria Acadêmica', roleType: 'colaborador', avatar: '👩‍🏫', online: false, department: 'Secretaria' },
+  { id: 'u5', name: 'Roberto Lima', role: 'Comercial & Matrículas', roleType: 'colaborador', avatar: '👨‍💼', online: true, department: 'Comercial' },
 ];
 
 export const INITIAL_CHANNELS = [
-  { id: 'c-geral', name: 'geral', desc: 'Comunicados e avisos gerais da empresa', unread: 0 },
-  { id: 'c-financeiro', name: 'financeiro', desc: 'Fechamentos, notas fiscais, Asaas e splits', unread: 2 },
-  { id: 'c-pedagogico', name: 'secretaria-pedagogica', desc: 'Emissão de certificados, eAula e processos', unread: 1 },
-  { id: 'c-polos', name: 'suporte-polos', desc: 'Atendimento e demandas dos polos parceiros', unread: 0 },
-  { id: 'c-diretoria', name: 'diretoria-estrategica', desc: 'Alinhamentos executivos e decisões', unread: 0 },
+  { id: 'c-geral', name: 'geral', desc: 'Comunicados e avisos gerais da empresa', unread: 0, department: 'Todos' },
+  { id: 'c-financeiro', name: 'financeiro', desc: 'Fechamentos, notas fiscais, Asaas e splits', unread: 2, department: 'Financeiro' },
+  { id: 'c-pedagogico', name: 'secretaria-pedagogica', desc: 'Emissão de certificados, eAula e processos', unread: 1, department: 'Secretaria' },
+  { id: 'c-polos', name: 'suporte-polos', desc: 'Atendimento e demandas dos polos parceiros', unread: 0, department: 'Atendimento' },
+  { id: 'c-diretoria', name: 'diretoria-estrategica', desc: 'Alinhamentos executivos e decisões', unread: 0, department: 'Diretoria' },
 ];
 
 export const INITIAL_MESSAGES = {
@@ -147,6 +147,7 @@ export const INITIAL_TASKS = [
     priority: 'alta', // alta, media, baixa
     assignee: 'Fernanda Silva',
     assigneeAvatar: '👩‍💻',
+    department: 'Financeiro',
     dueDate: 'Amanhã, 12:00',
     channel: '#financeiro',
     sourceMessage: 'Flávio: "gere a 2ª via corrigida no Asaas e envie para o diretor do polo até amanhã às 12h."'
@@ -159,6 +160,7 @@ export const INITIAL_TASKS = [
     priority: 'media',
     assignee: 'Juliana Mendes',
     assigneeAvatar: '👩‍🏫',
+    department: 'Secretaria',
     dueDate: '16/10/2026',
     channel: '#secretaria-pedagogica',
     sourceMessage: 'Juliana: "Temos 8 alunos que concluíram a Pós-Graduação..."'
@@ -171,6 +173,7 @@ export const INITIAL_TASKS = [
     priority: 'baixa',
     assignee: 'Carlos Eduardo',
     assigneeAvatar: '👨‍🔧',
+    department: 'Atendimento',
     dueDate: '18/10/2026',
     channel: '#secretaria-pedagogica',
     sourceMessage: 'Carlos: "apenas 1 está com RG pendente."'
@@ -183,6 +186,7 @@ export const INITIAL_TASKS = [
     priority: 'alta',
     assignee: 'Flávio Motta',
     assigneeAvatar: '👨‍💼',
+    department: 'Diretoria',
     dueDate: '14/10/2026',
     channel: '#diretoria-estrategica',
     sourceMessage: 'Concluído com sucesso na Matriz.'
