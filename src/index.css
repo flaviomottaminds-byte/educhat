@@ -3,14 +3,44 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  /* TEMA CLARO CORPORATIVO (Padrão WhatsApp Web Light / Slack / Notion) */
+  --bg-chatBg: #f0f2f5;
+  --bg-chatSidebar: #ffffff;
+  --bg-chatPanel: #f0f2f5;
+  --bg-chatCard: #ffffff;
+  --bg-chatBubbleUser: #d9fdd3;
+  --text-chatBubbleUser: #111b21;
+  --bg-chatBubbleOther: #ffffff;
+  --text-chatBubbleOther: #111b21;
+  --border-chatBorder: #e2e8f0;
+  --text-title: #0f172a;
+  --text-body: #334155;
+  --text-muted: #64748b;
+  --input-bg: #ffffff;
+  --box-secondary: #f8fafc;
+}
+
+.dark {
+  /* TEMA ESCURO (WhatsApp Web Dark Mode) */
+  --bg-chatBg: #0b141a;
+  --bg-chatSidebar: #111b21;
+  --bg-chatPanel: #202c33;
+  --bg-chatCard: #202c33;
+  --bg-chatBubbleUser: #005c4b;
+  --text-chatBubbleUser: #ffffff;
+  --bg-chatBubbleOther: #202c33;
+  --text-chatBubbleOther: #d1d7db;
+  --border-chatBorder: #222e35;
+  --text-title: #ffffff;
+  --text-body: #d1d7db;
+  --text-muted: #8696a0;
+  --input-bg: #111b21;
+  --box-secondary: #111b21;
 }
 
 body {
   margin: 0;
   padding: 0;
-  background-color: #0c1317;
-  color: #e9edef;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow: hidden;
   height: 100vh;
@@ -25,9 +55,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #374045;
+  background: rgba(148, 163, 184, 0.4);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #535d64;
+  background: rgba(100, 116, 139, 0.6);
 }

@@ -46,6 +46,8 @@ const DEFAULT_AI_PROMPT = `REGRAS DE CLASSIFICAÇÃO DA IA:
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
+  const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
+  const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [collaborators, setCollaborators] = useState(INITIAL_COLLABORATORS);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
@@ -238,7 +240,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-chatBg">
+    <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
       <Sidebar
         activeView={activeView}
@@ -262,6 +264,8 @@ export default function App() {
         onOpenAIMemory={() => setIsAIMemoryOpen(true)}
         onOpenNewChannel={() => setModalItem({ isOpen: true, type: 'channel' })}
         onOpenNewCollaborator={() => setModalItem({ isOpen: true, type: 'collaborator' })}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Área Central Baseada na Visualização Ativa */}
