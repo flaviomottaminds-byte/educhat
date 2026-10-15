@@ -13,8 +13,8 @@ ON CONFLICT (id) DO UPDATE SET
   public = true,
   file_size_limit = EXCLUDED.file_size_limit;
 
--- 2. Habilitação de RLS na tabela de objetos de Storage
-ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+-- 2. RLS em storage.objects já vem habilitado por padrão no Supabase (não requer ALTER TABLE)
+-- (Evita erro 42501: must be owner of table objects)
 
 -- 3. Remoção de políticas restritivas antigas que limitavam a administradores
 DROP POLICY IF EXISTS "Permitir upload para usuarios autenticados" ON storage.objects;

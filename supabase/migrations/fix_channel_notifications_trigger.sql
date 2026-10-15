@@ -99,6 +99,9 @@ VALUES
   ('diretoria', 'u1')
 ON CONFLICT (channel_id, user_id) DO NOTHING;
 
+-- Garante a coluna recipient_id na tabela messages para total flexibilidade
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS recipient_id TEXT;
+
 -- 4. FUNÇÃO TRIGGER INTELIGENTE: Cruza mensagens de canais com channel_members
 CREATE OR REPLACE FUNCTION public.fn_notify_on_new_message()
 RETURNS TRIGGER AS $$
@@ -120,18 +123,14 @@ BEGIN
     -- =========================================================================
     -- CASO 1: MENSAGEM DIRETA (DM / 1 a 1)
     -- =========================================================================
-    IF NEW.chat_id LIKE 'dm-%' OR NEW.recipient_id IS NOT NULL THEN
-        v_recipient := NEW.recipient_id;
-
-        -- Extrai o destinatário a partir da chave dm-id1-id2 caso não venha na coluna
-        IF v_recipient IS NULL AND NEW.chat_id LIKE 'dm-%' THEN
-            parts := string_to_array(replace(NEW.chat_id, 'dm-', ''), '-');
-            IF array_length(parts, 1) >= 2 THEN
-                IF parts[1] = NEW.sender_id THEN
-                    v_recipient := parts[2];
-                ELSE
-                    v_recipient := parts[1];
-                END IF;
+    IF NEW.chat_id LIKE 'dm-%' THEN
+        -- Extrai o destinatário a partir da chave dm-id1-id2
+        parts := string_to_array(replace(NEW.chat_id, 'dm-', ''), '-');
+        IF array_length(parts, 1) >= 2 THEN
+            IF parts[1] = NEW.sender_id THEN
+                v_recipient := parts[2];
+            ELSE
+                v_recipient := parts[1];
             END IF;
         END IF;
 
