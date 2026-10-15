@@ -205,10 +205,10 @@ export default function ChatArea({
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  const isWhatsApp = chatMeta.type === 'whatsapp';
-  const isDM = chatMeta.type === 'dm';
-  const target = chatMeta.data || {};
-  const isBotChat = isDM && (target.isBot || target.id === 'u_ia_copilot');
+  const isWhatsApp = chatMeta?.type === 'whatsapp';
+  const isDM = chatMeta?.type === 'dm';
+  const target = chatMeta?.data || {};
+  const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -370,12 +370,12 @@ export default function ChatArea({
   };
 
   // Membros reais vinculados a este canal específico
-  const channelMembersText = !isDM && !isWhatsApp && collaborators.length > 0
-    ? target.department === 'Todos'
-      ? `Toda a equipe (${collaborators.length} membros)`
-      : collaborators
-          .filter((c) => !c.isBot && (c.department === target.department || c.roleType === 'diretor'))
-          .map((c) => getShortName(c.name))
+  const channelMembersText = !isDM && !isWhatsApp && (collaborators || []).length > 0
+    ? target?.department === 'Todos'
+      ? `Toda a equipe (${(collaborators || []).length} membros)`
+      : (collaborators || [])
+          .filter((c) => c && !c.isBot && (c.department === target?.department || c.roleType === 'diretor'))
+          .map((c) => getShortName(c?.name || ''))
           .join(', ')
     : '';
 

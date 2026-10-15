@@ -160,22 +160,22 @@ export default function App() {
   });
 
   // Metadados do chat atual (Canais, DMs privadas ou Contatos de WhatsApp de Alunos)
-  const chatMeta = activeChat.type === 'channel'
+  const chatMeta = activeChat?.type === 'channel'
     ? {
         type: 'channel',
-        data: channels.find((c) => c.id === activeChat.id) || channels[0],
+        data: (channels || []).find((c) => c?.id === activeChat?.id) || channels?.[0] || INITIAL_CHANNELS[0],
       }
-    : activeChat.type === 'whatsapp'
+    : activeChat?.type === 'whatsapp'
     ? {
         type: 'whatsapp',
-        data: whatsAppContacts.find((w) => w.id === activeChat.id) || whatsAppContacts[0],
+        data: (whatsAppContacts || []).find((w) => w?.id === activeChat?.id) || whatsAppContacts?.[0],
       }
     : {
         type: 'dm',
-        data: collaborators.find((u) => u.id === activeChat.id) || collaborators[1],
+        data: (collaborators || []).find((u) => u?.id === activeChat?.id) || (collaborators || [])[1] || INITIAL_COLLABORATORS[1],
       };
 
-  const currentChatKey = getChatKey(activeChat, currentUser.id);
+  const currentChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
   const currentMessages = messages[currentChatKey] || [];
 
   // Solicitar permissão nativa de notificação do Windows ao carregar
@@ -474,6 +474,42 @@ export default function App() {
             attachments
           };
         }));
+      }
+
+      // 3. Canais (sincroniza com Supabase se tabela 'channels' existir)
+      try {
+        const { data: dbChannels, error: chErr } = await supabase.from('channels').select('*');
+        if (!chErr && dbChannels && Array.isArray(dbChannels) && dbChannels.length > 0) {
+          setChannels(dbChannels.map((c) => ({
+            id: c.id,
+            name: c.name || 'geral',
+            desc: c.desc || c.description || '',
+            department: c.department || 'Todos',
+            unread: 0
+          })));
+        }
+      } catch (err) {
+        // Tabela channels ainda não criada ou RLS; mantém INITIAL_CHANNELS
+      }
+
+      // 4. Colaboradores / Perfis (sincroniza com Supabase se tabela 'profiles' existir)
+      try {
+        const { data: dbProfiles, error: profErr } = await supabase.from('profiles').select('*');
+        if (!profErr && dbProfiles && Array.isArray(dbProfiles) && dbProfiles.length > 0) {
+          setCollaborators(dbProfiles.map((p) => ({
+            id: p.id,
+            name: p.name || p.full_name || 'Colaborador',
+            email: p.email || '',
+            role: p.role || 'Colaborador',
+            roleType: p.role_type || (p.role === 'admin' || p.role === 'diretor' ? 'diretor' : 'colaborador'),
+            avatar: p.avatar || '👤',
+            online: p.online !== false,
+            department: p.department || 'Comercial',
+            isBot: p.is_bot || false
+          })));
+        }
+      } catch (err) {
+        // Tabela profiles ainda não criada ou RLS; mantém INITIAL_COLLABORATORS
       }
     } catch (err) {
       console.warn('Erro ao sincronizar dados com Supabase:', err);

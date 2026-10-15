@@ -24,12 +24,12 @@ import {
 } from 'lucide-react';
 
 export default function Sidebar({
-  activeView,
+  activeView = 'chat',
   setActiveView,
-  channels,
-  collaborators,
+  channels = [],
+  collaborators = [],
   whatsAppContacts = [],
-  activeChat, // { type: 'channel' | 'dm' | 'whatsapp', id: string }
+  activeChat = { type: 'channel', id: 'c-geral' }, // { type: 'channel' | 'dm' | 'whatsapp', id: string }
   onSelectChannel,
   onSelectCollaborator,
   onSelectWhatsAppContact,
@@ -38,56 +38,87 @@ export default function Sidebar({
   onOpenNewChannel,
   onOpenNewCollaborator,
   onOpenWhatsAppConnection,
-  aiAutonomous,
+  aiAutonomous = true,
   setAiAutonomous,
-  theme,
+  theme = 'light',
   onToggleTheme,
-  currentUser,
+  currentUser = {},
   onSwitchUser,
   realtimeStatus = 'connected',
   onOpenUserSelectModal,
   unreadCounts = {},
-  lastSyncTime
+  lastSyncTime = ''
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarTab, setSidebarTab] = useState('whatsapp'); // 'whatsapp' | 'internal'
   const isDirector = currentUser?.roleType === 'diretor';
 
+  const safeChannels = Array.isArray(channels) ? channels : [];
+  const safeCollaborators = Array.isArray(collaborators) ? collaborators : [];
+  const safeWhatsAppContacts = Array.isArray(whatsAppContacts) ? whatsAppContacts : [];
+  const safeUnread = unreadCounts || {};
+
+  const cleanSearch = (searchQuery || '').trim().toLowerCase();
+
   // Canais visíveis por perfil (Diretor vê todos; Colaborador vê gerais e do seu setor)
-  const accessibleChannels = isDirector
-    ? channels
-    : channels.filter(c => c.department === 'Todos' || c.department === currentUser?.department);
+  const accessibleChannels = safeChannels.filter((c) => {
+    if (!c) return false;
+    if (isDirector) return true;
+    if (!c.department || c.department === 'Todos') return true;
+    const userDept = (currentUser?.department || '').trim().toLowerCase();
+    const channelDept = (c.department || '').trim().toLowerCase();
+    return userDept && channelDept === userDept;
+  });
 
   // Filtragem pela busca estilo WhatsApp
-  const filteredChannels = accessibleChannels.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.desc?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredChannels = accessibleChannels.filter((c) => {
+    if (!c) return false;
+    const name = (c.name || '').toLowerCase();
+    const desc = (c.desc || '').toLowerCase();
+    return name.includes(cleanSearch) || desc.includes(cleanSearch);
+  });
 
   // Usuário Virtual de IA (Item 6)
-  const botCollaborator = collaborators.find((u) => u.isBot || u.id === 'u_ia_copilot');
+  const botCollaborator = safeCollaborators.find((u) => u && (u.isBot || u.id === 'u_ia_copilot'));
 
   // Colaboradores humanos filtrados
-  const filteredCollaborators = collaborators.filter((u) =>
-    !u.isBot &&
-    u.id !== currentUser?.id && (
-      u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.department?.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-  );
+  const filteredCollaborators = safeCollaborators.filter((u) => {
+    if (!u || u.isBot) return false;
+    if (currentUser?.id && u.id === currentUser.id) return false;
+    const name = (u.name || '').toLowerCase();
+    const role = (u.role || '').toLowerCase();
+    const department = (u.department || '').toLowerCase();
+    return name.includes(cleanSearch) || role.includes(cleanSearch) || department.includes(cleanSearch);
+  });
 
   // Contatos do WhatsApp (Leads e Alunos)
-  const filteredWhatsAppContacts = whatsAppContacts.filter((c) =>
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.phone.replace(/\D/g, '').includes(searchQuery.replace(/\D/g, '')) ||
-    c.department.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.statusLabel.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredWhatsAppContacts = safeWhatsAppContacts.filter((c) => {
+    if (!c) return false;
+    const name = (c.name || '').toLowerCase();
+    const phone = (c.phone || '').replace(/\D/g, '');
+    const department = (c.department || '').toLowerCase();
+    const statusLabel = (c.statusLabel || '').toLowerCase();
+    const cleanSearchPhone = cleanSearch.replace(/\D/g, '');
+    return (
+      name.includes(cleanSearch) ||
+      (cleanSearchPhone && phone.includes(cleanSearchPhone)) ||
+      department.includes(cleanSearch) ||
+      statusLabel.includes(cleanSearch)
+    );
+  });
 
-  const totalWhatsAppUnread = whatsAppContacts.reduce((sum, c) => sum + (unreadCounts[c.id] || 0), 0);
-  const totalInternalUnread = accessibleChannels.reduce((sum, c) => sum + (unreadCounts[c.id] || unreadCounts[c.name] || unreadCounts[`#${c.name}`] || 0), 0) +
-    filteredCollaborators.reduce((sum, u) => sum + (unreadCounts[u.id] || 0), 0);
+  const totalWhatsAppUnread = safeWhatsAppContacts.reduce((sum, c) => {
+    return sum + (c?.id && safeUnread[c.id] ? Number(safeUnread[c.id]) : 0);
+  }, 0);
+
+  const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
+    if (!c) return sum;
+    const count = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || 0;
+    return sum + Number(count || 0);
+  }, 0) + filteredCollaborators.reduce((sum, u) => {
+    if (!u) return sum;
+    return sum + Number((u.id && safeUnread[u.id]) || 0);
+  }, 0);
 
   return (
     <aside className="w-84 bg-chatSidebar border-r border-chatBorder flex flex-col h-full select-none transition-colors">
@@ -386,21 +417,22 @@ export default function Sidebar({
                   </span>
                 </div>
                 <button
-                  onClick={() => onSelectCollaborator(botCollaborator.id)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
-                    activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === botCollaborator.id
+                  type="button"
+                  onClick={() => onSelectCollaborator && onSelectCollaborator(botCollaborator.id)}
+                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border cursor-pointer ${
+                    activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === botCollaborator.id
                       ? 'bg-purple-100/80 dark:bg-purple-950/40 border-purple-400 dark:border-purple-500 shadow-sm'
                       : 'bg-purple-50/50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-500/30 hover:bg-purple-100/60'
                   }`}
                 >
                   <div className="flex items-center gap-2.5 truncate">
                     <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs">
-                      <span>🤖</span>
+                      <span>{botCollaborator.avatar || '🤖'}</span>
                       <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel animate-pulse" />
                     </div>
                     <div className="truncate">
                       <p className="text-xs font-bold text-chatTextTitle leading-tight truncate flex items-center gap-1">
-                        Assistente IA
+                        {botCollaborator.name || 'Assistente IA'}
                         <span className="text-[9px] bg-yellow-400/20 text-yellow-800 dark:text-yellow-300 font-bold px-1 rounded">
                           MEC & POP
                         </span>
@@ -411,9 +443,9 @@ export default function Sidebar({
                     </div>
                   </div>
 
-                  {unreadCounts[botCollaborator.id] > 0 ? (
+                  {(safeUnread[botCollaborator.id] || 0) > 0 ? (
                     <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                      {unreadCounts[botCollaborator.id]}
+                      {safeUnread[botCollaborator.id]}
                     </span>
                   ) : (
                     <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
@@ -427,12 +459,13 @@ export default function Sidebar({
             {/* Canais Operacionais */}
             <div>
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
-                <span>Canais ({accessibleChannels.length})</span>
+                <span>Canais ({accessibleChannels?.length || 0})</span>
                 {isDirector && (
                   <button
+                    type="button"
                     onClick={onOpenNewChannel}
                     title="Criar novo canal operacional"
-                    className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
+                    className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold cursor-pointer"
                   >
                     <Plus size={13} /> Novo
                   </button>
@@ -440,106 +473,127 @@ export default function Sidebar({
               </div>
 
               <div className="space-y-0.5">
-            {filteredChannels.map((c) => {
-              const isActive = activeView === 'chat' && activeChat.type === 'channel' && activeChat.id === c.id;
-              const channelUnread = unreadCounts[c.id] || unreadCounts[c.name] || unreadCounts[`#${c.name}`] || c.unread || 0;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => onSelectChannel(c.id)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition ${
-                    isActive
-                      ? 'bg-[#f0f2f5] dark:bg-chatPanel font-medium shadow-xs'
-                      : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <div className="w-8 h-8 rounded-full bg-brand-50 dark:bg-chatPanel flex items-center justify-center text-brand-600 dark:text-brand-500 shrink-0 border border-slate-200 dark:border-chatBorder">
-                      <Hash size={16} />
-                    </div>
-                    <div className="truncate">
-                      <p className={`text-sm truncate leading-tight ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
-                        {c.name}
-                      </p>
-                      <p className="text-[11px] text-chatTextMuted truncate mt-0.5">
-                        {c.desc}
-                      </p>
-                    </div>
-                  </div>
-                  {channelUnread > 0 && (
-                    <span className="bg-brand-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse">
-                      {channelUnread}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Conversas Diretas (1 a 1) com Badges de Mensagens Não Lidas (Item 2) */}
-        <div>
-          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
-            <span>Conversas 1 a 1 (WhatsApp)</span>
-            {isDirector && (
-              <button
-                onClick={onOpenNewCollaborator}
-                title="Cadastrar novo colaborador"
-                className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
-              >
-                <Plus size={13} /> Convidar
-              </button>
-            )}
-          </div>
-
-          <div className="space-y-0.5">
-            {filteredCollaborators.map((user) => {
-              const isActive = activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === user.id;
-              const dmUnread = unreadCounts[user.id] || 0;
-              return (
-                <button
-                  key={user.id}
-                  onClick={() => onSelectCollaborator(user.id)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition ${
-                    isActive
-                      ? 'bg-[#f0f2f5] dark:bg-chatPanel shadow-xs'
-                      : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <div className="relative text-2xl shrink-0">
-                      <span>{user.avatar}</span>
-                      <span
-                        className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
-                          user.online ? 'bg-brand-600' : 'bg-gray-300'
+                {filteredChannels && filteredChannels.length > 0 ? (
+                  filteredChannels.map((c) => {
+                    if (!c) return null;
+                    const isActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
+                    const channelUnread = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread || 0;
+                    return (
+                      <button
+                        type="button"
+                        key={c.id || c.name}
+                        onClick={() => onSelectChannel && onSelectChannel(c.id)}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition cursor-pointer ${
+                          isActive
+                            ? 'bg-[#f0f2f5] dark:bg-chatPanel font-medium shadow-xs'
+                            : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
                         }`}
-                      />
-                    </div>
-                    <div className="truncate">
-                      <p className={`text-sm leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
-                        {user.name}
-                      </p>
-                      <p className="text-[11px] text-chatTextMuted truncate mt-0.5">{user.role}</p>
-                    </div>
-                  </div>
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className="w-8 h-8 rounded-full bg-brand-50 dark:bg-chatPanel flex items-center justify-center text-brand-600 dark:text-brand-500 shrink-0 border border-slate-200 dark:border-chatBorder">
+                            <Hash size={16} />
+                          </div>
+                          <div className="truncate">
+                            <p className={`text-sm truncate leading-tight ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
+                              {c.name || 'canal'}
+                            </p>
+                            {c.desc && (
+                              <p className="text-[11px] text-chatTextMuted truncate mt-0.5">
+                                {c.desc}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {channelUnread > 0 && (
+                          <span className="bg-brand-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse">
+                            {channelUnread}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-chatTextMuted italic px-3 py-2">
+                    Nenhum canal encontrado.
+                  </p>
+                )}
+              </div>
+            </div>
 
-                  {dmUnread > 0 ? (
-                    <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                      {dmUnread}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
-                      1 a 1
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </>
-    )}
-  </div>
+            {/* Conversas Diretas (1 a 1) com Badges de Mensagens Não Lidas (Item 2) */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
+                <span>Conversas 1 a 1</span>
+                {isDirector && (
+                  <button
+                    type="button"
+                    onClick={onOpenNewCollaborator}
+                    title="Cadastrar novo colaborador"
+                    className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold cursor-pointer"
+                  >
+                    <Plus size={13} /> Convidar
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-0.5">
+                {filteredCollaborators && filteredCollaborators.length > 0 ? (
+                  filteredCollaborators.map((user) => {
+                    if (!user) return null;
+                    const isActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === user.id;
+                    const dmUnread = (user.id && safeUnread[user.id]) || 0;
+                    return (
+                      <button
+                        type="button"
+                        key={user.id}
+                        onClick={() => onSelectCollaborator && onSelectCollaborator(user.id)}
+                        className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition cursor-pointer ${
+                          isActive
+                            ? 'bg-[#f0f2f5] dark:bg-chatPanel shadow-xs font-medium'
+                            : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 truncate">
+                          <div className="relative text-2xl shrink-0">
+                            <span>{user.avatar || '👤'}</span>
+                            <span
+                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
+                                user.online ? 'bg-brand-600' : 'bg-gray-300'
+                              }`}
+                            />
+                          </div>
+                          <div className="truncate">
+                            <p className={`text-sm leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
+                              {user.name || 'Colaborador'}
+                            </p>
+                            <p className="text-[11px] text-chatTextMuted truncate mt-0.5">
+                              {user.role || user.department || 'Equipe'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {dmUnread > 0 ? (
+                          <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                            {dmUnread}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
+                            1 a 1
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })
+                ) : (
+                  <p className="text-xs text-chatTextMuted italic px-3 py-2">
+                    Nenhum colega encontrado.
+                  </p>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Rodapé: Perfil Ativo + Simulador de Usuário (Apenas Humanos) + Alternador Sol/Lua */}
       <div className="p-3 bg-chatPanel border-t border-chatBorder space-y-2">
@@ -550,27 +604,29 @@ export default function Sidebar({
             </div>
             <div className="truncate">
               <p className="text-xs font-semibold text-chatTextTitle leading-tight truncate">
-                {currentUser?.name}
+                {currentUser?.name || 'Usuário'}
               </p>
               <p className="text-[10px] text-brand-600 dark:text-brand-500 font-medium truncate flex items-center gap-1">
-                <Circle size={6} fill="currentColor" /> {currentUser?.role}
+                <Circle size={6} fill="currentColor" /> {currentUser?.role || 'Colaborador'}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-1.5">
             <button
+              type="button"
               onClick={onOpenUserSelectModal}
               title="Trocar Perfil / Identificação de Usuário"
-              className="text-[10px] bg-slate-100 dark:bg-chatCard hover:bg-brand-50 dark:hover:bg-brand-950/40 text-[#54656f] dark:text-[#aebac1] hover:text-brand-600 font-semibold px-2 py-1 rounded-md border border-slate-200 dark:border-chatBorder transition"
+              className="text-[10px] bg-slate-100 dark:bg-chatCard hover:bg-brand-50 dark:hover:bg-brand-950/40 text-[#54656f] dark:text-[#aebac1] hover:text-brand-600 font-semibold px-2 py-1 rounded-md border border-slate-200 dark:border-chatBorder transition cursor-pointer"
             >
               Trocar
             </button>
             {/* Botão Sol/Lua Discreto */}
             <button
+              type="button"
               onClick={onToggleTheme}
               title={theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
-              className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition"
+              className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition cursor-pointer"
             >
               {theme === 'light' ? <Moon size={15} /> : <Sun size={15} className="text-yellow-400" />}
             </button>
@@ -583,18 +639,20 @@ export default function Sidebar({
             <Users size={11} /> Simular:
           </span>
           <select
-            value={currentUser?.id}
+            value={currentUser?.id || ''}
             onChange={(e) => {
-              const selected = collaborators.find(u => u.id === e.target.value);
-              if (selected) onSwitchUser(selected);
+              const selected = safeCollaborators.find((u) => u && u.id === e.target.value);
+              if (selected && onSwitchUser) onSwitchUser(selected);
             }}
             className="w-full bg-transparent text-[11px] text-chatTextTitle font-semibold focus:outline-none cursor-pointer"
           >
-            {collaborators.filter(u => !u.isBot).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name} ({u.roleType === 'diretor' ? 'Diretor' : u.department})
-              </option>
-            ))}
+            {safeCollaborators
+              .filter((u) => u && !u.isBot)
+              .map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name || 'Colaborador'} ({u.roleType === 'diretor' ? 'Diretor' : (u.department || 'Geral')})
+                </option>
+              ))}
           </select>
         </div>
       </div>

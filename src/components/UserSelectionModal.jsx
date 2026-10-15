@@ -9,12 +9,17 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
 
   const departments = ['Todos', 'Comercial', 'Tutoria', 'Secretaria', 'Marketing', 'Pedagógico', 'Expansão', 'Diretoria'];
 
-  const filtered = collaborators.filter((u) => {
+  const filtered = (collaborators || []).filter((u) => {
+    if (!u) return false;
     const matchesDept = deptFilter === 'Todos' || u.department === deptFilter;
+    const cleanSearch = (search || '').toLowerCase();
+    const name = (u.name || '').toLowerCase();
+    const dept = (u.department || '').toLowerCase();
+    const email = (u.email || '').toLowerCase();
     const matchesSearch =
-      u.name.toLowerCase().includes(search.toLowerCase()) ||
-      u.department.toLowerCase().includes(search.toLowerCase()) ||
-      (u.email && u.email.toLowerCase().includes(search.toLowerCase()));
+      name.includes(cleanSearch) ||
+      dept.includes(cleanSearch) ||
+      email.includes(cleanSearch);
     return matchesDept && matchesSearch;
   });
 
