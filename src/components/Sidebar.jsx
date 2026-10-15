@@ -21,7 +21,8 @@ import {
   Zap,
   QrCode,
   PhoneCall,
-  Upload
+  Upload,
+  Trash2
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 
@@ -35,6 +36,7 @@ export default function Sidebar({
   onSelectChannel,
   onSelectCollaborator,
   onSelectWhatsAppContact,
+  onDeleteChat,
   onOpenAICopilot,
   onOpenAIMemory,
   onOpenNewChannel,
@@ -424,7 +426,7 @@ export default function Sidebar({
                   <button
                     key={contact.id}
                     onClick={() => onSelectWhatsAppContact(contact.id)}
-                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
+                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border group ${
                       isActive
                         ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-500/50 shadow-xs'
                         : 'border-transparent hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
@@ -463,15 +465,30 @@ export default function Sidebar({
                       </div>
                     </div>
 
-                    {contactUnread > 0 ? (
-                      <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                        {contactUnread}
-                      </span>
-                    ) : (
-                      <span className="text-[10px] text-chatTextMuted font-medium">
-                        {contact.lastInteraction}
-                      </span>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {contactUnread > 0 ? (
+                        <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                          {contactUnread}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-chatTextMuted font-medium">
+                          {contact.lastInteraction}
+                        </span>
+                      )}
+                      {onDeleteChat && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteChat(contact.id);
+                          }}
+                          title="Excluir histórico deste contato"
+                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-rose-600 dark:hover:text-rose-400 text-slate-400 rounded transition cursor-pointer"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
                   </button>
                 );
               })

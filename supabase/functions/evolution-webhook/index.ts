@@ -65,36 +65,29 @@ function formatPhone(digits: string): string {
 // Formatação de horário oficial no fuso de São Paulo, Brasil (America/Sao_Paulo, UTC-3)
 function formatSaoPauloTime(dateOrTimestamp?: any): string {
   try {
-    let date: Date;
+    let ms: number;
     if (!dateOrTimestamp) {
-      date = new Date();
+      ms = Date.now();
     } else if (dateOrTimestamp instanceof Date) {
-      date = dateOrTimestamp;
+      ms = dateOrTimestamp.getTime();
     } else if (typeof dateOrTimestamp === "number") {
-      date = new Date(dateOrTimestamp > 1e11 ? dateOrTimestamp : dateOrTimestamp * 1000);
+      ms = dateOrTimestamp > 1e11 ? dateOrTimestamp : dateOrTimestamp * 1000;
     } else if (typeof dateOrTimestamp === "string" && !isNaN(Number(dateOrTimestamp))) {
       const num = Number(dateOrTimestamp);
-      date = new Date(num > 1e11 ? num : num * 1000);
+      ms = num > 1e11 ? num : num * 1000;
     } else {
-      date = new Date(dateOrTimestamp);
+      const parsed = new Date(dateOrTimestamp).getTime();
+      ms = isNaN(parsed) ? Date.now() : parsed;
     }
 
-    if (isNaN(date.getTime())) {
-      date = new Date();
-    }
-
-    return new Intl.DateTimeFormat("pt-BR", {
-      timeZone: "America/Sao_Paulo",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).format(date);
+    // Offset estrito de São Paulo, Brasil: UTC-3 permanente (-3 horas = -10.800.000 ms)
+    const spDate = new Date(ms - (3 * 3600 * 1000));
+    const hours = String(spDate.getUTCHours()).padStart(2, "0");
+    const minutes = String(spDate.getUTCMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
   } catch (_e) {
-    // Fallback matemático UTC-3 caso Intl falhe
-    const d = new Date();
-    const utcHours = d.getUTCHours();
-    const spHours = (utcHours - 3 + 24) % 24;
-    return String(spHours).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+    const d = new Date(Date.now() - (3 * 3600 * 1000));
+    return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
   }
 }
 

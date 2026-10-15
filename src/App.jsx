@@ -41,21 +41,7 @@ import {
   processTriageResponse
 } from './lib/whatsappRouting';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from './lib/portfolioAccess';
-
-// Helper: Horário formatado no fuso oficial de São Paulo (America/Sao_Paulo, UTC-3)
-const getSaoPauloTime = (d = new Date()) => {
-  try {
-    return new Intl.DateTimeFormat('pt-BR', {
-      timeZone: 'America/Sao_Paulo',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false
-    }).format(d instanceof Date ? d : new Date(d));
-  } catch {
-    const now = d instanceof Date ? d : new Date(d);
-    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-  }
-};
+import { getSaoPauloTime } from './lib/timezone';
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -191,7 +177,17 @@ export default function App() {
     : activeChat?.type === 'whatsapp'
     ? {
         type: 'whatsapp',
-        data: (whatsAppContacts || []).find((w) => w?.id === activeChat?.id) || whatsAppContacts?.[0],
+        data: (whatsAppContacts || []).find((w) => w?.id === activeChat?.id) ||
+          INITIAL_WHATSAPP_CONTACTS.find((w) => w?.id === activeChat?.id) || {
+            id: activeChat?.id || 'wa-lead',
+            name: activeChat?.id ? `WhatsApp (${activeChat.id.replace('wa-', '')})` : 'Lead WhatsApp',
+            phone: activeChat?.id ? `+${activeChat.id.replace('wa-', '')}` : '',
+            avatar: '👤',
+            department: 'Comercial',
+            assignee: 'Gabriel Carvalho',
+            status: 'carteira_ativa',
+            statusLabel: 'Carteira Ativa'
+          },
       }
     : {
         type: 'dm',
@@ -385,7 +381,7 @@ export default function App() {
         // Pré-extrai tags de atribuição mais recentes para todas as mensagens recebidas
         dbMessages.forEach((m) => {
           if (m.chat_id?.startsWith('wa-') && m.text?.includes('<!-- ASSIGNMENT:')) {
-            const match = m.text.match(/<!-- ASSIGNMENT:(.*?) -->/);
+            const match = m.text.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
             if (match) {
               try {
                 storedAssignments[m.chat_id] = JSON.parse(match[1]);
@@ -471,7 +467,7 @@ export default function App() {
             senderId: m.sender_id,
             senderName: m.sender_name,
             text: cleanText,
-            timestamp: m.timestamp,
+            timestamp: getSaoPauloTime(m.created_at || m.timestamp),
             attachment: parsedAttachment,
             replyTo: parsedReplyTo,
             status: parsedStatus,
@@ -710,7 +706,7 @@ export default function App() {
           // Se for mensagem de WhatsApp e o usuário logado for consultor, verifica se pertence estritamente à sua carteira
           if (cKey.startsWith('wa-') && !hasFullPortfolioAccess(currentUser)) {
             // Verifica se a mensagem contém nova tag de atribuição manual em tempo real
-            const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:(.*?) -->/);
+            const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
             let realtimeAsgn = null;
             if (asgnMatch) {
               try {
@@ -729,6 +725,14 @@ export default function App() {
             const targetAssignee = realtimeAsgn?.assignee || existingContact?.assignee || cachedAsgn?.assignee || initialContact?.assignee || '';
 
             if (!isChatAssignedToUser(targetAssignee, currentUser)) {
+              // Se foi reatribuído para outro consultor, remove da tela do consultor atual
+              setWhatsAppContacts((prev) => prev.filter((c) => c.id !== cKey));
+              setMessages((prev) => {
+                if (!prev[cKey]) return prev;
+                const next = { ...prev };
+                delete next[cKey];
+                return next;
+              });
               return; // Descarta: conversa da carteira de outro consultor ou lead não atribuído
             }
           }
@@ -780,7 +784,7 @@ export default function App() {
             senderId: row.sender_id,
             senderName: row.sender_name,
             text: cleanText,
-            timestamp: row.timestamp,
+            timestamp: getSaoPauloTime(row.created_at || row.timestamp),
             attachment: parsedAttachment,
             replyTo: parsedReplyTo,
             status: parsedStatus,
@@ -800,11 +804,14 @@ export default function App() {
           // Se for mensagem de contato WhatsApp (wa-), adiciona ou atualiza o contato na lista lateral
           if (cKey.startsWith('wa-')) {
             // Verifica se a mensagem contém tag de atribuição manual em tempo real
-            const asgnMatch = incoming.text?.match(/<!-- ASSIGNMENT:(.*?) -->/);
+            const asgnMatch = incoming.text?.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
             let asgnData = null;
             if (asgnMatch) {
               try {
                 asgnData = JSON.parse(asgnMatch[1]);
+                const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+                stored[cKey] = asgnData;
+                localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
               } catch {}
             }
 
@@ -1508,6 +1515,42 @@ export default function App() {
     }
   };
 
+  // Excluir conversa inteira / limpar histórico do chat no Supabase e na UI (Item 3)
+  const handleDeleteChat = async (chatId) => {
+    if (!chatId) return;
+
+    const confirmDelete = window.confirm('Deseja realmente excluir todo o histórico desta conversa permanentemente?');
+    if (!confirmDelete) return;
+
+    const cKey = normalizeChatKey(chatId, currentUser?.id || 'u1');
+
+    // 1. Atualização Otimista local instantânea na UI
+    setMessages((prev) => {
+      const next = { ...prev };
+      delete next[chatId];
+      delete next[cKey];
+      return next;
+    });
+
+    if (chatId.startsWith('wa-')) {
+      setWhatsAppContacts((prev) => prev.filter((c) => c.id !== chatId && c.id !== cKey));
+    }
+
+    // 2. Remoção na tabela 'messages' do Supabase
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .or(`chat_id.eq.${chatId},chat_id.eq.${cKey}`);
+
+      if (error) {
+        console.warn('Erro ao excluir histórico de mensagens no Supabase:', error);
+      }
+    } catch (err) {
+      console.error('Falha na requisição de exclusão de conversa:', err);
+    }
+  };
+
   // Alternar atendimento IA vs Humano em contatos WhatsApp
   const handleToggleWhatsAppAI = (contactId) => {
     setWhatsAppContacts((prev) =>
@@ -1950,19 +1993,40 @@ export default function App() {
     const timeStr = getSaoPauloTime();
 
     // 1. Atualizar contatos locais imediatamente (Optimistic Update)
-    setWhatsAppContacts((prev) =>
-      prev.map((c) => {
-        if (c.id !== chatId) return c;
-        return {
-          ...c,
-          department: department || c.department,
-          assignee: assignee || c.assignee,
-          status: status || c.status || 'carteira_ativa',
-          statusLabel: statusLabel || (department ? `Carteira • ${department}` : c.statusLabel),
+    setWhatsAppContacts((prev) => {
+      const exists = prev.some((c) => c.id === chatId);
+      if (exists) {
+        return prev.map((c) => {
+          if (c.id !== chatId) return c;
+          return {
+            ...c,
+            department: department || c.department,
+            assignee: assignee || c.assignee,
+            status: status || c.status || 'carteira_ativa',
+            statusLabel: statusLabel || (department ? `Carteira • ${department}` : c.statusLabel),
+            triageContext: `Atribuído a ${assignee || 'Fila'} (${department}) por ${currentUser?.name || 'Gestão'}.`
+          };
+        });
+      }
+      const rawDigits = chatId.replace('wa-', '');
+      const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+      return [
+        ...prev,
+        {
+          id: chatId,
+          name: `WhatsApp (${formattedPhone})`,
+          phone: formattedPhone,
+          avatar: '👤',
+          department: department || 'Comercial',
+          assignee: assignee || 'Gabriel Carvalho',
+          status: status || 'carteira_ativa',
+          statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+          aiActive: false,
+          lastInteraction: 'Agora',
           triageContext: `Atribuído a ${assignee || 'Fila'} (${department}) por ${currentUser?.name || 'Gestão'}.`
-        };
-      })
-    );
+        }
+      ];
+    });
 
     // 2. Persistir no localStorage para retenção offline e recarregamento instantâneo
     try {
@@ -2066,6 +2130,7 @@ export default function App() {
           setActiveView('chat');
           clearUnread(contactId);
         }}
+        onDeleteChat={handleDeleteChat}
         onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
         onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
         aiAutonomous={aiAutonomous}
@@ -2098,6 +2163,7 @@ export default function App() {
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
           onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
           onDeleteMessage={handleDeleteMessage}
+          onDeleteChat={handleDeleteChat}
           onOpenTaskDetail={(taskId) => {
             const found = tasks.find((t) => t.id === taskId);
             if (found) setSelectedTaskDetail(found);

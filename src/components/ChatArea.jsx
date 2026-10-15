@@ -28,6 +28,7 @@ import {
   Check
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
+import { getSaoPauloTime } from '../lib/timezone';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -185,6 +186,7 @@ export default function ChatArea({
   onCreateTaskFromMessage,
   onDeleteTaskFromMessage,
   onDeleteMessage,
+  onDeleteChat,
   onOpenTaskDetail,
   onScheduleTask,
   onDelegateTask,
@@ -249,7 +251,8 @@ export default function ChatArea({
   }, [isAssignmentOpen]);
 
   const handleSaveAssignment = () => {
-    if (onUpdateChatAssignment && target.id) {
+    const targetChatId = target?.id || chatMeta?.data?.id || chatMeta?.id;
+    if (onUpdateChatAssignment && targetChatId) {
       let statusLabel = 'Carteira Ativa';
       if (selectedStatus === 'lead_instagram') {
         statusLabel = 'Lead Instagram - Expansão';
@@ -261,7 +264,7 @@ export default function ChatArea({
         statusLabel = `Carteira • ${selectedDept}`;
       }
 
-      onUpdateChatAssignment(target.id, {
+      onUpdateChatAssignment(targetChatId, {
         department: selectedDept,
         assignee: selectedAssignee,
         status: selectedStatus || 'carteira_ativa',
@@ -750,6 +753,17 @@ export default function ChatArea({
             <Sparkles size={14} className="text-purple-600 dark:text-purple-400" />
             <span className="hidden sm:inline">{isDM ? 'Resumir' : 'Resumo'}</span>
           </button>
+
+          {onDeleteChat && (
+            <button
+              onClick={() => onDeleteChat(target?.id || chatMeta?.data?.id || chatMeta?.id)}
+              title="Excluir histórico desta conversa permanentemente do EduChat e do Supabase"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 border border-rose-200 dark:border-rose-500/30 text-xs font-semibold shadow-xs transition cursor-pointer"
+            >
+              <Trash2 size={13} className="text-rose-600 dark:text-rose-400" />
+              <span className="hidden sm:inline">Excluir Chat</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -837,7 +851,7 @@ export default function ChatArea({
                 <div key={m.id} className="flex justify-center my-2 animate-in fade-in">
                   <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
                     <span className="leading-tight">{m.text?.replace(/<!--[\s\S]*?-->/g, '').trim()}</span>
-                    <span className="text-[9.5px] opacity-75 font-mono shrink-0">{m.timestamp}</span>
+                    <span className="text-[9.5px] opacity-75 font-mono shrink-0">{getSaoPauloTime(m.timestamp || m.created_at)}</span>
                   </div>
                 </div>
               );
@@ -1135,12 +1149,12 @@ export default function ChatArea({
                           e.stopPropagation();
                           if (onDeleteMessage) onDeleteMessage(m.id);
                         }}
-                        title="Excluir mensagem da conversa"
-                        className="opacity-0 group-hover:opacity-100 hover:text-rose-600 dark:hover:text-rose-400 p-0.5 rounded transition cursor-pointer"
+                        title="Excluir mensagem da conversa e do Supabase"
+                        className="opacity-60 hover:opacity-100 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-0.5 rounded transition cursor-pointer"
                       >
                         <Trash2 size={11} />
                       </button>
-                      <span>{m.timestamp}</span>
+                      <span>{getSaoPauloTime(m.timestamp || m.created_at)}</span>
                       {isMe && (
                         <span title={m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'}>
                           {m.status === 'read' ? (
