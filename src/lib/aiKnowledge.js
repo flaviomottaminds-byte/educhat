@@ -18,8 +18,8 @@ export const MEC_GUIDELINES = [
   }
 ];
 
-// Cálculo Automático de Prioridade Inteligente da IA (Sem interferência humana)
-export function analyzeTaskPriorityAI(title, description, vipClients = []) {
+// Cálculo Automático de Prioridade Inteligente da IA (com aprendizado contínuo de documentos)
+export function analyzeTaskPriorityAI(title, description, vipClients = [], learnedDocuments = []) {
   const fullText = `${title} ${description}`.toLowerCase();
 
   // 1. Verifica se envolve Cliente/Polo VIP (Plano Fixo)
@@ -33,7 +33,23 @@ export function analyzeTaskPriorityAI(title, description, vipClients = []) {
     };
   }
 
-  // 2. Verifica se envolve termos críticos do MEC, notas fiscais ou bloqueios
+  // 2. Consulta Documentos e Memorandos Aprendidos (Item 3)
+  for (const doc of learnedDocuments) {
+    const docSummaryLower = (doc.summary || '').toLowerCase();
+    const docTextLower = (doc.textContent || '').toLowerCase();
+
+    // Se o memorando estipular prazo específico ou urgência para termos citados na tarefa
+    if (doc.keywords && doc.keywords.some((kw) => fullText.includes(kw.toLowerCase()))) {
+      return {
+        priority: doc.suggestedPriority || 'alta',
+        isVip: false,
+        dueDate: doc.suggestedDueDate || 'Conforme Memorando',
+        reason: `📄 Regra aplicada do memorando: "${doc.title}". ${doc.summary || 'Diretriz interna institucional cadastrada.'}`
+      };
+    }
+  }
+
+  // 3. Verifica se envolve termos críticos do MEC, notas fiscais ou bloqueios
   const highPriorityKeywords = [
     'mec', 'portaria', 'diploma', 'nota fiscal', 'nfse', 'divergência', 'divergencia',
     'split', 'asaas', 'bloqueado', 'bloqueio', 'revisão de nota', 'colação', 'cancelamento',
@@ -50,7 +66,7 @@ export function analyzeTaskPriorityAI(title, description, vipClients = []) {
     };
   }
 
-  // 3. Verifica demandas médias (documentação, certificados comuns, matrículas)
+  // 4. Verifica demandas médias (documentação, certificados comuns, matrículas)
   const mediumPriorityKeywords = [
     'certificado', 'matrícula', 'matricula', 'histórico', 'historico', 'comprovante',
     'ementa', 'declaração', 'declaracao', 'reposição'
@@ -66,7 +82,7 @@ export function analyzeTaskPriorityAI(title, description, vipClients = []) {
     };
   }
 
-  // 4. Demanda rotineira / Baixa
+  // 5. Demanda rotineira / Baixa
   return {
     priority: 'baixa',
     isVip: false,
@@ -75,11 +91,27 @@ export function analyzeTaskPriorityAI(title, description, vipClients = []) {
   };
 }
 
-// Motor de Resposta do Copiloto de IA para Consultas de Colaboradores
-export function answerCopilotQuery(query, user, vipClients = [], customGuidelines = '') {
+// Motor de Resposta do Copiloto de IA para Consultas de Colaboradores (com RAG de Documentos Aprendidos)
+export function answerCopilotQuery(query, user, vipClients = [], customGuidelines = '', learnedDocuments = []) {
   const q = query.toLowerCase();
 
-  // Dúvidas sobre o MEC
+  // 1. Busca em Documentos e Memorandos Aprendidos (RAG Institucional)
+  const matchingDoc = learnedDocuments.find((doc) => {
+    const titleMatch = q.includes(doc.title.toLowerCase().slice(0, 15));
+    const keywordMatch = doc.keywords && doc.keywords.some((kw) => q.includes(kw.toLowerCase()));
+    const textMatch = doc.textContent && doc.textContent.toLowerCase().includes(q.slice(0, 20));
+    return titleMatch || keywordMatch || textMatch;
+  });
+
+  if (matchingDoc) {
+    return `Olá ${user?.name.split(' ')[0]}! Localizei a resposta diretamente nos nossos **documentos internos aprendidos**:\n\n` +
+      `📄 **Documento:** *${matchingDoc.title}*\n` +
+      `📅 **Data de Publicação:** ${matchingDoc.uploadDate}\n` +
+      `💡 **Resumo da Diretriz:**\n${matchingDoc.summary || matchingDoc.textContent?.slice(0, 250) + '...'}\n\n` +
+      `Essa regra foi devidamente memorizada e está sendo aplicada automaticamente nas demandas do Kanban!`;
+  }
+
+  // 2. Dúvidas sobre o MEC
   if (q.includes('mec') || q.includes('portaria') || q.includes('legislação') || q.includes('lei') || q.includes('prazo de diploma') || q.includes('diploma') || q.includes('certificado')) {
     return `Olá ${user?.name.split(' ')[0]}! Consultando as diretrizes oficiais do MEC e nossos regulamentos:\n\n` +
       `📜 **Prazos Oficiais do MEC (Portaria 1.095/2018):**\n` +
@@ -89,7 +121,7 @@ export function answerCopilotQuery(query, user, vipClients = [], customGuideline
       `Se precisar que a Secretaria Acadêmica atue nesse processo, posso abrir uma demanda automática agora. Deseja registrar?`;
   }
 
-  // Dúvidas sobre Financeiro, Asaas, Splits e Notas Fiscais
+  // 3. Dúvidas sobre Financeiro, Asaas, Splits e Notas Fiscais
   if (q.includes('asaas') || q.includes('split') || q.includes('fatura') || q.includes('nota fiscal') || q.includes('financeiro') || q.includes('comissão')) {
     return `Olá ${user?.name.split(' ')[0]}! Sobre procedimentos financeiros e Asaas:\n\n` +
       `💰 **Procedimento Padrão (POP Asaas):**\n` +
@@ -100,7 +132,7 @@ export function answerCopilotQuery(query, user, vipClients = [], customGuideline
       `Caso precise que o setor Financeiro analise uma fatura específica, basta me informar os detalhes!`;
   }
 
-  // Dúvidas sobre Polos VIP e Clientes
+  // 4. Dúvidas sobre Polos VIP e Clientes
   if (q.includes('vip') || q.includes('polo') || q.includes('parceiro') || q.includes('plano fixo')) {
     const vipList = vipClients.map(v => `• **${v.name}:** ${v.plan}`).join('\n');
     return `Olá ${user?.name.split(' ')[0]}! Aqui está a nossa lista de Polos VIP e diretrizes de atendimento prioritário:\n\n` +
@@ -109,7 +141,7 @@ export function answerCopilotQuery(query, user, vipClients = [], customGuideline
       `📌 *Regra da Diretoria:* Qualquer chamado ou dúvida originada desses parceiros ganha automaticamente a tag VIP e prioridade máxima no Kanban!`;
   }
 
-  // Dúvidas sobre Expansão e Matrículas
+  // 5. Dúvidas sobre Expansão e Matrículas
   if (q.includes('matrícula') || q.includes('matricula') || q.includes('comercial') || q.includes('expansão') || q.includes('polo novo')) {
     return `Olá ${user?.name.split(' ')[0]}! Para novas matrículas e abertura de polos parceiros:\n\n` +
       `🎯 **Fluxo Comercial & Expansão:**\n` +
@@ -125,6 +157,7 @@ export function answerCopilotQuery(query, user, vipClients = [], customGuideline
     `• 📜 **Prazos e portarias do MEC** (diplomas, certificados, pós);\n` +
     `• 💳 **Fechamentos no Asaas e splits de polos**;\n` +
     `• 👑 **Polos VIP e SLAs prioritários**;\n` +
+    `• 📄 **Memorandos e documentos internos aprendidos**;\n` +
     `• 📋 **Abertura e acompanhamento de demandas no Kanban**.\n\n` +
     `Digite sua dúvida ou instrução com o que você precisa!`;
 }

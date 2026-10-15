@@ -13,7 +13,8 @@ import {
   CheckCircle2,
   Calendar,
   AlertCircle,
-  MessageSquare
+  MessageSquare,
+  Trash2
 } from 'lucide-react';
 
 export default function TaskDetailModal({
@@ -22,6 +23,7 @@ export default function TaskDetailModal({
   task,
   onUpdateStatus,
   onUpdateTask,
+  onDeleteTask,
   currentUser
 }) {
   const [newComment, setNewComment] = useState('');
@@ -316,9 +318,20 @@ export default function TaskDetailModal({
 
         {/* Rodapé com Ações Rápidas */}
         <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-chatBorder flex items-center justify-between shrink-0">
-          <span className="text-xs text-chatTextMuted">
-            Demanda sincronizada em tempo real com toda a equipe.
-          </span>
+          <button
+            onClick={() => {
+              if (window.confirm(`Tem certeza que deseja excluir a demanda "${task.title}" do Kanban?`)) {
+                if (onDeleteTask) onDeleteTask(task.id);
+                onClose();
+              }
+            }}
+            className="px-3.5 py-2 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-300 dark:border-rose-500/40 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition"
+            title="Excluir demanda permanentemente"
+          >
+            <Trash2 size={13} />
+            <span>Excluir Demanda</span>
+          </button>
+
           <button
             onClick={onClose}
             className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"

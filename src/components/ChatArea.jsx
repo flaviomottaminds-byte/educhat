@@ -12,7 +12,8 @@ import {
   Download,
   Image as ImageIcon,
   HelpCircle,
-  Bot
+  Bot,
+  Trash2
 } from 'lucide-react';
 
 export default function ChatArea({
@@ -20,6 +21,7 @@ export default function ChatArea({
   messages,
   onSendMessage,
   onCreateTaskFromMessage,
+  onDeleteTaskFromMessage,
   onSummarizeChat,
   onOpenWhatsAppDossier,
   currentUser,
@@ -304,6 +306,24 @@ export default function ChatArea({
                     )}
 
                     <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">{m.text}</p>
+
+                    {/* Botão de Excluir / Desfazer Card Criado no Chat (Item 1) */}
+                    {m.taskId && (
+                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 flex items-center justify-between gap-2">
+                        <span className="text-[10px] text-yellow-800 dark:text-yellow-300 font-semibold flex items-center gap-1">
+                          <Sparkles size={11} className="text-yellow-600 animate-pulse" /> Demanda criada no Kanban
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteTaskFromMessage && onDeleteTaskFromMessage(m.taskId, m.id)}
+                          className="px-2.5 py-1 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-300 dark:border-rose-500/40 text-[11px] font-semibold flex items-center gap-1 transition shadow-2xs hover:scale-102"
+                          title="Excluir este card do Kanban caso não seja necessário"
+                        >
+                          <Trash2 size={12} />
+                          <span>Desfazer / Excluir Card</span>
+                        </button>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-[#667781] dark:text-chatTextMuted select-none">
                       <span>{m.timestamp}</span>

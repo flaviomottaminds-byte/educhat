@@ -12,6 +12,11 @@ import TaskDetailModal from './components/TaskDetailModal';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { playMessageSound } from './lib/audioNotification';
+import {
+  requestDesktopNotificationPermission,
+  notifyIncomingMessage,
+  stopTaskbarBlink
+} from './lib/desktopNotification';
 import { answerCopilotQuery, analyzeTaskPriorityAI } from './lib/aiKnowledge';
 import {
   INITIAL_CHANNELS,
@@ -52,6 +57,18 @@ const DEFAULT_AI_PROMPT = `REGRAS DE CLASSIFICAÇÃO DA IA:
 2. CLIENTES AVULSOS: Se o cliente for avulso ou comum, classifique como Prioridade Média/Baixa com prazo de 48 horas.
 3. EXCEÇÕES CRÍTICAS: Questões sobre divergência de nota fiscal, bloqueio indevido no eAula ou erro de split devem ter prioridade Alta mesmo para avulsos.`;
 
+const INITIAL_LEARNED_DOCS = [
+  {
+    id: 'doc_init_1',
+    title: 'Memorando Diretoria 01/2026 - Prazos de Matrícula e Reposição.pdf',
+    size: '142.0 KB',
+    uploadDate: '15/10/2026',
+    summary: 'Determina que todas as solicitações de reposição de aula e certidões devem ser concluídas em no máximo 48h pela Secretaria Acadêmica.',
+    keywords: ['Prazos', 'Secretaria', 'SLA'],
+    textContent: 'Memorando 01/2026: Fica determinado que todas as reposições de aulas e certidões devem ser tratadas em no máximo 48h.'
+  }
+];
+
 export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
@@ -79,10 +96,26 @@ export default function App() {
   const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'error'
   const [lastSyncTime, setLastSyncTime] = useState('');
 
-  // Contador de Mensagens Não Lidas por Canal/Colaborador (Item 2)
+  // Documentos e Memorandos Aprendidos pela IA (Item 3)
+  const [learnedDocuments, setLearnedDocuments] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_learned_docs');
+      return saved ? JSON.parse(saved) : INITIAL_LEARNED_DOCS;
+    } catch {
+      return INITIAL_LEARNED_DOCS;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('educhat_learned_docs', JSON.stringify(learnedDocuments));
+    } catch {}
+  }, [learnedDocuments]);
+
+  // Contador de Mensagens Não Lidas por Canal/Colaborador
   const [unreadCounts, setUnreadCounts] = useState({});
 
-  // Card do Kanban ampliado para detalhes (Item 7 e 8)
+  // Card do Kanban ampliado para detalhes
   const [selectedTaskDetail, setSelectedTaskDetail] = useState(null);
 
   // Base de Conhecimento, SLAs e Memória da IA
@@ -126,6 +159,11 @@ export default function App() {
   const currentChatKey = getChatKey(activeChat, currentUser.id);
   const currentMessages = messages[currentChatKey] || [];
 
+  // Solicitar permissão nativa de notificação do Windows ao carregar
+  useEffect(() => {
+    requestDesktopNotificationPermission();
+  }, []);
+
   // Helper para limpar contador de mensagens não lidas
   const clearUnread = (targetId) => {
     setUnreadCounts((prev) => {
@@ -134,9 +172,10 @@ export default function App() {
       document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
       return next;
     });
+    stopTaskbarBlink();
   };
 
-  // Helper para processar mensagem recebida e acionar notificação/áudio (Item 2)
+  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 2)
   const handleIncomingNotification = (msg, cKey) => {
     if (msg.senderId === currentUser.id) return;
 
@@ -144,20 +183,20 @@ export default function App() {
     const isCurrentActive = cKey === currentKey && !document.hidden;
 
     if (!isCurrentActive) {
-      // Notificação: chave do canal ou id do remetente
       const targetBadgeKey = cKey.startsWith('c-') ? cKey : msg.senderId;
       setUnreadCounts((prev) => {
         const next = { ...prev, [targetBadgeKey]: (prev[targetBadgeKey] || 0) + 1 };
-        const total = Object.values(next).reduce((a, b) => a + b, 0);
-        document.title = `(${total}) EduChat | Nova Mensagem`;
         return next;
       });
+
+      // Toca áudio e faz a barra de tarefas do Windows piscar
       playMessageSound();
+      notifyIncomingMessage(msg.senderName, msg.text);
     }
   };
 
   // =========================================================================
-  // SUPABASE REALTIME & SINCRONIZAÇÃO A CADA 2 MINUTOS (Item 1)
+  // SUPABASE REALTIME & SINCRONIZAÇÃO A CADA 2 MINUTOS
   // =========================================================================
   const fetchSupabaseData = async (silent = false) => {
     try {
@@ -183,6 +222,8 @@ export default function App() {
 
           let cleanText = m.text || '';
           let parsedAttachment = null;
+          let linkedTaskId = null;
+
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
             if (match) {
@@ -193,6 +234,14 @@ export default function App() {
             }
           }
 
+          if (cleanText.includes('<!-- TASK_ID:')) {
+            const match = cleanText.match(/<!-- TASK_ID:([^\s>]+) -->/);
+            if (match) {
+              linkedTaskId = match[1];
+              cleanText = cleanText.replace(/<!-- TASK_ID:[^\s>]+ -->/, '').trim();
+            }
+          }
+
           grouped[key].push({
             id: m.id,
             senderId: m.sender_id,
@@ -200,6 +249,7 @@ export default function App() {
             text: cleanText,
             timestamp: m.timestamp,
             attachment: parsedAttachment,
+            taskId: linkedTaskId,
             actionExtracted: false
           });
         });
@@ -265,15 +315,12 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Inicialização
     fetchSupabaseData(false);
 
-    // Sincronização periódica a cada 2 minutos (Item 1: 120.000 ms)
     const syncInterval = setInterval(() => {
       fetchSupabaseData(true);
     }, 120000);
 
-    // Ouvinte Realtime via WebSockets
     const channelListener = supabase
       .channel('educhat_realtime_channel')
       .on(
@@ -289,6 +336,8 @@ export default function App() {
 
           let cleanText = row.text || '';
           let parsedAttachment = null;
+          let linkedTaskId = null;
+
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
             if (match) {
@@ -299,6 +348,14 @@ export default function App() {
             }
           }
 
+          if (cleanText.includes('<!-- TASK_ID:')) {
+            const match = cleanText.match(/<!-- TASK_ID:([^\s>]+) -->/);
+            if (match) {
+              linkedTaskId = match[1];
+              cleanText = cleanText.replace(/<!-- TASK_ID:[^\s>]+ -->/, '').trim();
+            }
+          }
+
           const incoming = {
             id: row.id,
             senderId: row.sender_id,
@@ -306,6 +363,7 @@ export default function App() {
             text: cleanText,
             timestamp: row.timestamp,
             attachment: parsedAttachment,
+            taskId: linkedTaskId,
             actionExtracted: false
           };
 
@@ -318,7 +376,6 @@ export default function App() {
             };
           });
 
-          // Notificação sonora e badge
           handleIncomingNotification(incoming, cKey);
         }
       )
@@ -375,6 +432,11 @@ export default function App() {
                   : t
               )
             );
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = payload.old?.id;
+            if (oldId) {
+              setTasks((prev) => prev.filter((t) => t.id !== oldId));
+            }
           }
         }
       )
@@ -394,7 +456,7 @@ export default function App() {
     };
   }, [activeChat, currentUser]);
 
-  // Enviar nova mensagem no chat ativo com suporte a anexo (Item 8)
+  // Enviar nova mensagem no chat ativo com suporte a anexo
   const handleSendMessage = (text, attachment = null) => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -414,7 +476,6 @@ export default function App() {
       [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
     }));
 
-    // Serializar anexo no texto para persistência no Supabase sem migrations
     const payloadText = attachment
       ? `${text ? text + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachment)}]`
       : text;
@@ -430,10 +491,10 @@ export default function App() {
       if (error) console.warn('Erro ao salvar msg no Supabase:', error);
     });
 
-    // GATILHO IA: Se for conversa 1 a 1 com o Assistente IA (Item 6)
+    // GATILHO IA: Se for conversa com o Assistente IA (incorporando memorandos aprendidos)
     if (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot') {
       setTimeout(() => {
-        const aiAnswer = answerCopilotQuery(text, currentUser, vipClients);
+        const aiAnswer = answerCopilotQuery(text, currentUser, vipClients, customAIPrompt, learnedDocuments);
         const aiReply = {
           id: 'ia_' + Date.now(),
           senderId: 'u_ia_copilot',
@@ -471,7 +532,7 @@ export default function App() {
       return;
     }
 
-    // GATILHO 2: MODO AUTÔNOMO DA IA COM DETECÇÃO INTELIGENTE DE CLIENTES VIP
+    // GATILHO 2: MODO AUTÔNOMO DA IA
     if (aiAutonomous) {
       const lower = text.toLowerCase();
       const taskKeywords = [
@@ -492,8 +553,8 @@ export default function App() {
   };
 
   const createAutoTask = (rawTitle, fullText, timeStr, wasAutonomous = false, matchedVip = null) => {
-    // 1. Análise de Prioridade 100% IA (Item 5)
-    const aiAnalysis = analyzeTaskPriorityAI(rawTitle, fullText, vipClients);
+    // 1. Análise de Prioridade 100% IA (considerando memorandos aprendidos)
+    const aiAnalysis = analyzeTaskPriorityAI(rawTitle, fullText, vipClients, learnedDocuments);
 
     // 2. Define o responsável
     let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : collaborators[1]?.name || 'Tatiane Salatinos';
@@ -553,17 +614,20 @@ export default function App() {
       if (error) console.warn('Erro ao salvar autoTask no Supabase:', error);
     });
 
-    // Feedback inteligente do Bot no chat
+    // Feedback inteligente do Bot no chat com ID para Desfazer/Excluir
+    const baseReplyText = autoTask.isVip
+      ? `👑 [CLIENTE VIP DETECTADO]\n📌 Demanda criada com PRIORIDADE MÁXIMA: "${autoTask.title}"\n👤 Atribuído a: ${autoTask.assignee}\n⏱️ Prazo IA: ${autoTask.dueDate}\n💡 Critério: ${autoTask.aiReason}`
+      : wasAutonomous
+      ? `✨ [IA Autônoma] Demanda criada no Kanban:\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}\n📅 Prioridade: ${autoTask.priority.toUpperCase()} (${autoTask.dueDate})`
+      : `✨ Demanda criada com sucesso no Kanban!\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}`;
+
     const botReply = {
       id: 'bot_' + Date.now(),
       senderId: 'bot',
       senderName: '🤖 Copiloto EduChat',
-      text: autoTask.isVip
-        ? `👑 [CLIENTE VIP DETECTADO]\n📌 Demanda criada com PRIORIDADE MÁXIMA: "${autoTask.title}"\n👤 Atribuído a: ${autoTask.assignee}\n⏱️ Prazo IA: ${autoTask.dueDate}\n💡 Critério: ${autoTask.aiReason}`
-        : wasAutonomous
-        ? `✨ [IA Autônoma] Demanda criada no Kanban:\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}\n📅 Prioridade: ${autoTask.priority.toUpperCase()} (${autoTask.dueDate})`
-        : `✨ Demanda criada com sucesso no Kanban!\n📌 "${autoTask.title}"\n👤 Responsável: ${autoTask.assignee}`,
+      text: baseReplyText,
       timestamp: timeStr,
+      taskId: autoTask.id,
       actionExtracted: true,
     };
 
@@ -572,16 +636,59 @@ export default function App() {
       [currentChatKey]: [...(prev[currentChatKey] || []), botReply],
     }));
 
+    // Salvar com marcador de taskId para persistir opção de exclusão
+    const payloadBotText = `${baseReplyText}\n<!-- TASK_ID:${autoTask.id} -->`;
     supabase.from('messages').insert([{
       id: botReply.id,
       chat_id: currentChatKey,
       sender_id: botReply.senderId,
       sender_name: botReply.senderName,
-      text: botReply.text,
+      text: payloadBotText,
       timestamp: botReply.timestamp
     }]).then(({ error }) => {
       if (error) console.warn('Erro ao salvar botReply no Supabase:', error);
     });
+  };
+
+  // Excluir card do Kanban (Item 1)
+  const handleDeleteTask = (taskId) => {
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    supabase
+      .from('tasks')
+      .delete()
+      .eq('id', taskId)
+      .then(({ error }) => {
+        if (error) console.warn('Erro ao excluir tarefa no Supabase:', error);
+      });
+  };
+
+  // Excluir card criado pela IA diretamente a partir da conversa (Item 1)
+  const handleDeleteTaskFromMessage = (taskId, messageId) => {
+    handleDeleteTask(taskId);
+
+    // Atualiza o balão do bot no chat para avisar que foi descartado
+    setMessages((prev) => {
+      const chatMsgs = prev[currentChatKey] || [];
+      const updated = chatMsgs.map((m) => {
+        if (m.id === messageId) {
+          return {
+            ...m,
+            text: `❌ [Demanda Cancelada] O card foi removido do Kanban por ${currentUser.name}.`,
+            taskId: null
+          };
+        }
+        return m;
+      });
+      return { ...prev, [currentChatKey]: updated };
+    });
+
+    supabase
+      .from('messages')
+      .update({ text: `❌ [Demanda Cancelada] O card foi removido do Kanban por ${currentUser.name}.` })
+      .eq('id', messageId)
+      .then(({ error }) => {
+        if (error) console.warn('Erro ao atualizar mensagem de cancelamento no Supabase:', error);
+      });
   };
 
   const handleCreateTaskFromMessage = (message) => {
@@ -613,7 +720,7 @@ export default function App() {
       });
   };
 
-  // Atualizar dados completos da tarefa (comentários, anexos, etc. - Item 7 e 8)
+  // Atualizar dados completos da tarefa (comentários, anexos, etc.)
   const handleUpdateTaskDetails = (taskId, partial) => {
     setTasks((prev) =>
       prev.map((t) => {
@@ -740,9 +847,18 @@ export default function App() {
     }
   };
 
+  // Gerenciamento de Documentos Aprendidos
+  const handleAddDocument = (newDoc) => {
+    setLearnedDocuments((prev) => [newDoc, ...prev]);
+  };
+
+  const handleRemoveDocument = (docId) => {
+    setLearnedDocuments((prev) => prev.filter((d) => d.id !== docId));
+  };
+
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
-      {/* Barra Lateral estilo WhatsApp com Contadores Não Lidos e Sync */}
+      {/* Barra Lateral estilo WhatsApp */}
       <Sidebar
         activeView={activeView}
         setActiveView={setActiveView}
@@ -784,6 +900,7 @@ export default function App() {
           messages={currentMessages}
           onSendMessage={handleSendMessage}
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
+          onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
           onSummarizeChat={handleSummarizeChat}
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
           currentUser={currentUser}
@@ -863,7 +980,7 @@ export default function App() {
         onSave={modalItem.type === 'channel' ? handleSaveChannel : handleSaveCollaborator}
       />
 
-      {/* Modal de Memória e Aprendizado da IA (Regras VIP) */}
+      {/* Modal de Memória e Ingestão de Documentos da IA (Item 3) */}
       <AIMemoryModal
         isOpen={isAIMemoryOpen}
         onClose={() => setIsAIMemoryOpen(false)}
@@ -878,6 +995,9 @@ export default function App() {
         onRemovePop={(id) => setPops((prev) => prev.filter((p) => p.id !== id))}
         customPrompt={customAIPrompt}
         onSaveCustomPrompt={(newPrompt) => setCustomAIPrompt(newPrompt)}
+        learnedDocuments={learnedDocuments}
+        onAddDocument={handleAddDocument}
+        onRemoveDocument={handleRemoveDocument}
       />
 
       {/* Modal de Dossiê 360º & Auto-Aprendizado do WhatsApp */}
@@ -897,7 +1017,7 @@ export default function App() {
         currentUserId={currentUser?.id}
       />
 
-      {/* Modal Ampliado de Detalhes da Demanda (Item 7 e 8) */}
+      {/* Modal Ampliado de Detalhes da Demanda com Exclusão (Item 1, 7 e 8) */}
       <TaskDetailModal
         isOpen={!!selectedTaskDetail}
         onClose={() => setSelectedTaskDetail(null)}
@@ -910,6 +1030,7 @@ export default function App() {
           handleUpdateTaskDetails(taskId, partial);
           setSelectedTaskDetail((prev) => prev && prev.id === taskId ? { ...prev, ...partial } : prev);
         }}
+        onDeleteTask={handleDeleteTask}
         currentUser={currentUser}
       />
     </div>

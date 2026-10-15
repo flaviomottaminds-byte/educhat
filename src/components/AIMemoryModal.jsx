@@ -1,5 +1,20 @@
-import React, { useState } from 'react';
-import { X, Brain, Plus, Trash2, Crown, Sparkles, Check, Clock, BookOpen, Layers } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import {
+  X,
+  Brain,
+  Plus,
+  Trash2,
+  Crown,
+  Sparkles,
+  Check,
+  Clock,
+  BookOpen,
+  FileText,
+  Upload,
+  Layers,
+  FileUp,
+  AlertCircle
+} from 'lucide-react';
 
 export default function AIMemoryModal({
   isOpen,
@@ -14,11 +29,14 @@ export default function AIMemoryModal({
   onAddPop,
   onRemovePop,
   customPrompt,
-  onSaveCustomPrompt
+  onSaveCustomPrompt,
+  learnedDocuments = [],
+  onAddDocument,
+  onRemoveDocument
 }) {
   if (!isOpen) return null;
 
-  const [activeTab, setActiveTab] = useState('vips'); // 'vips' | 'slas' | 'pops' | 'prompt'
+  const [activeTab, setActiveTab] = useState('docs'); // 'vips' | 'slas' | 'pops' | 'prompt' | 'docs'
 
   // Form estados
   const [newClientName, setNewClientName] = useState('');
@@ -33,6 +51,9 @@ export default function AIMemoryModal({
 
   const [promptText, setPromptText] = useState(customPrompt);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [docFeedback, setDocFeedback] = useState('');
+
+  const docInputRef = useRef(null);
 
   const handleAddClient = (e) => {
     e.preventDefault();
@@ -76,8 +97,78 @@ export default function AIMemoryModal({
     setTimeout(() => setSavedSuccess(false), 2000);
   };
 
+  // Ingestão e Processamento de Documentos da IA (Item 3)
+  const handleDocumentUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = reader.result || '';
+      const text = typeof content === 'string' ? content : '';
+
+      // 1. Detecção automática de Clientes VIP se for CSV ou lista
+      let vipsFound = 0;
+      if (file.name.endsWith('.csv') || text.includes('VIP') || text.includes('Plano')) {
+        const lines = text.split('\n');
+        lines.forEach((line) => {
+          const parts = line.split(/[,;\t]/);
+          if (parts.length >= 1 && parts[0].trim().length > 3) {
+            const name = parts[0].replace(/["']/g, '').trim();
+            const plan = parts[1]?.replace(/["']/g, '').trim() || 'Plano Fixo Corporativo';
+            if (name.toLowerCase() !== 'nome' && name.toLowerCase() !== 'cliente' && !vipClients.some(v => v.name.toLowerCase() === name.toLowerCase())) {
+              onAddVipClient({
+                id: 'vip_doc_' + Date.now() + '_' + Math.random().toString(36).substring(7),
+                name,
+                plan,
+                since: new Date().getFullYear().toString()
+              });
+              vipsFound++;
+            }
+          }
+        });
+      }
+
+      // 2. Extração de palavras-chave e resumo da diretriz
+      const keywords = [];
+      if (/mec|portaria|resolu[çc][ãa]o/i.test(text)) keywords.push('MEC');
+      if (/asaas|fatura|split|cobran[çc]a/i.test(text)) keywords.push('Asaas/Financeiro');
+      if (/prazo|horas|dias|sla|urgente/i.test(text)) keywords.push('Prazos');
+      if (/diploma|certificado|colao|p[oó]s/i.test(text)) keywords.push('Certificação');
+
+      let autoSummary = text.slice(0, 300).trim();
+      if (text.length > 300) autoSummary += '...';
+
+      // 3. Cadastrar documento aprendido
+      const newDoc = {
+        id: 'doc_' + Date.now(),
+        title: file.name,
+        size: (file.size / 1024).toFixed(1) + ' KB',
+        uploadDate: new Date().toLocaleDateString('pt-BR'),
+        summary: autoSummary,
+        textContent: text,
+        keywords: keywords.length > 0 ? keywords : ['Diretriz Interna'],
+        suggestedPriority: text.toLowerCase().includes('urgente') ? 'alta' : 'media'
+      };
+
+      if (onAddDocument) {
+        onAddDocument(newDoc);
+      }
+
+      const feedback = vipsFound > 0
+        ? `✅ Documento "${file.name}" assimilado! ${vipsFound} clientes VIP identificados e adicionados automaticamente.`
+        : `✅ Documento "${file.name}" assimilado com sucesso pela IA!`;
+
+      setDocFeedback(feedback);
+      setTimeout(() => setDocFeedback(''), 5000);
+    };
+
+    reader.readAsText(file);
+    e.target.value = null;
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-black/60 dark:bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
       <div className="bg-chatCard border border-chatBorder rounded-2xl max-w-3xl w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-4 bg-gradient-to-r from-yellow-100 via-chatCard to-purple-100 dark:from-yellow-950/40 dark:via-chatPanel dark:to-purple-950/40 border-b border-chatBorder flex items-center justify-between shrink-0">
@@ -90,7 +181,7 @@ export default function AIMemoryModal({
                 Centro de Aprendizado & Procedimentos da IA
               </h3>
               <p className="text-xs text-chatTextMuted">
-                Alimente a IA com clientes VIP, prazos de SLA de cada setor e Procedimentos Padrão (POPs)
+                Alimente a IA com documentos, memorandos, clientes VIP, prazos de SLA e POPs
               </p>
             </div>
           </div>
@@ -103,157 +194,290 @@ export default function AIMemoryModal({
         </div>
 
         {/* Abas de Navegação do Cérebro da IA */}
-        <div className="flex border-b border-chatBorder bg-slate-100 dark:bg-chatSidebar px-4 pt-2 gap-2 shrink-0">
+        <div className="flex border-b border-chatBorder bg-slate-100 dark:bg-chatSidebar px-4 pt-2 gap-2 shrink-0 overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('docs')}
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 shrink-0 ${
+              activeTab === 'docs'
+                ? 'border-purple-600 dark:border-purple-400 text-purple-800 dark:text-purple-300'
+                : 'border-transparent text-chatTextMuted hover:text-chatTextTitle'
+            }`}
+          >
+            <FileUp size={14} className="text-purple-600 dark:text-purple-400" />
+            <span>📄 Memorandos & Documentos ({learnedDocuments.length})</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('vips')}
-            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 shrink-0 ${
               activeTab === 'vips'
                 ? 'border-yellow-600 dark:border-yellow-400 text-yellow-800 dark:text-yellow-300'
                 : 'border-transparent text-chatTextMuted hover:text-chatTextTitle'
             }`}
           >
             <Crown size={14} />
-            <span>1. Clientes VIP ({vipClients.length})</span>
+            <span>Clientes VIP ({vipClients.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('slas')}
-            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 shrink-0 ${
               activeTab === 'slas'
                 ? 'border-yellow-600 dark:border-yellow-400 text-yellow-800 dark:text-yellow-300'
                 : 'border-transparent text-chatTextMuted hover:text-chatTextTitle'
             }`}
           >
             <Clock size={14} />
-            <span>2. Prazos & SLAs ({slas.length})</span>
+            <span>Prazos & SLAs ({slas.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('pops')}
-            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 shrink-0 ${
               activeTab === 'pops'
                 ? 'border-yellow-600 dark:border-yellow-400 text-yellow-800 dark:text-yellow-300'
                 : 'border-transparent text-chatTextMuted hover:text-chatTextTitle'
             }`}
           >
             <BookOpen size={14} />
-            <span>3. Procedimentos (POPs) ({pops.length})</span>
+            <span>Procedimentos ({pops.length})</span>
           </button>
 
           <button
             onClick={() => setActiveTab('prompt')}
-            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 ${
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition border-b-2 shrink-0 ${
               activeTab === 'prompt'
                 ? 'border-yellow-600 dark:border-yellow-400 text-yellow-800 dark:text-yellow-300'
                 : 'border-transparent text-chatTextMuted hover:text-chatTextTitle'
             }`}
           >
             <Sparkles size={14} />
-            <span>4. Diretrizes Gerais</span>
+            <span>Diretrizes Gerais</span>
           </button>
         </div>
 
         {/* Conteúdo da Aba Ativa */}
         <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
-          {/* ABA 1: CLIENTES VIP */}
-          {activeTab === 'vips' && (
+          {/* ABA 0: INGESTÃO DE DOCUMENTOS & MEMORANDOS (Item 3) */}
+          {activeTab === 'docs' && (
             <div className="space-y-4">
-              <div className="bg-slate-50 dark:bg-chatSidebar border border-chatBorder rounded-xl p-4 space-y-3">
-                <p className="text-chatTextMuted">
-                  Polos e clientes que pagam mensalidade fixa e possuem <strong>atendimento exclusivo com prioridade máxima</strong>.
+              {docFeedback && (
+                <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 text-emerald-800 dark:text-emerald-300 rounded-xl text-xs font-semibold animate-in fade-in">
+                  {docFeedback}
+                </div>
+              )}
+
+              {/* Área de Upload Drag & Drop / Seletor */}
+              <div
+                onClick={() => docInputRef.current?.click()}
+                className="border-2 border-dashed border-purple-300 dark:border-purple-600/40 hover:border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 rounded-2xl p-6 text-center cursor-pointer transition group"
+              >
+                <input
+                  type="file"
+                  ref={docInputRef}
+                  onChange={handleDocumentUpload}
+                  className="hidden"
+                  accept=".txt,.csv,.md,.json,.doc,.docx,.pdf"
+                />
+                <div className="w-12 h-12 rounded-full bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-300 flex items-center justify-center mx-auto mb-3 group-hover:scale-110 transition shadow-xs">
+                  <Upload size={22} />
+                </div>
+                <h4 className="font-bold text-chatTextTitle text-sm">
+                  Subir Memorando, Lista VIP ou Novo Procedimento
+                </h4>
+                <p className="text-xs text-chatTextMuted mt-1 max-w-md mx-auto">
+                  Clique ou arraste arquivos <strong>.TXT, .CSV, .MD, .JSON ou .PDF</strong>. A IA lê os prazos, assimila normas e atualiza o Kanban automaticamente.
                 </p>
+                <div className="mt-3 flex items-center justify-center gap-2 text-[10px] text-purple-700 dark:text-purple-300 font-medium">
+                  <span className="bg-white dark:bg-chatCard px-2 py-0.5 rounded border border-purple-200 dark:border-purple-500/30">
+                    📜 Novos Prazos
+                  </span>
+                  <span className="bg-white dark:bg-chatCard px-2 py-0.5 rounded border border-purple-200 dark:border-purple-500/30">
+                    👑 Planilha de Clientes VIP
+                  </span>
+                  <span className="bg-white dark:bg-chatCard px-2 py-0.5 rounded border border-purple-200 dark:border-purple-500/30">
+                    🏛️ Diretrizes MEC
+                  </span>
+                </div>
+              </div>
 
-                <form onSubmit={handleAddClient} className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Nome do Polo / Cliente VIP"
-                    value={newClientName}
-                    onChange={(e) => setNewClientName(e.target.value)}
-                    className="flex-1 bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs shadow-sm"
-                  />
-                  <select
-                    value={newClientPlan}
-                    onChange={(e) => setNewClientPlan(e.target.value)}
-                    className="bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs shadow-sm"
-                  >
-                    <option value="Plano Fixo Gold">Plano Fixo Gold</option>
-                    <option value="Plano Fixo Ilimitado">Plano Fixo Ilimitado</option>
-                    <option value="Contrato Corporativo">Contrato Corporativo</option>
-                  </select>
-                  <button
-                    type="submit"
-                    className="bg-brand-600 hover:bg-brand-500 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1 shadow-sm transition"
-                  >
-                    <Plus size={16} /> Adicionar
-                  </button>
-                </form>
+              {/* Lista de Documentos Aprendidos */}
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-chatTextTitle text-xs uppercase tracking-wider text-chatTextMuted">
+                    Base de Documentos Memorizados ({learnedDocuments.length})
+                  </h4>
+                  <span className="text-[10px] text-chatTextMuted">
+                    Ativos no Motor de Decisão da IA
+                  </span>
+                </div>
 
-                <div className="space-y-2 pt-2">
-                  {vipClients.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-center justify-between p-2.5 rounded-lg bg-chatCard border border-chatBorder shadow-sm"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-base">👑</span>
-                        <div>
-                          <p className="text-xs font-semibold text-chatTextTitle">{c.name}</p>
-                          <p className="text-[10px] text-yellow-700 dark:text-yellow-400 font-medium">{c.plan}</p>
+                {learnedDocuments.length === 0 ? (
+                  <div className="p-8 text-center border border-dashed border-slate-300 dark:border-chatBorder rounded-xl text-chatTextMuted space-y-1">
+                    <FileText size={24} className="mx-auto text-slate-400 mb-2" />
+                    <p className="font-semibold text-xs">Nenhum documento anexado ainda.</p>
+                    <p className="text-[11px]">Suba memorandos internos ou listas de contratos para a IA aprender.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {learnedDocuments.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="p-3.5 bg-chatCard border border-chatBorder rounded-xl shadow-xs space-y-2 hover:border-purple-400 transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5 truncate">
+                            <div className="w-8 h-8 rounded-lg bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0">
+                              <FileText size={18} />
+                            </div>
+                            <div className="truncate">
+                              <h5 className="font-bold text-xs text-chatTextTitle truncate">
+                                {doc.title}
+                              </h5>
+                              <p className="text-[10px] text-chatTextMuted">
+                                {doc.size} • Adicionado em {doc.uploadDate}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => onRemoveDocument && onRemoveDocument(doc.id)}
+                            title="Remover documento da memória da IA"
+                            className="p-1 text-chatTextMuted hover:text-red-500 transition"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+
+                        {/* Resumo extraído */}
+                        <p className="text-[11px] text-chatTextBody bg-slate-50 dark:bg-[#111b21] p-2.5 rounded-lg border border-chatBorder leading-relaxed italic">
+                          "{doc.summary}"
+                        </p>
+
+                        {/* Tags de Tópicos */}
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {doc.keywords?.map((kw, idx) => (
+                            <span
+                              key={idx}
+                              className="text-[10px] bg-purple-50 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded font-semibold border border-purple-200 dark:border-purple-500/30"
+                            >
+                              🏷️ {kw}
+                            </span>
+                          ))}
                         </div>
                       </div>
-                      <button
-                        onClick={() => onRemoveVipClient(c.id)}
-                        className="p-1 text-chatTextMuted hover:text-red-500 transition"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}
 
-          {/* ABA 2: PRAZOS & SLAS POR SETOR */}
+          {/* ABA 1: CLIENTES VIP */}
+          {activeTab === 'vips' && (
+            <div className="space-y-4">
+              <div className="bg-yellow-50 dark:bg-yellow-500/10 border border-yellow-200 dark:border-yellow-500/30 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-yellow-800 dark:text-yellow-300 font-bold">
+                  <Crown size={16} />
+                  <span>Polos e Clientes VIP com Plano Fixo Contratual</span>
+                </div>
+                <p className="text-yellow-700 dark:text-yellow-400">
+                  Qualquer chamado, solicitação ou mensagem citando esses nomes receberá automaticamente <strong>Prioridade Máxima (VIP)</strong> e <strong>SLA de até 4 horas</strong>.
+                </p>
+              </div>
+
+              <form onSubmit={handleAddClient} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Nome do Polo / Faculdade (ex: Polo Salvador, FM Educacional)"
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  className="flex-1 bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs"
+                />
+                <select
+                  value={newClientPlan}
+                  onChange={(e) => setNewClientPlan(e.target.value)}
+                  className="bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs"
+                >
+                  <option value="Plano Fixo Gold">Plano Fixo Gold</option>
+                  <option value="Plano Fixo Ilimitado">Plano Fixo Ilimitado</option>
+                  <option value="Contrato Corporativo">Contrato Corporativo</option>
+                </select>
+                <button
+                  type="submit"
+                  className="bg-brand-600 hover:bg-brand-500 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1 shadow-sm transition"
+                >
+                  <Plus size={16} /> Adicionar
+                </button>
+              </form>
+
+              <div className="space-y-2 pt-2">
+                {vipClients.map((client) => (
+                  <div
+                    key={client.id}
+                    className="flex items-center justify-between p-3 rounded-lg bg-chatCard border border-chatBorder shadow-sm"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <span className="text-base">👑</span>
+                      <div>
+                        <p className="font-semibold text-chatTextTitle">{client.name}</p>
+                        <p className="text-[11px] text-chatTextMuted">{client.plan} • Cliente desde {client.since || '2026'}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => onRemoveVipClient(client.id)}
+                      className="p-1 text-chatTextMuted hover:text-red-500 transition"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ABA 2: PRAZOS & SLAs */}
           {activeTab === 'slas' && (
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-chatSidebar border border-chatBorder rounded-xl p-4 space-y-3">
                 <p className="text-chatTextMuted">
-                  Defina os <strong>prazos máximos acordados (SLAs)</strong> para cada tipo de solicitação da sua empresa. A IA usa esses prazos para alertar atrasos no Kanban!
+                  Defina os prazos operacionais máximos que a IA deve respeitar para cada tipo de demanda interna.
                 </p>
 
-                <form onSubmit={handleAddSla} className="grid grid-cols-1 md:grid-cols-4 gap-2">
-                  <select
-                    value={newSlaDepartment}
-                    onChange={(e) => setNewSlaDepartment(e.target.value)}
-                    className="bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs shadow-sm"
-                  >
-                    <option value="Secretaria Acadêmica">Secretaria Acadêmica</option>
-                    <option value="Financeiro & Splits">Financeiro & Splits</option>
-                    <option value="Suporte a Polos">Suporte a Polos</option>
-                    <option value="Comercial">Comercial</option>
-                  </select>
-                  <input
-                    type="text"
-                    placeholder="Tipo de demanda (ex: Reposição de Aulas)"
-                    value={newSlaDemand}
-                    onChange={(e) => setNewSlaDemand(e.target.value)}
-                    className="md:col-span-2 bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs shadow-sm"
-                  />
-                  <div className="flex gap-1">
+                <form onSubmit={handleAddSla} className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <select
+                      value={newSlaDepartment}
+                      onChange={(e) => setNewSlaDepartment(e.target.value)}
+                      className="bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs"
+                    >
+                      <option value="Secretaria Acadêmica">Secretaria Acadêmica</option>
+                      <option value="Financeiro & Splits">Financeiro & Splits</option>
+                      <option value="Comercial">Comercial</option>
+                      <option value="Tutoria">Tutoria</option>
+                      <option value="Expansão">Expansão</option>
+                    </select>
                     <input
                       type="text"
-                      placeholder="Prazo (ex: 48h, 5 dias)"
-                      value={newSlaTime}
-                      onChange={(e) => setNewSlaTime(e.target.value)}
-                      className="flex-1 bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs shadow-sm"
+                      placeholder="Tipo de Demanda (ex: Emissão de Histórico)"
+                      value={newSlaDemand}
+                      onChange={(e) => setNewSlaDemand(e.target.value)}
+                      className="bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs"
                     />
-                    <button
-                      type="submit"
-                      className="bg-brand-600 hover:bg-brand-500 text-white font-semibold px-3 py-2 rounded-lg shadow-sm transition"
-                    >
-                      <Plus size={16} />
-                    </button>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Prazo (ex: 24 horas, 48 horas)"
+                        value={newSlaTime}
+                        onChange={(e) => setNewSlaTime(e.target.value)}
+                        className="w-full bg-chatInputBg text-chatTextTitle px-3 py-2 rounded-lg border border-chatBorder focus:outline-none focus:border-brand-500 text-xs"
+                      />
+                      <button
+                        type="submit"
+                        className="bg-brand-600 hover:bg-brand-500 text-white font-semibold px-3 py-2 rounded-lg shadow-sm transition"
+                      >
+                        <Plus size={16} />
+                      </button>
+                    </div>
                   </div>
                 </form>
 
@@ -292,7 +516,7 @@ export default function AIMemoryModal({
             <div className="space-y-4">
               <div className="bg-slate-50 dark:bg-chatSidebar border border-chatBorder rounded-xl p-4 space-y-3">
                 <p className="text-chatTextMuted">
-                  Cadastre o <strong>Procedimento Operacional Padrão (POP)</strong> para as demandas mais frequentes. Assim, quando a demanda surgir no chat, a IA já anexa o passo a passo exato para o funcionário não errar!
+                  Cadastre o <strong>Procedimento Operacional Padrão (POP)</strong> para as demandas mais frequentes.
                 </p>
 
                 <form onSubmit={handleAddPop} className="space-y-2 bg-chatCard p-3 rounded-lg border border-chatBorder shadow-sm">
