@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
+import { supabase } from '../lib/supabase';
 import {
   X,
   QrCode,
@@ -52,9 +53,9 @@ export default function WhatsAppConnectionModal({
   });
 
   const [evolutionConfig, setEvolutionConfig] = useState(() => ({
-    apiUrl: localStorage.getItem('educhat_evo_url') || 'https://api.evolution.suaempresa.com',
-    instanceName: localStorage.getItem('educhat_evo_instance') || 'EduChat-Matriz-01',
-    apiKey: localStorage.getItem('educhat_evo_key') || ''
+    apiUrl: localStorage.getItem('educhat_evo_url') || import.meta.env.VITE_EVOLUTION_API_URL || '',
+    instanceName: localStorage.getItem('educhat_evo_instance') || import.meta.env.VITE_EVOLUTION_INSTANCE || 'EduChat-Matriz-01',
+    apiKey: localStorage.getItem('educhat_evo_key') || import.meta.env.VITE_EVOLUTION_API_KEY || ''
   }));
 
   const [manualPayloadInput, setManualPayloadInput] = useState('');
@@ -220,37 +221,83 @@ export default function WhatsAppConnectionModal({
     }
   };
 
-  // Chamada direta ao endpoint da Evolution API (/instance/connect/{instance})
+  // Chamada via Supabase Edge Function 'evolution-proxy' (livre de CORS) com fallback inteligente
+  const callEvolutionApi = async (action = 'connect') => {
+    const cleanUrl = (evolutionConfig.apiUrl || '').trim().replace(/\/+$/, '');
+    const instName = (evolutionConfig.instanceName || 'EduChat-Matriz-01').trim();
+    const apiKey = (evolutionConfig.apiKey || '').trim();
+
+    if (cleanUrl) localStorage.setItem('educhat_evo_url', cleanUrl);
+    if (instName) localStorage.setItem('educhat_evo_instance', instName);
+    if (apiKey) localStorage.setItem('educhat_evo_key', apiKey);
+
+    // 1. Tentar primeiro via Supabase Edge Function (Bypass de CORS no Navegador)
+    try {
+      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('evolution-proxy', {
+        body: {
+          action,
+          apiUrl: cleanUrl,
+          instanceName: instName,
+          apiKey: apiKey
+        }
+      });
+
+      if (!edgeErr && edgeData) {
+        if (edgeData.success) {
+          return { success: true, via: 'edge-function', data: edgeData.data || edgeData };
+        }
+        if (edgeData.error) {
+          throw new Error(edgeData.error);
+        }
+      }
+    } catch (edgeError) {
+      console.warn('Proxy Supabase Edge Function indisponível ou falhou, tentando fallback direto:', edgeError.message);
+    }
+
+    // 2. Fallback: Chamada direta ao endpoint da Evolution API
+    if (!cleanUrl) {
+      throw new Error('URL da Evolution API não informada. Preencha nos parâmetros da API abaixo ou no arquivo .env.');
+    }
+
+    const headers = { 'Content-Type': 'application/json' };
+    if (apiKey) headers['apikey'] = apiKey;
+
+    if (action === 'logout') {
+      const logoutEndpoint = `${cleanUrl}/instance/logout/${instName}`;
+      try {
+        await fetch(logoutEndpoint, { method: 'DELETE', headers });
+      } catch {
+        await fetch(logoutEndpoint, { method: 'POST', headers });
+      }
+      return { success: true, via: 'direct' };
+    }
+
+    const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
+    const response = await fetch(connectEndpoint, { method: 'GET', headers });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Evolution API retornou status ${response.status}: ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return { success: true, via: 'direct', data };
+  };
+
+  // Obter QR Code da Evolution API
   const handleFetchFromEvolutionEndpoint = async () => {
     setIsLoadingQR(true);
     setErrorMessage('');
     setSuccessFeedback('');
 
     try {
-      const cleanUrl = evolutionConfig.apiUrl.replace(/\/+$/, '');
-      const instName = evolutionConfig.instanceName.trim();
-      const endpoint = `${cleanUrl}/instance/connect/${instName}`;
-
-      localStorage.setItem('educhat_evo_url', evolutionConfig.apiUrl);
-      localStorage.setItem('educhat_evo_instance', evolutionConfig.instanceName);
-      localStorage.setItem('educhat_evo_key', evolutionConfig.apiKey);
-
-      const headers = { 'Content-Type': 'application/json' };
-      if (evolutionConfig.apiKey) {
-        headers['apikey'] = evolutionConfig.apiKey.trim();
-      }
-
-      const response = await fetch(endpoint, { method: 'GET', headers });
-      if (!response.ok) {
-        throw new Error(`Status ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-      await handleConvertAndPlotQRCode(data);
-      setSuccessFeedback(`✅ Conectado à instância "${instName}" e QR Code carregado!`);
+      const result = await callEvolutionApi('connect');
+      const payloadData = result?.data?.data || result?.data;
+      await handleConvertAndPlotQRCode(payloadData);
+      setSuccessFeedback(`✅ QR Code carregado com sucesso ${result.via === 'edge-function' ? '(via Edge Function Proxy)' : '(via conexão direta)'}!`);
     } catch (err) {
       console.warn('Erro ao chamar Evolution API:', err);
-      setErrorMessage(`Falha na requisição (${err.message}). Se houver bloqueio de CORS no navegador, use o botão "Resetar Instância" ou cole o payload JSON/Base64 diretamente abaixo.`);
+      setErrorMessage(`Falha na comunicação (${err.message}). Se o navegador bloquear por CORS, verifique a Edge Function "evolution-proxy" ou use os botões abaixo para tentar novamente ou colar o Payload manualmente.`);
+      setShowApiConfig(true);
     } finally {
       setIsLoadingQR(false);
     }
@@ -263,45 +310,24 @@ export default function WhatsAppConnectionModal({
     setSuccessFeedback('');
     setQrCodeDataUrl('');
 
-    const cleanUrl = evolutionConfig.apiUrl.replace(/\/+$/, '');
-    const instName = evolutionConfig.instanceName.trim();
-    const headers = { 'Content-Type': 'application/json' };
-    if (evolutionConfig.apiKey) {
-      headers['apikey'] = evolutionConfig.apiKey.trim();
-    }
+    const instName = evolutionConfig.instanceName || 'EduChat-Matriz-01';
 
     try {
       setSuccessFeedback(`1/2 Desconectando instância "${instName}" (logout) para limpar sessão fantasma...`);
-
-      // 1. Executa Logout da instância para limpar socket fantasma
-      const logoutEndpoint = `${cleanUrl}/instance/logout/${instName}`;
-      try {
-        await fetch(logoutEndpoint, { method: 'DELETE', headers });
-      } catch (err1) {
-        try {
-          await fetch(logoutEndpoint, { method: 'POST', headers });
-        } catch {}
-      }
+      await callEvolutionApi('logout');
 
       // Pausa técnica de 1.5s para a Evolution API finalizar o processo
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
       setSuccessFeedback(`2/2 Solicitando novo QR Code limpo para "${instName}"...`);
-
-      // 2. Solicita um novo QR Code limpo (/instance/connect)
-      const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
-      const connResponse = await fetch(connectEndpoint, { method: 'GET', headers });
-
-      if (!connResponse.ok) {
-        throw new Error(`Status ${connResponse.status}: ${connResponse.statusText}`);
-      }
-
-      const connData = await connResponse.json();
-      await handleConvertAndPlotQRCode(connData);
-      setSuccessFeedback(`✅ Instância "${instName}" resetada com sucesso! Escaneie o novo QR Code abaixo com seu WhatsApp.`);
+      const result = await callEvolutionApi('connect');
+      const payloadData = result?.data?.data || result?.data;
+      await handleConvertAndPlotQRCode(payloadData);
+      setSuccessFeedback(`✅ Instância "${instName}" resetada com sucesso! Escaneie o novo QR Code com seu WhatsApp.`);
     } catch (err) {
       console.warn('Erro ao resetar instância na Evolution API:', err);
-      setErrorMessage(`Falha ao resetar via endpoint: ${err.message}. Verifique a URL/Key ou use a colagem manual abaixo.`);
+      setErrorMessage(`Falha ao resetar via endpoint: ${err.message}.`);
+      setShowApiConfig(true);
     } finally {
       setIsLoadingQR(false);
     }
@@ -550,7 +576,7 @@ export default function WhatsAppConnectionModal({
 
                       {/* Renderização da Imagem Visual (PNG / Base64) */}
                       {isLoadingQR ? (
-                        <div className="w-60 h-60 flex flex-col items-center justify-center space-y-2 bg-slate-50">
+                        <div className="w-60 h-60 flex flex-col items-center justify-center space-y-2 bg-slate-50 dark:bg-chatPanel rounded-lg">
                           <RefreshCw size={28} className="text-emerald-600 animate-spin" />
                           <span className="text-xs font-semibold text-chatTextMuted">Gerando código visual...</span>
                         </div>
@@ -560,10 +586,56 @@ export default function WhatsAppConnectionModal({
                           alt="QR Code WhatsApp Web Evolution API"
                           className="w-60 h-60 object-contain rounded-lg"
                         />
+                      ) : errorMessage ? (
+                        <div className="w-60 h-60 flex flex-col items-center justify-center bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-500/30 rounded-lg p-3 text-center space-y-2">
+                          <AlertCircle size={28} className="text-rose-600 dark:text-rose-400" />
+                          <p className="text-[11px] font-bold text-rose-800 dark:text-rose-300 leading-tight">
+                            Falha na Conexão Evolution
+                          </p>
+                          <p className="text-[10px] text-rose-700/80 dark:text-rose-300/70 leading-tight line-clamp-2">
+                            {errorMessage}
+                          </p>
+                          <div className="flex flex-col gap-1.5 w-full pt-1">
+                            <button
+                              type="button"
+                              onClick={handleRefreshClick}
+                              className="w-full py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-md shadow-xs flex items-center justify-center gap-1 transition cursor-pointer"
+                            >
+                              <RefreshCw size={11} /> Tentar Novamente
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleResetInstance}
+                              className="w-full py-1.5 px-2 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-md shadow-xs flex items-center justify-center gap-1 transition cursor-pointer"
+                            >
+                              <RotateCcw size={11} /> Resetar Instância
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowApiConfig(true);
+                                setTimeout(() => {
+                                  const el = document.getElementById('manual-payload-textarea');
+                                  if (el) el.focus();
+                                }, 100);
+                              }}
+                              className="w-full py-1 px-2 border border-slate-300 dark:border-chatBorder text-chatTextTitle text-[10px] font-semibold rounded-md hover:bg-slate-100 dark:hover:bg-chatPanel transition cursor-pointer"
+                            >
+                              📋 Colar Payload Manual
+                            </button>
+                          </div>
+                        </div>
                       ) : (
-                        <div className="w-60 h-60 flex flex-col items-center justify-center bg-slate-100 text-chatTextMuted p-4 text-center">
-                          <QrCode size={40} className="mb-2 text-slate-400" />
-                          <span className="text-xs">Aguardando geração do QR Code</span>
+                        <div className="w-60 h-60 flex flex-col items-center justify-center bg-slate-100 dark:bg-chatPanel text-chatTextMuted p-4 text-center rounded-lg space-y-2">
+                          <QrCode size={40} className="text-slate-400" />
+                          <span className="text-xs font-medium">Aguardando geração do QR Code</span>
+                          <button
+                            type="button"
+                            onClick={handleRefreshClick}
+                            className="mt-1 px-3 py-1 bg-emerald-600 text-white text-[11px] font-bold rounded-md hover:bg-emerald-500 transition cursor-pointer flex items-center gap-1"
+                          >
+                            <RefreshCw size={12} /> Gerar Agora
+                          </button>
                         </div>
                       )}
 
@@ -729,6 +801,7 @@ export default function WhatsAppConnectionModal({
                       </span>
                     </label>
                     <textarea
+                      id="manual-payload-textarea"
                       rows={2}
                       value={manualPayloadInput}
                       onChange={(e) => setManualPayloadInput(e.target.value)}
