@@ -3,7 +3,7 @@
 // Endpoint: /functions/v1/evolution-webhook
 // =========================================================================
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -27,13 +27,13 @@ function formatPhone(digits: string): string {
   if (!digits) return "";
   const d = digits.replace(/\D/g, "");
   if (d.length === 13 && d.startsWith("55")) {
-    return `+55 (${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
+    return "+55 (" + d.slice(2, 4) + ") " + d.slice(4, 9) + "-" + d.slice(9);
   }
   if (d.length === 11) {
-    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+    return "(" + d.slice(0, 2) + ") " + d.slice(2, 7) + "-" + d.slice(7);
   }
   if (d.length >= 10) {
-    return `+${d}`;
+    return "+" + d;
   }
   return digits;
 }
@@ -65,7 +65,7 @@ function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMe
   if (msg.imageMessage) {
     const caption = (msg.imageMessage.caption || "").trim();
     return {
-      text: caption ? `📷 ${caption}` : "📷 [Imagem recebida]",
+      text: caption ? "📷 " + caption : "📷 [Imagem recebida]",
       isAudio: false,
       isMedia: true,
     };
@@ -75,7 +75,7 @@ function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMe
   if (msg.videoMessage) {
     const caption = (msg.videoMessage.caption || "").trim();
     return {
-      text: caption ? `🎥 ${caption}` : "🎥 [Vídeo recebido]",
+      text: caption ? "🎥 " + caption : "🎥 [Vídeo recebido]",
       isAudio: false,
       isMedia: true,
     };
@@ -85,7 +85,7 @@ function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMe
   if (msg.documentMessage) {
     const fileName = msg.documentMessage.fileName || msg.documentMessage.title || "arquivo";
     return {
-      text: `📄 [Documento: ${fileName}]`,
+      text: "📄 [Documento: " + fileName + "]",
       isAudio: false,
       isMedia: true,
     };
@@ -93,8 +93,9 @@ function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMe
 
   // 7. Contato Compartilhado
   if (msg.contactMessage) {
+    const contactName = msg.contactMessage.displayName || "Contato";
     return {
-      text: `👤 [Contato compartilhado: ${msg.contactMessage.displayName || "Contato"}]`,
+      text: "👤 [Contato compartilhado: " + contactName + "]",
       isAudio: false,
       isMedia: false,
     };
@@ -128,7 +129,7 @@ function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMe
   return { text: "Mensagem recebida", isAudio: false, isMedia: false };
 }
 
-serve(async (req: Request) => {
+Deno.serve(async (req: Request) => {
   // 1. Preflight CORS
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -154,17 +155,17 @@ serve(async (req: Request) => {
     // Permite inspecionar diretamente pelo Dashboard do Supabase
     // =========================================================================
     console.log("================================================================");
-    console.log(`📥 [Evolution Webhook] Disparo recebido às: ${new Date().toISOString()}`);
-    console.log(`🏷️ Evento: "${body?.event}" | Instância: "${body?.instance}"`);
-    console.log("📦 Payload completo:", JSON.stringify(body, null, 2));
+    console.log("📥 [Evolution Webhook] Disparo recebido: " + new Date().toISOString());
+    console.log("🏷️ Evento: " + String(body?.event) + " | Instância: " + String(body?.instance));
+    console.log("📦 Payload completo: " + JSON.stringify(body, null, 2));
 
     const eventName = String(body?.event || "").toUpperCase();
 
     // Ignora eventos que não sejam de mensagens (ex: connection.update, qrcode.updated)
     if (eventName.includes("CONNECTION") || eventName.includes("QRCODE")) {
-      console.log(`ℹ️ Evento de estado de conexão ignorado para inserção de mensagens: ${eventName}`);
+      console.log("ℹ️ Evento de estado de conexão ignorado para inserção de mensagens: " + eventName);
       return new Response(
-        JSON.stringify({ success: true, message: `Evento ${eventName} registrado com sucesso.` }),
+        JSON.stringify({ success: true, message: "Evento " + eventName + " registrado com sucesso." }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -196,14 +197,14 @@ serve(async (req: Request) => {
       );
     }
 
-    const insertedMessages = [];
+    const insertedMessages: any[] = [];
 
     for (const m of rawMessages) {
-      const remoteJid = m?.key?.remoteJid || body?.sender || "";
+      const remoteJid = String(m?.key?.remoteJid || body?.sender || "");
 
       // Ignora status de broadcast/stories do WhatsApp
       if (remoteJid === "status@broadcast" || remoteJid.includes("@broadcast")) {
-        console.log(`ℹ️ Ignorando transmissão de status/story: ${remoteJid}`);
+        console.log("ℹ️ Ignorando transmissão de status/story: " + remoteJid);
         continue;
       }
 
@@ -216,7 +217,7 @@ serve(async (req: Request) => {
       if (known) {
         chatId = known.id;
       } else if (cleanPhone) {
-        chatId = `wa-${cleanPhone}`;
+        chatId = "wa-" + cleanPhone;
       } else {
         chatId = "wa-desconhecido";
       }
@@ -229,23 +230,26 @@ serve(async (req: Request) => {
         senderName = "EduChat Matriz (Oficial)";
       } else {
         senderId = chatId;
-        const pushName = (m?.pushName || body?.data?.pushName || "").trim();
-        senderName = pushName || known?.name || (cleanPhone ? `Lead ${formatPhone(cleanPhone)}` : "Lead WhatsApp");
+        const pushName = String(m?.pushName || body?.data?.pushName || "").trim();
+        senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
       }
 
-      const { text, isAudio } = extractMessageContent(m?.message);
+      const content = extractMessageContent(m?.message);
+      const text = content.text;
+      const isAudio = content.isAudio;
 
       const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-      const messageId = m?.key?.id ? `wa_${m.key.id}` : `wa_in_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const timeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+      const randomSuffix = Math.random().toString(36).substring(2, 7);
+      const messageId = m?.key?.id ? "wa_" + m.key.id : "wa_in_" + Date.now() + "_" + randomSuffix;
 
-      console.log(`💬 Processando mensagem para Chat "${chatId}":`, {
+      console.log("💬 Processando mensagem para Chat " + chatId + ":", {
         id: messageId,
-        fromMe,
-        remoteJid,
-        senderName,
-        textPreview: text.length > 60 ? `${text.slice(0, 57)}...` : text,
-        isAudio,
+        fromMe: fromMe,
+        remoteJid: remoteJid,
+        senderName: senderName,
+        textPreview: text.length > 60 ? text.slice(0, 57) + "..." : text,
+        isAudio: isAudio,
       });
 
       // 1. Inserção na tabela 'messages' do EduChat
@@ -266,8 +270,8 @@ serve(async (req: Request) => {
       if (insertError) {
         console.error("❌ Erro ao inserir mensagem no Supabase:", insertError);
       } else {
-        console.log(`✅ [Supabase] Mensagem ${messageId} inserida com sucesso no chat ${chatId}!`);
-        insertedMessages.push(inserted?.[0] || { id: messageId });
+        console.log("✅ [Supabase] Mensagem " + messageId + " inserida com sucesso no chat " + chatId);
+        insertedMessages.push(inserted && inserted[0] ? inserted[0] : { id: messageId });
       }
     }
 
@@ -280,12 +284,13 @@ serve(async (req: Request) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const err = error as { message?: string };
     console.error("🔥 [Evolution Webhook] Falha crítica de processamento:", error);
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message || "Erro interno ao processar webhook.",
+        error: err?.message || "Erro interno ao processar webhook.",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
