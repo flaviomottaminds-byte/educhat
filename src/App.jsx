@@ -425,7 +425,38 @@ export default function App() {
             actionExtracted: false
           });
         });
+
         setMessages((prev) => ({ ...prev, ...grouped }));
+
+        // Descoberta dinâmica de contatos WhatsApp a partir do histórico de mensagens no Supabase
+        const waKeys = Object.keys(grouped).filter((k) => k.startsWith('wa-'));
+        if (waKeys.length > 0) {
+          setWhatsAppContacts((prev) => {
+            const existingIds = new Set(prev.map((c) => c.id));
+            const newContacts = [];
+            for (const waKey of waKeys) {
+              if (!existingIds.has(waKey)) {
+                const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
+                const rawDigits = waKey.replace('wa-', '');
+                const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+                newContacts.push({
+                  id: waKey,
+                  name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
+                  phone: formattedPhone,
+                  avatar: '👤',
+                  department: 'Comercial',
+                  assignee: 'Gabriel Carvalho',
+                  status: 'ura_inedito',
+                  statusLabel: 'Lead WhatsApp',
+                  aiActive: false,
+                  lastInteraction: latestMsg?.timestamp || 'Recente',
+                  triageContext: 'Histórico sincronizado do WhatsApp.'
+                });
+              }
+            }
+            return newContacts.length > 0 ? [...prev, ...newContacts] : prev;
+          });
+        }
       }
 
       // 2. Tarefas do Kanban
@@ -622,6 +653,34 @@ export default function App() {
               [cKey]: [...list, incoming]
             };
           });
+
+          // Se for mensagem de contato WhatsApp (wa-), adiciona ou atualiza o contato na lista lateral
+          if (cKey.startsWith('wa-')) {
+            setWhatsAppContacts((prev) => {
+              const existing = prev.find((c) => c.id === cKey);
+              if (existing) {
+                return prev.map((c) => (c.id === cKey ? { ...c, lastInteraction: incoming.timestamp || 'Agora' } : c));
+              }
+              const rawDigits = cKey.replace('wa-', '');
+              const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+              return [
+                ...prev,
+                {
+                  id: cKey,
+                  name: incoming.senderName || `WhatsApp (${formattedPhone})`,
+                  phone: formattedPhone,
+                  avatar: '👤',
+                  department: 'Comercial',
+                  assignee: 'Gabriel Carvalho',
+                  status: 'ura_inedito',
+                  statusLabel: 'Lead WhatsApp',
+                  aiActive: false,
+                  lastInteraction: incoming.timestamp || 'Agora',
+                  triageContext: 'Mensagem recebida via WhatsApp.'
+                }
+              ];
+            });
+          }
 
           handleIncomingNotification(incoming, cKey);
         }

@@ -308,6 +308,25 @@ export default function WhatsAppConnectionModal({
       return { success: true, via: 'direct' };
     }
 
+    if (action === 'set-webhook' || action === 'setup-webhook') {
+      const webhookEndpoint = `${cleanUrl}/webhook/set/${instName}`;
+      const whRes = await fetch(webhookEndpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          webhook: {
+            enabled: true,
+            url: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook',
+            byEvents: false,
+            base64: false,
+            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE']
+          }
+        })
+      });
+      const data = await whRes.json();
+      return { success: whRes.ok, via: 'direct', data };
+    }
+
     const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
     let response = await fetch(connectEndpoint, { method: 'GET', headers });
 
@@ -400,6 +419,26 @@ export default function WhatsAppConnectionModal({
   // Recarregar inteligente
   const handleRefreshClick = () => {
     handleFetchFromEvolutionEndpoint();
+  };
+
+  // Configuração explícita do Webhook Global da Evolution API para o Supabase
+  const handleConfigureWebhook = async () => {
+    setIsLoadingQR(true);
+    setErrorMessage('');
+    setSuccessFeedback('');
+    try {
+      const result = await callEvolutionApi('set-webhook');
+      if (result.success) {
+        setSuccessFeedback('✅ Webhook da Evolution API configurado com sucesso para https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook!');
+      } else {
+        throw new Error(result.error || 'Falha ao registrar webhook.');
+      }
+    } catch (err) {
+      console.error('Erro ao configurar webhook:', err);
+      setErrorMessage(`Falha ao registrar webhook: ${err.message}`);
+    } finally {
+      setIsLoadingQR(false);
+    }
   };
 
   // Executar simulação de webhooks (Portas 1, 2, 3 e Áudio)
@@ -1041,15 +1080,26 @@ export default function WhatsAppConnectionModal({
               </div>
 
               <div className="p-3.5 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-2 text-xs">
-                <h5 className="font-bold text-chatTextTitle flex items-center gap-1.5">
-                  <Shield size={14} className="text-brand-600" />
-                  URL do Webhook Supabase
-                </h5>
+                <div className="flex items-center justify-between">
+                  <h5 className="font-bold text-chatTextTitle flex items-center gap-1.5">
+                    <Shield size={14} className="text-brand-600" />
+                    URL do Webhook Supabase (Evolution API)
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={handleConfigureWebhook}
+                    disabled={isLoadingQR}
+                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw size={11} className={isLoadingQR ? 'animate-spin' : ''} />
+                    Sincronizar no Railway
+                  </button>
+                </div>
                 <code className="block bg-white dark:bg-chatCard p-2 rounded-lg border border-slate-200 dark:border-chatBorder text-[11px] font-mono text-chatTextMuted break-all select-all">
-                  https://btyxawhwnoykrcbavzts.supabase.co/functions/v1/whatsapp-webhook
+                  https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook
                 </code>
                 <p className="text-[11px] text-chatTextMuted">
-                  Eventos escutados: <code>messages.upsert</code>, <code>messages.update</code>, <code>connection.update</code>.
+                  Eventos ativos: <code>MESSAGES_UPSERT</code>, <code>MESSAGES_UPDATE</code>, <code>CONNECTION_UPDATE</code>. As mensagens recebidas são gravadas no Supabase em tempo real.
                 </p>
               </div>
             </div>

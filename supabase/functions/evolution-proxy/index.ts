@@ -16,10 +16,11 @@ const DEFAULT_EVO_KEY = "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9
 const DEFAULT_EVO_INSTANCE = "EduChat-Matriz-01";
 
 interface ProxyPayload {
-  action?: "connect" | "logout" | "status" | "create" | "restart";
+  action?: "connect" | "logout" | "status" | "create" | "restart" | "set-webhook" | "setup-webhook";
   apiUrl?: string;
   instanceName?: string;
   apiKey?: string;
+  webhookUrl?: string;
 }
 
 function extractBase64(data: any): string | null {
@@ -145,6 +146,26 @@ serve(async (req: Request) => {
       const createData = await createRes.json();
       const base64Image = extractBase64(createData);
 
+      // Auto-configura webhook imediatamente na instância criada
+      try {
+        const webhookUrl = payload.webhookUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook";
+        await fetch(`${apiUrl}/webhook/set/${instanceName}`, {
+          method: "POST",
+          headers: evoHeaders,
+          body: JSON.stringify({
+            webhook: {
+              enabled: true,
+              url: webhookUrl,
+              byEvents: false,
+              base64: false,
+              events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "SEND_MESSAGE"],
+            },
+          }),
+        });
+      } catch (whErr) {
+        console.warn("Aviso ao auto-configurar webhook na criação:", whErr);
+      }
+
       return new Response(
         JSON.stringify({
           success: createRes.ok,
@@ -158,7 +179,50 @@ serve(async (req: Request) => {
       );
     }
 
-    // 4. Ação: Status da Conexão
+    // 4. Ação: Configurar Webhook no Evolution API
+    if (action === "set-webhook" || action === "setup-webhook") {
+      const webhookUrl =
+        payload.webhookUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook";
+      const webhookEndpoint = `${apiUrl}/webhook/set/${instanceName}`;
+
+      console.log(`Configurando webhook em ${webhookEndpoint} -> ${webhookUrl}...`);
+      const setRes = await fetch(webhookEndpoint, {
+        method: "POST",
+        headers: evoHeaders,
+        body: JSON.stringify({
+          webhook: {
+            enabled: true,
+            url: webhookUrl,
+            byEvents: false,
+            base64: false,
+            events: [
+              "MESSAGES_UPSERT",
+              "MESSAGES_UPDATE",
+              "CONNECTION_UPDATE",
+              "SEND_MESSAGE",
+            ],
+          },
+        }),
+      });
+
+      let setData = null;
+      try {
+        setData = await setRes.json();
+      } catch {}
+
+      return new Response(
+        JSON.stringify({
+          success: setRes.ok,
+          status: setRes.status,
+          instance: instanceName,
+          webhookUrl,
+          data: setData,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // 5. Ação: Status da Conexão
     if (action === "status") {
       const stateUrl = `${apiUrl}/instance/connectionState/${instanceName}`;
       const stateRes = await fetch(stateUrl, { method: "GET", headers: evoHeaders });
