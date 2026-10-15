@@ -40,6 +40,20 @@ import {
   processTriageResponse
 } from './lib/whatsappRouting';
 
+// Helper: Horário formatado no fuso oficial de São Paulo (America/Sao_Paulo, UTC-3)
+const getSaoPauloTime = (d = new Date()) => {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).format(d instanceof Date ? d : new Date(d));
+  } catch {
+    const now = d instanceof Date ? d : new Date(d);
+    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  }
+};
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -341,8 +355,7 @@ export default function App() {
   // =========================================================================
   const fetchSupabaseData = async (silent = false) => {
     try {
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const timeStr = getSaoPauloTime();
       setLastSyncTime(timeStr);
 
       // 1. Mensagens
@@ -711,6 +724,26 @@ export default function App() {
       )
       .on(
         'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const deletedId = payload.old?.id;
+          if (!deletedId) return;
+
+          setMessages((prev) => {
+            const next = { ...prev };
+            let changed = false;
+            Object.keys(next).forEach((key) => {
+              if (next[key]?.some((m) => m.id === deletedId)) {
+                next[key] = next[key].filter((m) => m.id !== deletedId);
+                changed = true;
+              }
+            });
+            return changed ? next : prev;
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'notifications' },
         (payload) => {
           const notif = payload.new;
@@ -824,8 +857,7 @@ export default function App() {
 
   // Enviar nova mensagem no chat ativo com suporte a anexo, resposta/citação e áudio (Item 2, 3, 5 e 7)
   const handleSendMessage = (text, attachment = null, options = {}) => {
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = getSaoPauloTime();
 
     // Limpa a notificação pendente do chat atual imediatamente (Item 7)
     clearUnread(activeChat.id);
@@ -991,7 +1023,7 @@ export default function App() {
           senderId: 'u_ia_copilot',
           senderName: 'Assistente IA (MEC & Processos)',
           text: replyText,
-          timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
+          timestamp: getSaoPauloTime(),
           actionExtracted: false
         };
 
@@ -1095,7 +1127,7 @@ export default function App() {
               senderId: 'bot',
               senderName: '🤖 Copiloto EduChat',
               text: `✅ ${triageResult.handOffMessage}\n📌 Card criado no Kanban do setor ${triageResult.department} com prioridade ${triageResult.priority.toUpperCase()}.\n<!-- TASK_ID:${newTask.id} -->`,
-              timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
+              timestamp: getSaoPauloTime(),
               isWhatsApp: true,
               fromStudent: false,
               taskId: newTask.id
@@ -1270,6 +1302,41 @@ export default function App() {
       });
   };
 
+  // Excluir mensagem do chat e do Supabase (Item 2)
+  const handleDeleteMessage = async (messageId) => {
+    if (!messageId) return;
+
+    const confirmDelete = window.confirm('Deseja realmente excluir esta mensagem permanentemente da conversa?');
+    if (!confirmDelete) return;
+
+    // 1. Atualização Otimista local instantânea na UI
+    setMessages((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      Object.keys(next).forEach((key) => {
+        if (next[key]?.some((m) => m.id === messageId)) {
+          next[key] = next[key].filter((m) => m.id !== messageId);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+
+    // 2. Remoção na tabela 'messages' do Supabase (dispara Realtime DELETE)
+    try {
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', messageId);
+
+      if (error) {
+        console.warn('Erro ao excluir mensagem no Supabase:', error);
+      }
+    } catch (err) {
+      console.error('Falha na requisição de exclusão de mensagem:', err);
+    }
+  };
+
   // Alternar atendimento IA vs Humano em contatos WhatsApp
   const handleToggleWhatsAppAI = (contactId) => {
     setWhatsAppContacts((prev) =>
@@ -1288,8 +1355,7 @@ export default function App() {
     });
 
     const targetChatId = contactId || (whatsAppContacts.find(c => c.phone.replace(/\D/g, '') === fromPhone.replace(/\D/g, ''))?.id) || 'wa-carlos-eduardo';
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = getSaoPauloTime();
 
     const incomingMsg = {
       id: 'wa_in_' + Date.now(),
@@ -1330,7 +1396,7 @@ export default function App() {
           senderId: routingResult.routeType === 'BRAND_NEW_URA' ? 'bot_ura' : 'bot_retencao',
           senderName: routingResult.routeType === 'BRAND_NEW_URA' ? '🤖 URA EduChat' : '🤖 Assistente EduChat',
           text: routingResult.autoReply,
-          timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
+          timestamp: getSaoPauloTime(),
           isWhatsApp: true,
           fromStudent: false,
           isTriageMenu: true
@@ -1380,15 +1446,14 @@ export default function App() {
     const newCollab = collaborators.find((c) => c.name === newAssigneeName);
     if (!newCollab) return;
 
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = getSaoPauloTime();
     const commentObj = {
       id: 'c_' + Date.now(),
       author: currentUser.name,
       avatar: currentUser.avatar,
       dept: currentUser.department,
       text: `🔄 Demanda delegada para ${newCollab.name} (${newCollab.department}) por ${currentUser.name}.`,
-      timestamp: `${timeStr} - ${now.toLocaleDateString('pt-BR')}`
+      timestamp: `${timeStr} - ${new Date().toLocaleDateString('pt-BR')}`
     };
 
     handleUpdateTaskDetails(taskId, {
@@ -1405,8 +1470,7 @@ export default function App() {
   // Agendar Prazo para a Demanda (Item 3)
   const handleScheduleTask = (taskId, newDueDate) => {
     if (!newDueDate) return;
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const timeStr = getSaoPauloTime();
     const commentObj = {
       id: 'c_' + Date.now(),
       author: currentUser.name,
@@ -1645,6 +1709,7 @@ export default function App() {
           onSendMessage={handleSendMessage}
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
           onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
+          onDeleteMessage={handleDeleteMessage}
           onOpenTaskDetail={(taskId) => {
             const found = tasks.find((t) => t.id === taskId);
             if (found) setSelectedTaskDetail(found);

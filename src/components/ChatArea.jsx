@@ -179,6 +179,7 @@ export default function ChatArea({
   onSendMessage,
   onCreateTaskFromMessage,
   onDeleteTaskFromMessage,
+  onDeleteMessage,
   onOpenTaskDetail,
   onScheduleTask,
   onDelegateTask,
@@ -862,8 +863,19 @@ export default function ChatArea({
                       </div>
                     )}
 
-                    {/* Confirmação de Leitura Dinâmica (Item 3) */}
+                    {/* Confirmação de Leitura Dinâmica & Ação de Excluir */}
                     <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-[#667781] dark:text-chatTextMuted select-none">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onDeleteMessage) onDeleteMessage(m.id);
+                        }}
+                        title="Excluir mensagem da conversa"
+                        className="opacity-0 group-hover:opacity-100 hover:text-rose-600 dark:hover:text-rose-400 p-0.5 rounded transition cursor-pointer"
+                      >
+                        <Trash2 size={11} />
+                      </button>
                       <span>{m.timestamp}</span>
                       {isMe && (
                         <span title={m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'}>
@@ -879,7 +891,7 @@ export default function ChatArea({
                     </div>
                   </div>
 
-                  {/* Botões Hover: Responder (Item 5) & Gerar Card no Kanban */}
+                  {/* Botões Hover: Responder, Gerar Card no Kanban e Excluir Mensagem */}
                   <div
                     className={`absolute top-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-all duration-150 z-10 flex items-center gap-1 ${
                       isMe ? 'left-0 -translate-x-full pr-2' : 'right-0 translate-x-full pl-2'
@@ -906,6 +918,16 @@ export default function ChatArea({
                         <span>Gerar Card</span>
                       </button>
                     )}
+
+                    <button
+                      type="button"
+                      onClick={() => onDeleteMessage && onDeleteMessage(m.id)}
+                      title="Excluir mensagem da conversa e do Supabase"
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-700/90 hover:bg-rose-800 text-white text-[10px] font-semibold shadow-md border border-rose-500/50 whitespace-nowrap hover:scale-105 transition"
+                    >
+                      <Trash2 size={11} className="text-rose-200" />
+                      <span>Excluir</span>
+                    </button>
                   </div>
                 </div>
               </div>

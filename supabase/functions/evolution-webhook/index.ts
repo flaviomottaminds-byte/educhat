@@ -62,6 +62,42 @@ function formatPhone(digits: string): string {
   return digits;
 }
 
+// Formatação de horário oficial no fuso de São Paulo, Brasil (America/Sao_Paulo, UTC-3)
+function formatSaoPauloTime(dateOrTimestamp?: any): string {
+  try {
+    let date: Date;
+    if (!dateOrTimestamp) {
+      date = new Date();
+    } else if (dateOrTimestamp instanceof Date) {
+      date = dateOrTimestamp;
+    } else if (typeof dateOrTimestamp === "number") {
+      date = new Date(dateOrTimestamp > 1e11 ? dateOrTimestamp : dateOrTimestamp * 1000);
+    } else if (typeof dateOrTimestamp === "string" && !isNaN(Number(dateOrTimestamp))) {
+      const num = Number(dateOrTimestamp);
+      date = new Date(num > 1e11 ? num : num * 1000);
+    } else {
+      date = new Date(dateOrTimestamp);
+    }
+
+    if (isNaN(date.getTime())) {
+      date = new Date();
+    }
+
+    return new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(date);
+  } catch (_e) {
+    // Fallback matemático UTC-3 caso Intl falhe
+    const d = new Date();
+    const utcHours = d.getUTCHours();
+    const spHours = (utcHours - 3 + 24) % 24;
+    return String(spHours).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+  }
+}
+
 // Normalizador universal de mensagens recebidas de qualquer formato da Evolution API v2
 function extractRawMessages(body: any): any[] {
   if (!body) return [];
@@ -230,7 +266,7 @@ Deno.serve(async (req: Request) => {
     // Permite inspecionar linha a linha na aba "Edge Functions -> Logs"
     // =========================================================================
     console.log("================================================================");
-    console.log("📥 [Evolution Webhook] Nova requisição recebida: " + new Date().toISOString());
+    console.log("📥 [Evolution Webhook] Nova requisição recebida: " + formatSaoPauloTime() + " (SP) | " + new Date().toISOString() + " (UTC)");
     console.log("🏷️ Evento bruto: " + String(body?.event) + " | Instância: " + String(body?.instance));
 
     const eventName = String(body?.event || "").toUpperCase();
@@ -309,8 +345,8 @@ Deno.serve(async (req: Request) => {
       const content = extractMessageContent(m?.message || m);
       const messageText = content.text;
 
-      const now = new Date();
-      const timeStr = String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0");
+      // Horário formatado estritamente no fuso oficial de São Paulo (America/Sao_Paulo)
+      const timeStr = formatSaoPauloTime(m?.messageTimestamp || body?.data?.messageTimestamp || Date.now());
       const randomSuffix = Math.random().toString(36).substring(2, 7);
       const rawId = keyObj.id || m?.id;
       const messageId = rawId ? "wa_" + String(rawId) : "wa_in_" + Date.now() + "_" + randomSuffix;
@@ -333,6 +369,7 @@ Deno.serve(async (req: Request) => {
         messageText: messageText.length > 70 ? messageText.slice(0, 67) + "..." : messageText,
         isAudio: content.isAudio,
         isMedia: content.isMedia,
+        timeFormattedSP: timeStr,
       });
 
       // 4. Inserção direta na tabela 'messages' do EduChat
