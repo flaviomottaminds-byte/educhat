@@ -71,8 +71,8 @@ export const INITIAL_MESSAGES = {
     }
   ],
 
-  // Conversas Privadas 1 a 1 (Estilo WhatsApp) entre Flávio e cada colaborador
-  'dm-u2': [
+  // Conversas Privadas 1 a 1 (Estilo WhatsApp) com Chave Simétrica (dm-{userA}-{userB})
+  'dm-u1-u2': [
     {
       id: 'dm1_1',
       senderId: 'u2',
@@ -98,7 +98,7 @@ export const INITIAL_MESSAGES = {
       actionExtracted: false,
     }
   ],
-  'dm-u3': [
+  'dm-u1-u3': [
     {
       id: 'dm2_1',
       senderId: 'u3',
@@ -116,7 +116,7 @@ export const INITIAL_MESSAGES = {
       actionExtracted: false,
     }
   ],
-  'dm-u4': [
+  'dm-u1-u4': [
     {
       id: 'dm3_1',
       senderId: 'u4',
@@ -126,7 +126,7 @@ export const INITIAL_MESSAGES = {
       actionExtracted: false,
     }
   ],
-  'dm-u5': [
+  'dm-u1-u5': [
     {
       id: 'dm4_1',
       senderId: 'u5',
@@ -136,6 +136,13 @@ export const INITIAL_MESSAGES = {
       actionExtracted: false,
     }
   ]
+};
+
+export const getChatKey = (activeChat, currentUserId) => {
+  if (!activeChat) return 'c-geral';
+  if (activeChat.type === 'channel') return activeChat.id;
+  const ids = [currentUserId, activeChat.id].sort();
+  return `dm-${ids[0]}-${ids[1]}`;
 };
 
 export const INITIAL_TASKS = [

@@ -7,7 +7,9 @@ export default function ChatArea({
   onSendMessage,
   onCreateTaskFromMessage,
   onSummarizeChat,
-  onOpenWhatsAppDossier
+  onOpenWhatsAppDossier,
+  currentUser,
+  realtimeStatus = 'connected'
 }) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
@@ -59,10 +61,29 @@ export default function ChatArea({
                 </span>
               )}
             </h2>
-            <p className="text-[11px] text-[#667781] dark:text-chatTextMuted">
-              {isDM
-                ? target.online ? 'online' : 'visto por último hoje às 18:40'
-                : 'Carlos, Fernanda, Juliana, Flávio'}
+            <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2">
+              <span>
+                {isDM
+                  ? target.online ? 'online' : 'visto por último hoje às 18:40'
+                  : 'Carlos, Fernanda, Juliana, Flávio'}
+              </span>
+              <span className="text-gray-300 dark:text-gray-600">•</span>
+              {realtimeStatus === 'connected' ? (
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  Tempo Real Ativo
+                </span>
+              ) : realtimeStatus === 'connecting' ? (
+                <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                  Conectando Nuvem...
+                </span>
+              ) : (
+                <span className="text-[10px] text-red-500 font-medium flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                  Reconectando
+                </span>
+              )}
             </p>
           </div>
         </div>
@@ -104,7 +125,7 @@ export default function ChatArea({
           </div>
         ) : (
           messages.map((m) => {
-            const isMe = m.senderId === 'u1'; // Flávio
+            const isMe = m.senderId === currentUser?.id;
             const isBot = m.senderId === 'bot';
 
             return (

@@ -13,7 +13,8 @@ import {
   INITIAL_CHANNELS,
   INITIAL_COLLABORATORS,
   INITIAL_MESSAGES,
-  INITIAL_TASKS
+  INITIAL_TASKS,
+  getChatKey
 } from './data/initialData';
 
 const INITIAL_VIP_CLIENTS = [
@@ -52,10 +53,19 @@ export default function App() {
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   const [collaborators, setCollaborators] = useState(INITIAL_COLLABORATORS);
-  const [currentUser, setCurrentUser] = useState(INITIAL_COLLABORATORS[0]); // Flávio Motta (Diretor)
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_user_id');
+      const found = INITIAL_COLLABORATORS.find((u) => u.id === saved);
+      return found || INITIAL_COLLABORATORS[0];
+    } catch {
+      return INITIAL_COLLABORATORS[0];
+    }
+  });
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'error'
 
   // Base de Conhecimento, SLAs e Memória da IA
   const [vipClients, setVipClients] = useState(INITIAL_VIP_CLIENTS);
@@ -95,7 +105,7 @@ export default function App() {
         data: collaborators.find((u) => u.id === activeChat.id) || collaborators[1],
       };
 
-  const currentChatKey = activeChat.type === 'channel' ? activeChat.id : `dm-${activeChat.id}`;
+  const currentChatKey = getChatKey(activeChat, currentUser.id);
   const currentMessages = messages[currentChatKey] || [];
 
   // =========================================================================
@@ -113,7 +123,11 @@ export default function App() {
         if (dbMessages && dbMessages.length > 0) {
           const grouped = {};
           dbMessages.forEach((m) => {
-            const key = m.chat_id;
+            const rawKey = m.chat_id;
+            const key = rawKey === 'dm-u2' ? 'dm-u1-u2' :
+                        rawKey === 'dm-u3' ? 'dm-u1-u3' :
+                        rawKey === 'dm-u4' ? 'dm-u1-u4' :
+                        rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
             if (!grouped[key]) grouped[key] = [];
             grouped[key].push({
               id: m.id,
@@ -199,7 +213,11 @@ export default function App() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
-          const cKey = row.chat_id;
+          const rawKey = row.chat_id;
+          const cKey = rawKey === 'dm-u2' ? 'dm-u1-u2' :
+                       rawKey === 'dm-u3' ? 'dm-u1-u3' :
+                       rawKey === 'dm-u4' ? 'dm-u1-u4' :
+                       rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
           const incoming = {
             id: row.id,
             senderId: row.sender_id,
@@ -261,7 +279,15 @@ export default function App() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setRealtimeStatus('connected');
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setRealtimeStatus('error');
+        } else {
+          setRealtimeStatus('connecting');
+        }
+      });
 
     return () => {
       supabase.removeChannel(channelListener);
@@ -473,6 +499,9 @@ export default function App() {
 
   const handleSwitchUser = (newUser) => {
     setCurrentUser(newUser);
+    try {
+      localStorage.setItem('educhat_user_id', newUser.id);
+    } catch {}
     if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
       setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
     }
@@ -551,6 +580,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
         currentUser={currentUser}
         onSwitchUser={handleSwitchUser}
+        realtimeStatus={realtimeStatus}
       />
 
       {/* Área Central Baseada na Visualização Ativa */}
@@ -562,6 +592,8 @@ export default function App() {
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
           onSummarizeChat={handleSummarizeChat}
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
+          currentUser={currentUser}
+          realtimeStatus={realtimeStatus}
         />
       )}
 

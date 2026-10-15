@@ -35,7 +35,8 @@ export default function Sidebar({
   theme,
   onToggleTheme,
   currentUser,
-  onSwitchUser
+  onSwitchUser,
+  realtimeStatus = 'connected'
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const isDirector = currentUser?.roleType === 'diretor';
@@ -73,7 +74,16 @@ export default function Sidebar({
                 PRO
               </span>
             </h1>
-            <p className="text-[11px] text-chatTextMuted">WhatsApp Interno</p>
+            <p className="text-[11px] text-chatTextMuted flex items-center gap-1.5">
+              <span>WhatsApp Interno</span>
+              {realtimeStatus === 'connected' ? (
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Supabase Realtime Conectado" />
+              ) : realtimeStatus === 'connecting' ? (
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" title="Conectando..." />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-red-500" title="Desconectado" />
+              )}
+            </p>
           </div>
         </div>
 
