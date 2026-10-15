@@ -9,7 +9,8 @@ export default function ChatArea({
   onSummarizeChat,
   onOpenWhatsAppDossier,
   currentUser,
-  realtimeStatus = 'connected'
+  realtimeStatus = 'connected',
+  collaborators = []
 }) {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef(null);
@@ -31,6 +32,26 @@ export default function ChatArea({
     onSendMessage(inputText);
     setInputText('');
   };
+
+  // Helper para formatar nomes nos grupos (mantendo nomes compostos como Ana Paula e Ana Livia)
+  const getShortName = (fullName) => {
+    if (!fullName) return '';
+    const parts = fullName.trim().split(' ');
+    if (parts[0] === 'Ana' && parts.length > 1) {
+      return `${parts[0]} ${parts[1]}`;
+    }
+    return parts[0];
+  };
+
+  // Membros reais vinculados a este canal específico
+  const channelMembersText = !isDM && collaborators.length > 0
+    ? target.department === 'Todos'
+      ? `Toda a equipe (${collaborators.length} membros)`
+      : collaborators
+          .filter((c) => c.department === target.department || c.roleType === 'diretor')
+          .map((c) => getShortName(c.name))
+          .join(', ')
+    : '';
 
   return (
     <section className="flex-1 flex flex-col h-full bg-[#efeae2] dark:bg-chatBg relative transition-colors">
@@ -62,14 +83,14 @@ export default function ChatArea({
               )}
             </h2>
             <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2">
-              <span>
+              <span className="truncate max-w-[280px] md:max-w-md">
                 {isDM
                   ? target.online ? 'online' : 'visto por último hoje às 18:40'
-                  : 'Carlos, Fernanda, Juliana, Flávio'}
+                  : channelMembersText || target.desc || 'Canal de comunicação'}
               </span>
               <span className="text-gray-300 dark:text-gray-600">•</span>
               {realtimeStatus === 'connected' ? (
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
+                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
                   Tempo Real Ativo
                 </span>

@@ -659,6 +659,7 @@ export default function App() {
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
+          collaborators={collaborators}
         />
       )}
 
