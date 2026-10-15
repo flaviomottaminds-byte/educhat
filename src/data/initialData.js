@@ -40,9 +40,49 @@ export const INITIAL_MESSAGES = {
 
 export const getChatKey = (activeChat, currentUserId) => {
   if (!activeChat) return 'c-geral';
-  if (activeChat.type === 'channel') return activeChat.id;
+  if (activeChat.type === 'channel' || activeChat.type === 'whatsapp') return activeChat.id;
   const ids = [currentUserId, activeChat.id].sort();
   return `dm-${ids[0]}-${ids[1]}`;
 };
 
-export const INITIAL_TASKS = [];
+export const INITIAL_TASKS = [
+  {
+    id: 't_wa_lucas',
+    title: 'Matrícula MBA Gestão Estratégica - Lucas Mendes',
+    desc: 'Lead qualificado com interesse em MBA. Solicitou bolsa de 30% para pagamento à vista.',
+    status: 'in_progress',
+    priority: 'alta',
+    isVip: false,
+    assignee: 'Gabriel Carvalho',
+    assigneeAvatar: '👨‍💼',
+    department: 'Comercial',
+    dueDate: 'Hoje (16:00)',
+    channel: '📱 WhatsApp (+55 11 98765-4321)',
+    clientPhone: '+55 11 98765-4321',
+    sourceMessage: 'WhatsApp: "+55 11 98765-4321" • Lucas Mendes',
+    requester: 'WhatsApp Receptivo',
+    requesterDept: 'Comercial',
+    comments: [],
+    attachments: []
+  },
+  {
+    id: 't_wa_juliana',
+    title: 'Emissão de Certificado de Pós - Juliana Rocha',
+    desc: 'Aluna concluiu carga horária de Pós em Pedagogia. Certificado gerado e assinado digitalmente.',
+    status: 'done',
+    priority: 'media',
+    isVip: false,
+    assignee: 'Ana Paula',
+    assigneeAvatar: '👩‍💼',
+    department: 'Secretaria',
+    dueDate: 'Concluído',
+    channel: '📱 WhatsApp (+55 19 97123-4567)',
+    clientPhone: '+55 19 97123-4567',
+    sourceMessage: 'WhatsApp: "+55 19 97123-4567" • Juliana Rocha',
+    requester: 'Secretaria Acadêmica',
+    requesterDept: 'Secretaria',
+    comments: [],
+    attachments: []
+  }
+];
+

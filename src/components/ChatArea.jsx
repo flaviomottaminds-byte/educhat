@@ -16,11 +16,17 @@ import {
   Trash2,
   Edit2,
   Calendar,
-  UserPlus
+  UserPlus,
+  Play,
+  Pause,
+  Smartphone,
+  UserCheck,
+  Headphones,
+  PhoneCall
 } from 'lucide-react';
 
 export default function ChatArea({
-  chatMeta, // { type: 'channel' | 'dm', data: Channel | Collaborator }
+  chatMeta, // { type: 'channel' | 'dm' | 'whatsapp', data: Channel | Collaborator | WhatsAppContact }
   messages,
   onSendMessage,
   onCreateTaskFromMessage,
@@ -30,6 +36,7 @@ export default function ChatArea({
   onDelegateTask,
   onSummarizeChat,
   onOpenWhatsAppDossier,
+  onToggleWhatsAppAI,
   currentUser,
   realtimeStatus = 'connected',
   collaborators = []
@@ -41,6 +48,7 @@ export default function ChatArea({
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
+  const isWhatsApp = chatMeta.type === 'whatsapp';
   const isDM = chatMeta.type === 'dm';
   const target = chatMeta.data || {};
   const isBotChat = isDM && (target.isBot || target.id === 'u_ia_copilot');
@@ -91,7 +99,7 @@ export default function ChatArea({
   };
 
   // Membros reais vinculados a este canal específico
-  const channelMembersText = !isDM && collaborators.length > 0
+  const channelMembersText = !isDM && !isWhatsApp && collaborators.length > 0
     ? target.department === 'Todos'
       ? `Toda a equipe (${collaborators.length} membros)`
       : collaborators
@@ -104,9 +112,14 @@ export default function ChatArea({
     <section className="flex-1 flex flex-col h-full bg-[#efeae2] dark:bg-chatBg relative transition-colors">
       {/* Header do Chat - Estilo Exato WhatsApp Web */}
       <div className="h-16 px-4 bg-chatPanel border-b border-chatBorder flex items-center justify-between shrink-0 shadow-xs z-10">
-        <div className="flex items-center gap-3">
-          {isDM ? (
-            <div className="relative text-3xl">
+        <div className="flex items-center gap-3 truncate">
+          {isWhatsApp ? (
+            <div className="relative text-3xl shrink-0">
+              <span>{target.avatar || '👤'}</span>
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatPanel bg-emerald-500" />
+            </div>
+          ) : isDM ? (
+            <div className="relative text-3xl shrink-0">
               <span>{target.avatar || '👤'}</span>
               <span
                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatPanel ${
@@ -115,27 +128,33 @@ export default function ChatArea({
               />
             </div>
           ) : (
-            <div className="w-10 h-10 rounded-full bg-white dark:bg-chatCard flex items-center justify-center text-brand-600 dark:text-brand-500 font-bold border border-slate-200 dark:border-chatBorder shadow-xs">
+            <div className="w-10 h-10 rounded-full bg-white dark:bg-chatCard flex items-center justify-center text-brand-600 dark:text-brand-500 font-bold border border-slate-200 dark:border-chatBorder shadow-xs shrink-0">
               <Hash size={18} />
             </div>
           )}
 
-          <div>
-            <h2 className="text-chatTextTitle font-semibold text-sm leading-tight flex items-center gap-2">
-              {target.name}
-              {isBotChat ? (
-                <span className="text-[10px] bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-purple-300 dark:border-purple-500/30">
+          <div className="truncate">
+            <h2 className="text-chatTextTitle font-semibold text-sm leading-tight flex items-center gap-2 truncate">
+              <span className="truncate">{target.name}</span>
+              {isWhatsApp ? (
+                <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-300 dark:border-emerald-500/30 shrink-0">
+                  <Smartphone size={10} /> WhatsApp Aluno
+                </span>
+              ) : isBotChat ? (
+                <span className="text-[10px] bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-purple-300 dark:border-purple-500/30 shrink-0">
                   <Bot size={11} /> IA 24h
                 </span>
               ) : isDM ? (
-                <span className="text-[10px] bg-slate-200/80 dark:bg-purple-500/20 text-[#54656f] dark:text-purple-300 font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border border-slate-300 dark:border-purple-500/30">
+                <span className="text-[10px] bg-slate-200/80 dark:bg-purple-500/20 text-[#54656f] dark:text-purple-300 font-medium px-2 py-0.5 rounded-full flex items-center gap-1 border border-slate-300 dark:border-purple-500/30 shrink-0">
                   <Lock size={9} /> Privado
                 </span>
               ) : null}
             </h2>
-            <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2">
+            <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2 truncate">
               <span className="truncate max-w-[280px] md:max-w-md">
-                {isBotChat
+                {isWhatsApp
+                  ? `📱 ${target.phone} • Fila: ${target.department} • Responsável: ${target.assignee || 'Aguardando'}`
+                  : isBotChat
                   ? 'Base normativa MEC, Asaas, POPs e fluxos operacionais'
                   : isDM
                   ? target.online ? 'online' : 'visto por último recentemente'
@@ -148,12 +167,12 @@ export default function ChatArea({
                   Tempo Real Ativo
                 </span>
               ) : realtimeStatus === 'connecting' ? (
-                <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1">
+                <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                  Conectando Nuvem...
+                  Conectando...
                 </span>
               ) : (
-                <span className="text-[10px] text-red-500 font-medium flex items-center gap-1">
+                <span className="text-[10px] text-red-500 font-medium flex items-center gap-1 shrink-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
                   Reconectando
                 </span>
@@ -163,14 +182,41 @@ export default function ChatArea({
         </div>
 
         {/* Botões de Inteligência e Ações */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Hand-off Toggle Humano vs IA no WhatsApp */}
+          {isWhatsApp && (
+            <button
+              onClick={() => onToggleWhatsAppAI && onToggleWhatsAppAI(target.id)}
+              title={target.aiActive ? "Clique para pausar a IA e assumir o atendimento humano" : "Clique para passar o atendimento para a IA"}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold border transition flex items-center gap-1.5 shadow-2xs ${
+                target.aiActive
+                  ? 'bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-500/30'
+                  : 'bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-500/30'
+              }`}
+            >
+              {target.aiActive ? (
+                <>
+                  <Bot size={13} className="animate-pulse text-purple-600" />
+                  <span className="hidden sm:inline">IA Ativa (Pausar)</span>
+                  <span className="sm:hidden">IA</span>
+                </>
+              ) : (
+                <>
+                  <UserCheck size={13} className="text-emerald-600" />
+                  <span className="hidden sm:inline">Atendimento Humano</span>
+                  <span className="sm:hidden">Humano</span>
+                </>
+              )}
+            </button>
+          )}
+
           <button
             onClick={onOpenWhatsAppDossier}
             title="Importar e analisar histórico longo do WhatsApp com IA para gerar Dossiê e Cards"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900/50 border border-brand-200 dark:border-brand-500/30 text-xs font-semibold shadow-xs transition"
           >
             <FileText size={14} className="text-brand-600 dark:text-brand-400" />
-            <span className="hidden sm:inline">Analisar Histórico WhatsApp</span>
+            <span className="hidden sm:inline">Dossiê WhatsApp</span>
             <span className="sm:hidden">Dossiê</span>
           </button>
 
@@ -179,11 +225,32 @@ export default function ChatArea({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-purple-600/20 text-purple-700 dark:text-purple-300 hover:bg-slate-50 dark:hover:bg-purple-600/30 border border-slate-200 dark:border-purple-500/30 text-xs font-medium shadow-xs transition"
           >
             <Sparkles size={14} className="text-purple-600 dark:text-purple-400" />
-            <span className="hidden sm:inline">{isDM ? 'Resumir' : 'Resumo Canal'}</span>
-            <span className="sm:hidden">Resumo</span>
+            <span className="hidden sm:inline">{isDM ? 'Resumir' : 'Resumo'}</span>
           </button>
         </div>
       </div>
+
+      {/* Banner Sticky de Contexto de Triagem para WhatsApp */}
+      {isWhatsApp && (
+        <div className="bg-emerald-50/90 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-500/20 px-4 py-2 flex items-center justify-between text-xs text-emerald-950 dark:text-emerald-200 shrink-0">
+          <div className="flex items-center gap-2 truncate">
+            <span className="font-bold flex items-center gap-1 shrink-0">
+              <Smartphone size={13} className="text-emerald-600" />
+              Triagem & Carteira:
+            </span>
+            <span className="truncate">{target.triageContext || 'Atendimento WhatsApp oficial integrado ao EduChat.'}</span>
+          </div>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 ${
+            target.status === 'carteira_ativa'
+              ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+              : target.status === 'veterano_retencao'
+              ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+              : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+          }`}>
+            {target.statusLabel || 'WhatsApp'}
+          </span>
+        </div>
+      )}
 
       {/* Sugestões de Perguntas Rápidas ao conversar com a IA (Item 6) */}
       {isBotChat && (
@@ -313,7 +380,96 @@ export default function ChatArea({
                       </div>
                     )}
 
-                    <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">{m.text}</p>
+                    {/* Renderização Especial de Áudio WhatsApp com Speech-to-Text */}
+                    {(() => {
+                      const isAudioMessage = m.isAudio || m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:') || m.attachment?.type?.startsWith('audio/');
+                      let transcription = m.audioTranscription || '';
+                      if (!transcription && m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+                        const match = m.text.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/);
+                        if (match) transcription = match[1];
+                      }
+
+                      if (isAudioMessage) {
+                        return (
+                          <div className="space-y-2 max-w-sm">
+                            <div className="flex items-center gap-3 p-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10">
+                              <button
+                                type="button"
+                                className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs hover:scale-105 transition"
+                                title="Reproduzir áudio"
+                              >
+                                <Play size={16} className="ml-0.5" />
+                              </button>
+                              <div className="flex-1 space-y-1">
+                                <div className="flex items-center gap-1 h-5 items-end">
+                                  {[40, 75, 30, 90, 60, 100, 50, 80, 45, 95, 60, 30, 85, 50, 70, 40].map((h, idx) => (
+                                    <div key={idx} className="flex-1 bg-emerald-600/70 dark:bg-emerald-400/80 rounded-full" style={{ height: `${h}%` }} />
+                                  ))}
+                                </div>
+                                <div className="flex items-center justify-between text-[10px] opacity-70">
+                                  <span>0:14</span>
+                                  <span>Mensagem de Voz WhatsApp</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {transcription && (
+                              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
+                                <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
+                                  <Headphones size={12} /> Transcrição Speech-to-Text:
+                                </div>
+                                <p className="italic text-chatTextTitle leading-relaxed">
+                                  "{transcription}"
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">{m.text}</p>
+                      );
+                    })()}
+
+                    {/* Botões Rápidos Interativos para URA / Menu de Triagem */}
+                    {(m.isTriageMenu || m.text?.includes('1️⃣ Matrículas') || m.text?.includes('1️⃣ Secretaria')) && (
+                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 space-y-1.5">
+                        <span className="text-[10px] font-bold text-chatTextMuted block">
+                          ⚡ Escolha uma opção para direcionar o atendimento:
+                        </span>
+                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={() => onSendMessage('1')}
+                            className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-500/30 font-semibold text-left transition"
+                          >
+                            1️⃣ Matrículas / Secretaria
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onSendMessage('2')}
+                            className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-200 border border-blue-200 dark:border-blue-500/30 font-semibold text-left transition"
+                          >
+                            2️⃣ Tutoria / Financeiro
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onSendMessage('3')}
+                            className="p-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/50 text-purple-800 dark:text-purple-200 border border-purple-200 dark:border-purple-500/30 font-semibold text-left transition"
+                          >
+                            3️⃣ Financeiro / Ouvidoria
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onSendMessage('4')}
+                            className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-500/30 font-semibold text-left transition"
+                          >
+                            4️⃣ Documentos / Novos Cursos
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Barra de Ações Rápidas do Kanban Criado no Chat (Editar, Agendar, Delegar, Excluir) */}
                     {m.taskId && (

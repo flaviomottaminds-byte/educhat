@@ -16,7 +16,11 @@ import {
   Search,
   Filter,
   ShieldCheck,
-  RefreshCw
+  RefreshCw,
+  Smartphone,
+  Zap,
+  QrCode,
+  PhoneCall
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -24,13 +28,16 @@ export default function Sidebar({
   setActiveView,
   channels,
   collaborators,
-  activeChat, // { type: 'channel' | 'dm', id: string }
+  whatsAppContacts = [],
+  activeChat, // { type: 'channel' | 'dm' | 'whatsapp', id: string }
   onSelectChannel,
   onSelectCollaborator,
+  onSelectWhatsAppContact,
   onOpenAICopilot,
   onOpenAIMemory,
   onOpenNewChannel,
   onOpenNewCollaborator,
+  onOpenWhatsAppConnection,
   aiAutonomous,
   setAiAutonomous,
   theme,
@@ -43,6 +50,7 @@ export default function Sidebar({
   lastSyncTime
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [sidebarTab, setSidebarTab] = useState('whatsapp'); // 'whatsapp' | 'internal'
   const isDirector = currentUser?.roleType === 'diretor';
 
   // Canais visíveis por perfil (Diretor vê todos; Colaborador vê gerais e do seu setor)
@@ -68,6 +76,18 @@ export default function Sidebar({
       u.department?.toLowerCase().includes(searchQuery.toLowerCase())
     )
   );
+
+  // Contatos do WhatsApp (Leads e Alunos)
+  const filteredWhatsAppContacts = whatsAppContacts.filter((c) =>
+    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.phone.replace(/\D/g, '').includes(searchQuery.replace(/\D/g, '')) ||
+    c.department.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    c.statusLabel.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const totalWhatsAppUnread = whatsAppContacts.reduce((sum, c) => sum + (unreadCounts[c.id] || 0), 0);
+  const totalInternalUnread = accessibleChannels.reduce((sum, c) => sum + (unreadCounts[c.id] || 0), 0) +
+    filteredCollaborators.reduce((sum, u) => sum + (unreadCounts[u.id] || 0), 0);
 
   return (
     <aside className="w-84 bg-chatSidebar border-r border-chatBorder flex flex-col h-full select-none transition-colors">
@@ -100,24 +120,32 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Botões de Ação: IA & Base de Conhecimento */}
-        <div className="flex items-center gap-2">
+        {/* Botões de Ação: Conexão WhatsApp, IA & Base de Conhecimento */}
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={onOpenWhatsAppConnection}
+            title="Conexão WhatsApp & Simulador de Webhook"
+            className="p-1.5 rounded-full text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition flex items-center gap-1"
+          >
+            <Smartphone size={18} />
+          </button>
+
           {isDirector && (
             <button
               onClick={onOpenAIMemory}
               title="Base de Conhecimento da IA (Clientes VIP, SLAs e POPs)"
-              className="p-2 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
+              className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
             >
-              <Brain size={20} className="text-yellow-600 dark:text-yellow-400" />
+              <Brain size={18} className="text-yellow-600 dark:text-yellow-400" />
             </button>
           )}
 
           <button
             onClick={onOpenAICopilot}
             title="Copiloto de IA & Diagnóstico"
-            className="p-2 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
+            className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
           >
-            <Sparkles size={20} className="text-purple-600 dark:text-purple-400" />
+            <Sparkles size={18} className="text-purple-600 dark:text-purple-400" />
           </button>
         </div>
       </div>
@@ -160,6 +188,44 @@ export default function Sidebar({
         </button>
       </div>
 
+      {/* Alternador de Abas de Conversas: WhatsApp Alunos vs Equipe Interna */}
+      <div className="px-2 pt-2 pb-1 bg-chatSidebar flex gap-1 border-b border-chatBorder">
+        <button
+          type="button"
+          onClick={() => setSidebarTab('whatsapp')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+            sidebarTab === 'whatsapp'
+              ? 'bg-emerald-600 text-white shadow-2xs'
+              : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
+          }`}
+        >
+          <Smartphone size={13} />
+          WhatsApp Alunos
+          {totalWhatsAppUnread > 0 && (
+            <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 rounded-full">
+              {totalWhatsAppUnread}
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={() => setSidebarTab('internal')}
+          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+            sidebarTab === 'internal'
+              ? 'bg-brand-600 text-white shadow-2xs'
+              : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
+          }`}
+        >
+          <Users size={13} />
+          Equipe Interna
+          {totalInternalUnread > 0 && (
+            <span className="bg-white text-brand-700 text-[10px] font-bold px-1.5 rounded-full">
+              {totalInternalUnread}
+            </span>
+          )}
+        </button>
+      </div>
+
       {/* Barra de Pesquisa Clássica do WhatsApp Web */}
       <div className="px-3 py-2 bg-white dark:bg-chatSidebar border-b border-chatBorder flex items-center gap-2">
         <div className="relative flex-1 flex items-center bg-[#f0f2f5] dark:bg-chatPanel rounded-lg px-3 py-1.5">
@@ -168,108 +234,212 @@ export default function Sidebar({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Pesquisar ou começar uma nova conversa"
+            placeholder={sidebarTab === 'whatsapp' ? "Buscar aluno, telefone ou setor..." : "Pesquisar canal ou colega..."}
             className="w-full bg-transparent text-xs text-chatTextTitle placeholder:text-[#54656f] dark:placeholder:text-[#8696a0] focus:outline-none"
           />
         </div>
       </div>
 
-      {/* Modo IA Autônoma */}
-      <div className="px-3 pt-2">
-        <div className="bg-[#f0f2f5] dark:bg-purple-950/20 border border-slate-200 dark:border-purple-500/20 rounded-lg p-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Bot size={15} className={aiAutonomous ? 'text-brand-600 dark:text-yellow-400 animate-pulse' : 'text-chatTextMuted'} />
-            <div>
-              <p className="text-[11px] font-bold text-chatTextTitle">IA Criar Card Sozinha</p>
-              <p className="text-[9px] text-chatTextMuted">
-                {aiAutonomous ? 'Detecta tarefas automaticamente' : 'Manual / Sob comando'}
-              </p>
+      {/* Painel de Status WhatsApp & Teste Rápido (Exibido na aba WhatsApp) */}
+      {sidebarTab === 'whatsapp' && (
+        <div className="px-3 pt-2">
+          <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-500/20 rounded-lg p-2 flex items-center justify-between">
+            <div className="flex items-center gap-2 truncate">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <div className="truncate">
+                <p className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 leading-tight truncate">
+                  Gateway WhatsApp Ativo
+                </p>
+                <p className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate">
+                  +55 (11) 98765-4321 • Carteira Ativa
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={onOpenWhatsAppConnection}
+                title="Abrir Simulador de Webhook & QR Code"
+                className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold flex items-center gap-1 shadow-2xs transition"
+              >
+                <Zap size={11} /> Testar
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => setAiAutonomous(!aiAutonomous)}
-            className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${
-              aiAutonomous ? 'bg-brand-600' : 'bg-slate-300 dark:bg-chatPanel'
-            }`}
-          >
-            <div
-              className={`w-3.5 h-3.5 rounded-full bg-white shadow-sm transition-transform ${
-                aiAutonomous ? 'translate-x-3.5' : 'translate-x-0'
-              }`}
-            />
-          </button>
         </div>
-      </div>
+      )}
 
-      {/* Lista de Canais, Copiloto IA e Conversas 1 a 1 */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-4">
-        {/* Assistente IA Institucional Pinned (Item 6) */}
-        {botCollaborator && (
-          <div className="px-1">
-            <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 mb-1 flex items-center justify-between">
-              <span className="flex items-center gap-1">
-                <Sparkles size={11} /> Suporte & Dúvidas IA
-              </span>
-              <span className="text-[9px] bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 px-1.5 py-0.2 rounded font-semibold">
-                Online 24h
-              </span>
+      {/* Modo IA Autônoma (Exibido na aba Interna) */}
+      {sidebarTab === 'internal' && (
+        <div className="px-3 pt-2">
+          <div className="bg-[#f0f2f5] dark:bg-purple-950/20 border border-slate-200 dark:border-purple-500/20 rounded-lg p-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bot size={15} className={aiAutonomous ? 'text-brand-600 dark:text-yellow-400 animate-pulse' : 'text-chatTextMuted'} />
+              <div>
+                <p className="text-[11px] font-bold text-chatTextTitle">IA Criar Card Sozinha</p>
+                <p className="text-[9px] text-chatTextMuted">
+                  {aiAutonomous ? 'Detecta tarefas automaticamente' : 'Manual / Sob comando'}
+                </p>
+              </div>
             </div>
             <button
-              onClick={() => onSelectCollaborator(botCollaborator.id)}
-              className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
-                activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === botCollaborator.id
-                  ? 'bg-purple-100/80 dark:bg-purple-950/40 border-purple-400 dark:border-purple-500 shadow-sm'
-                  : 'bg-purple-50/50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-500/30 hover:bg-purple-100/60'
+              type="button"
+              onClick={() => setAiAutonomous(!aiAutonomous)}
+              className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${
+                aiAutonomous ? 'bg-brand-600' : 'bg-slate-300 dark:bg-chatPanel'
               }`}
             >
-              <div className="flex items-center gap-2.5 truncate">
-                <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs">
-                  <span>🤖</span>
-                  <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel animate-pulse" />
-                </div>
-                <div className="truncate">
-                  <p className="text-xs font-bold text-chatTextTitle leading-tight truncate flex items-center gap-1">
-                    Assistente IA
-                    <span className="text-[9px] bg-yellow-400/20 text-yellow-800 dark:text-yellow-300 font-bold px-1 rounded">
-                      MEC & POP
-                    </span>
-                  </p>
-                  <p className="text-[10px] text-purple-700 dark:text-purple-300 truncate mt-0.5">
-                    Tire dúvidas de processos, Asaas e MEC
-                  </p>
-                </div>
-              </div>
-
-              {unreadCounts[botCollaborator.id] > 0 ? (
-                <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                  {unreadCounts[botCollaborator.id]}
-                </span>
-              ) : (
-                <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
-                  Perguntar →
-                </span>
-              )}
+              <div
+                className={`w-3.5 h-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                  aiAutonomous ? 'translate-x-3.5' : 'translate-x-0'
+                }`}
+              />
             </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Canais Operacionais */}
-        <div>
-          <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
-            <span>Canais ({accessibleChannels.length})</span>
-            {isDirector && (
+      {/* Lista de Conversas: WhatsApp Alunos OU Canais/DMs Internas */}
+      <div className="flex-1 overflow-y-auto p-2 space-y-4">
+        {sidebarTab === 'whatsapp' ? (
+          /* ABA WHATSAPP ALUNOS */
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
+              <span>Atendimento WhatsApp ({filteredWhatsAppContacts.length})</span>
               <button
-                onClick={onOpenNewChannel}
-                title="Criar novo canal operacional"
-                className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
+                onClick={onOpenWhatsAppConnection}
+                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-0.5 text-[10px] normal-case font-bold"
               >
-                <Plus size={13} /> Novo
+                <QrCode size={12} /> Conectar Número
               </button>
-            )}
-          </div>
+            </div>
 
-          <div className="space-y-0.5">
+            {filteredWhatsAppContacts.map((contact) => {
+              const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
+              const contactUnread = unreadCounts[contact.id] || 0;
+              return (
+                <button
+                  key={contact.id}
+                  onClick={() => onSelectWhatsAppContact(contact.id)}
+                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
+                    isActive
+                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-500/50 shadow-xs'
+                      : 'border-transparent hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-slate-200 dark:border-chatBorder shadow-2xs">
+                      <span>{contact.avatar}</span>
+                      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel" />
+                    </div>
+                    <div className="truncate">
+                      <div className="flex items-center gap-1.5">
+                        <p className={`text-xs leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'font-semibold text-chatTextTitle'}`}>
+                          {contact.name}
+                        </p>
+                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                          contact.status === 'carteira_ativa'
+                            ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+                            : contact.status === 'veterano_retencao'
+                            ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+                            : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                        }`}>
+                          {contact.statusLabel}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
+                        <span>{contact.phone}</span>
+                        <span>•</span>
+                        <span className="font-semibold text-brand-700 dark:text-brand-400">{contact.department}</span>
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                        {contact.triageContext}
+                      </p>
+                    </div>
+                  </div>
+
+                  {contactUnread > 0 ? (
+                    <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                      {contactUnread}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-chatTextMuted font-medium">
+                      {contact.lastInteraction}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          /* ABA EQUIPE INTERNA (CANAIS + DMS) */
+          <>
+            {/* Assistente IA Institucional Pinned */}
+            {botCollaborator && (
+              <div className="px-1 mb-3">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <Sparkles size={11} /> Suporte & Dúvidas IA
+                  </span>
+                  <span className="text-[9px] bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 px-1.5 py-0.2 rounded font-semibold">
+                    Online 24h
+                  </span>
+                </div>
+                <button
+                  onClick={() => onSelectCollaborator(botCollaborator.id)}
+                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
+                    activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === botCollaborator.id
+                      ? 'bg-purple-100/80 dark:bg-purple-950/40 border-purple-400 dark:border-purple-500 shadow-sm'
+                      : 'bg-purple-50/50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-500/30 hover:bg-purple-100/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 truncate">
+                    <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs">
+                      <span>🤖</span>
+                      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel animate-pulse" />
+                    </div>
+                    <div className="truncate">
+                      <p className="text-xs font-bold text-chatTextTitle leading-tight truncate flex items-center gap-1">
+                        Assistente IA
+                        <span className="text-[9px] bg-yellow-400/20 text-yellow-800 dark:text-yellow-300 font-bold px-1 rounded">
+                          MEC & POP
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-purple-700 dark:text-purple-300 truncate mt-0.5">
+                        Tire dúvidas de processos, Asaas e MEC
+                      </p>
+                    </div>
+                  </div>
+
+                  {unreadCounts[botCollaborator.id] > 0 ? (
+                    <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                      {unreadCounts[botCollaborator.id]}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
+                      Perguntar →
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* Canais Operacionais */}
+            <div>
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
+                <span>Canais ({accessibleChannels.length})</span>
+                {isDirector && (
+                  <button
+                    onClick={onOpenNewChannel}
+                    title="Criar novo canal operacional"
+                    className="text-brand-600 dark:text-brand-500 hover:underline flex items-center gap-0.5 text-[11px] normal-case font-semibold"
+                  >
+                    <Plus size={13} /> Novo
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-0.5">
             {filteredChannels.map((c) => {
               const isActive = activeView === 'chat' && activeChat.type === 'channel' && activeChat.id === c.id;
               const channelUnread = unreadCounts[c.id] || c.unread || 0;
@@ -367,7 +537,9 @@ export default function Sidebar({
             })}
           </div>
         </div>
-      </div>
+      </>
+    )}
+  </div>
 
       {/* Rodapé: Perfil Ativo + Simulador de Usuário (Apenas Humanos) + Alternador Sol/Lua */}
       <div className="p-3 bg-chatPanel border-t border-chatBorder space-y-2">

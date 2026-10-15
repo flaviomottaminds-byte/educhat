@@ -7,6 +7,7 @@ import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
 import WhatsAppDossierModal from './components/WhatsAppDossierModal';
+import WhatsAppConnectionModal from './components/WhatsAppConnectionModal';
 import UserSelectionModal from './components/UserSelectionModal';
 import TaskDetailModal from './components/TaskDetailModal';
 import { Shield } from 'lucide-react';
@@ -25,6 +26,13 @@ import {
   INITIAL_TASKS,
   getChatKey
 } from './data/initialData';
+import {
+  INITIAL_WHATSAPP_CONTACTS,
+  INITIAL_WHATSAPP_MESSAGES,
+  routeIncomingWhatsAppWebhook,
+  processTriageResponse
+} from './lib/whatsappRouting';
+
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -91,7 +99,12 @@ export default function App() {
     }
   });
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
-  const [messages, setMessages] = useState(INITIAL_MESSAGES);
+  const [whatsAppContacts, setWhatsAppContacts] = useState(INITIAL_WHATSAPP_CONTACTS);
+  const [isWhatsAppConnectionOpen, setIsWhatsAppConnectionOpen] = useState(false);
+  const [messages, setMessages] = useState(() => ({
+    ...INITIAL_MESSAGES,
+    ...INITIAL_WHATSAPP_MESSAGES
+  }));
   const [tasks, setTasks] = useState(INITIAL_TASKS);
   const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'error'
   const [lastSyncTime, setLastSyncTime] = useState('');
@@ -126,9 +139,9 @@ export default function App() {
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
   const [isDossierOpen, setIsDossierOpen] = useState(false);
 
-  // Chat ativo: canal ou DM (padrão canal #geral)
+  // Chat ativo: canal, dm ou whatsapp (padrão canal #geral)
   const [activeChat, setActiveChat] = useState({
-    type: 'channel', // 'channel' | 'dm'
+    type: 'channel', // 'channel' | 'dm' | 'whatsapp'
     id: 'c-geral'
   });
 
@@ -145,11 +158,16 @@ export default function App() {
     sourceMessage: null,
   });
 
-  // Metadados do chat atual
+  // Metadados do chat atual (Canais, DMs privadas ou Contatos de WhatsApp de Alunos)
   const chatMeta = activeChat.type === 'channel'
     ? {
         type: 'channel',
         data: channels.find((c) => c.id === activeChat.id) || channels[0],
+      }
+    : activeChat.type === 'whatsapp'
+    ? {
+        type: 'whatsapp',
+        data: whatsAppContacts.find((w) => w.id === activeChat.id) || whatsAppContacts[0],
       }
     : {
         type: 'dm',
@@ -187,6 +205,16 @@ export default function App() {
         const id2 = parts[2];
         if (currentUser.id !== id1 && currentUser.id !== id2) {
           return; // Ignora 100%! Conversa privada entre outros dois colaboradores.
+        }
+      }
+    }
+
+    // Trava de Carteira Ativa do WhatsApp: Se o lead tiver card ativo com um consultor específico, notifica APENAS ele!
+    if (cKey.startsWith('wa-')) {
+      const contact = whatsAppContacts.find((c) => c.id === cKey);
+      if (contact && contact.status === 'carteira_ativa' && contact.assignee) {
+        if (currentUser.name !== contact.assignee && currentUser.roleType !== 'diretor') {
+          return; // Zero ruído na equipe geral: o atendimento é exclusivo do consultor dono da carteira!
         }
       }
     }
@@ -562,6 +590,107 @@ export default function App() {
       return;
     }
 
+    // GATILHO WHATSAPP: Se for conversa de WhatsApp com Aluno/Lead
+    if (activeChat.type === 'whatsapp') {
+      const contact = whatsAppContacts.find((c) => c.id === activeChat.id);
+
+      // Se um consultor humano enviou mensagem, pausa automaticamente a IA para não haver conflito
+      if (contact && contact.aiActive) {
+        setWhatsAppContacts((prev) =>
+          prev.map((c) => (c.id === contact.id ? { ...c, aiActive: false } : c))
+        );
+      }
+
+      // Se a mensagem enviada for a resposta de uma URA / Triagem (ex: "1", "2", "3", "4" ou texto correspondente)
+      if (contact && (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao')) {
+        const triageResult = processTriageResponse(text, contact.status, collaborators);
+        if (triageResult) {
+          setTimeout(() => {
+            // 1. Atualizar contato
+            setWhatsAppContacts((prev) =>
+              prev.map((c) =>
+                c.id === contact.id
+                  ? {
+                      ...c,
+                      department: triageResult.department,
+                      assignee: triageResult.assignee,
+                      status: 'carteira_ativa',
+                      statusLabel: 'Em Atendimento',
+                      aiActive: false,
+                      triageContext: `Encaminhado via URA: [${triageResult.triageLabel}] para ${triageResult.assignee}`
+                    }
+                  : c
+              )
+            );
+
+            // 2. Criar card no Kanban do setor correspondente
+            const newTask = {
+              id: 't_ura_' + Date.now(),
+              title: `${triageResult.taskTitle} - ${contact.name}`,
+              desc: `Demanda de atendimento WhatsApp (${contact.phone}). Classificada via URA: ${triageResult.triageLabel}.`,
+              status: 'backlog',
+              priority: triageResult.priority,
+              isVip: false,
+              assignee: triageResult.assignee,
+              assigneeAvatar: '👤',
+              department: triageResult.department,
+              dueDate: 'Hoje (Em até 4h)',
+              channel: `📱 WhatsApp (${contact.phone})`,
+              clientPhone: contact.phone,
+              sourceMessage: `WhatsApp: "${contact.phone}" • ${contact.name} (${triageResult.triageLabel})`,
+              requester: 'URA WhatsApp',
+              requesterDept: 'Triagem',
+              comments: [],
+              attachments: []
+            };
+
+            setTasks((prev) => [newTask, ...prev]);
+
+            supabase.from('tasks').insert([{
+              id: newTask.id,
+              title: newTask.title,
+              description: newTask.desc,
+              status: newTask.status,
+              priority: newTask.priority,
+              is_vip: false,
+              assignee: newTask.assignee,
+              assignee_avatar: newTask.assigneeAvatar,
+              department: newTask.department,
+              due_date: newTask.dueDate,
+              channel: newTask.channel,
+              source_message: newTask.sourceMessage
+            }]).then(({ error }) => {
+              if (error) console.warn('Erro ao salvar task da URA no Supabase:', error);
+            });
+
+            // 3. Resposta do Bot de Confirmação no Chat com marcador de taskId
+            const botReply = {
+              id: 'bot_triage_' + Date.now(),
+              senderId: 'bot',
+              senderName: '🤖 Copiloto EduChat',
+              text: `✅ ${triageResult.handOffMessage}\n📌 Card criado no Kanban do setor ${triageResult.department} com prioridade ${triageResult.priority.toUpperCase()}.\n<!-- TASK_ID:${newTask.id} -->`,
+              timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
+              isWhatsApp: true,
+              fromStudent: false,
+              taskId: newTask.id
+            };
+
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: [...(prev[currentChatKey] || []), botReply]
+            }));
+
+            // Notifica o consultor do setor designado
+            if (currentUser.name === triageResult.assignee || currentUser.roleType === 'diretor') {
+              playMessageSound();
+              notifyIncomingMessage('EduChat Triagem URA', `Nova demanda encaminhada para você: ${contact.name}`);
+            }
+          }, 600);
+          return;
+        }
+      }
+    }
+
     // GATILHO 1: Comando manual explícito /tarefa
     if (text.startsWith('/tarefa')) {
       const taskText = text.replace('/tarefa', '').trim();
@@ -713,6 +842,82 @@ export default function App() {
       .then(({ error }) => {
         if (error) console.warn('Erro ao excluir tarefa no Supabase:', error);
       });
+  };
+
+  // Alternar atendimento IA vs Humano em contatos WhatsApp
+  const handleToggleWhatsAppAI = (contactId) => {
+    setWhatsAppContacts((prev) =>
+      prev.map((c) => (c.id === contactId ? { ...c, aiActive: !c.aiActive } : c))
+    );
+  };
+
+  // Processador Central do Webhook de WhatsApp (Simulador & Produção)
+  const handleWhatsAppWebhookEvent = ({ fromPhone, senderName, messageText, isAudio, audioTranscription, contactId }) => {
+    const routingResult = routeIncomingWhatsAppWebhook({
+      fromPhone,
+      senderName,
+      messageText,
+      tasks,
+      collaborators
+    });
+
+    const targetChatId = contactId || (whatsAppContacts.find(c => c.phone.replace(/\D/g, '') === fromPhone.replace(/\D/g, ''))?.id) || 'wa-carlos-eduardo';
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    const incomingMsg = {
+      id: 'wa_in_' + Date.now(),
+      senderId: targetChatId,
+      senderName: senderName || 'Lead WhatsApp',
+      text: messageText,
+      timestamp: timeStr,
+      isWhatsApp: true,
+      fromStudent: true,
+      isAudio: !!isAudio,
+      audioTranscription: audioTranscription || null
+    };
+
+    setMessages((prev) => ({
+      ...prev,
+      [targetChatId]: [...(prev[targetChatId] || []), incomingMsg]
+    }));
+
+    // Trava de Carteira Ativa: Apenas o consultor responsável (ou o diretor) é notificado!
+    const isMyLead = routingResult.targetAssignee === currentUser.name;
+    if (isMyLead || (routingResult.door === 1 && currentUser.roleType === 'diretor')) {
+      playMessageSound();
+      notifyIncomingMessage(senderName, messageText);
+    }
+
+    if (activeChat.id !== targetChatId) {
+      setUnreadCounts((prev) => ({
+        ...prev,
+        [targetChatId]: (prev[targetChatId] || 0) + 1
+      }));
+    }
+
+    // Auto-resposta para URA (Porta 3) ou Veterano (Porta 2)
+    if (routingResult.autoReply) {
+      setTimeout(() => {
+        const replyMsg = {
+          id: 'wa_bot_' + Date.now(),
+          senderId: routingResult.routeType === 'BRAND_NEW_URA' ? 'bot_ura' : 'bot_retencao',
+          senderName: routingResult.routeType === 'BRAND_NEW_URA' ? '🤖 URA EduChat' : '🤖 Assistente EduChat',
+          text: routingResult.autoReply,
+          timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
+          isWhatsApp: true,
+          fromStudent: false,
+          isTriageMenu: true
+        };
+        setMessages((prev) => ({
+          ...prev,
+          [targetChatId]: [...(prev[targetChatId] || []), replyMsg]
+        }));
+        playMessageSound();
+      }, 700);
+    }
+
+    return routingResult;
   };
 
   // Excluir card criado pela IA diretamente a partir da conversa (Item 1)
@@ -967,6 +1172,7 @@ export default function App() {
         setActiveView={setActiveView}
         channels={channels}
         collaborators={collaborators}
+        whatsAppContacts={whatsAppContacts}
         activeChat={activeChat}
         onSelectChannel={(channelId) => {
           setActiveChat({ type: 'channel', id: channelId });
@@ -978,6 +1184,12 @@ export default function App() {
           setActiveView('chat');
           clearUnread(userId);
         }}
+        onSelectWhatsAppContact={(contactId) => {
+          setActiveChat({ type: 'whatsapp', id: contactId });
+          setActiveView('chat');
+          clearUnread(contactId);
+        }}
+        onOpenWhatsAppConnection={() => setIsWhatsAppConnectionOpen(true)}
         aiAutonomous={aiAutonomous}
         setAiAutonomous={setAiAutonomous}
         onOpenAICopilot={() =>
@@ -1012,6 +1224,7 @@ export default function App() {
           onDelegateTask={handleDelegateTask}
           onSummarizeChat={handleSummarizeChat}
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
+          onToggleWhatsAppAI={handleToggleWhatsAppAI}
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
           collaborators={collaborators}
@@ -1143,6 +1356,13 @@ export default function App() {
         onDeleteTask={handleDeleteTask}
         currentUser={currentUser}
         collaborators={collaborators}
+      />
+
+      {/* Modal de Conexão WhatsApp & Simulador de Webhooks */}
+      <WhatsAppConnectionModal
+        isOpen={isWhatsAppConnectionOpen}
+        onClose={() => setIsWhatsAppConnectionOpen(false)}
+        onSimulateWebhook={handleWhatsAppWebhookEvent}
       />
     </div>
   );
