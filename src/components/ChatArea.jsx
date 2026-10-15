@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Check
 } from 'lucide-react';
+import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -438,6 +439,28 @@ export default function ChatArea({
           .map((c) => getShortName(c?.name || ''))
           .join(', ')
     : '';
+
+  const isManager = hasFullPortfolioAccess(currentUser);
+  const isAssignedToMe = isChatAssignedToUser(target, currentUser);
+  const hasAccessToChat = !isWhatsApp || isManager || isAssignedToMe;
+
+  if (isWhatsApp && !hasAccessToChat) {
+    return (
+      <section className="flex-1 flex flex-col items-center justify-center h-full bg-[#efeae2] dark:bg-chatBg p-8 text-center relative transition-colors">
+        <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
+          <div className="w-14 h-14 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto">
+            <Lock size={26} />
+          </div>
+          <h3 className="text-base font-bold text-chatTextTitle">Atendimento Fora da Sua Carteira</h3>
+          <p className="text-xs text-chatTextMuted leading-relaxed">
+            Esta conversa do WhatsApp está atribuída a <strong>{target?.assignee || 'outro consultor'}</strong> ({target?.department || 'Comercial'}).
+            <br /><br />
+            Por diretriz de privacidade e segurança da equipe comercial, você só possui acesso aos atendimentos sob sua responsabilidade direta.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="flex-1 flex flex-col h-full bg-[#efeae2] dark:bg-chatBg relative transition-colors">

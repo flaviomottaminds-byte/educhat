@@ -23,6 +23,7 @@ import {
   PhoneCall,
   Upload
 } from 'lucide-react';
+import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 
 export default function Sidebar({
   activeView = 'chat',
@@ -97,7 +98,18 @@ export default function Sidebar({
   });
 
   // Contatos do WhatsApp (Leads e Alunos)
-  const filteredWhatsAppContacts = safeWhatsAppContacts.filter((c) => {
+  // ISOLAMENTO DE CARTEIRA:
+  // - Gestores / Diretoria (Flávio Motta, Diretores): visibilidade completa de todas as conversas e filas
+  // - Consultores Comerciais / Colaboradores: visibilidade restrita estritamente aos chats atribuídos a eles
+  const isManager = hasFullPortfolioAccess(currentUser);
+
+  const accessibleWhatsAppContacts = safeWhatsAppContacts.filter((c) => {
+    if (!c) return false;
+    if (isManager) return true;
+    return isChatAssignedToUser(c, currentUser);
+  });
+
+  const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;
     const name = (c.name || '').toLowerCase();
     const phone = (c.phone || '').replace(/\D/g, '');
@@ -112,7 +124,7 @@ export default function Sidebar({
     );
   });
 
-  const totalWhatsAppUnread = safeWhatsAppContacts.reduce((sum, c) => {
+  const totalWhatsAppUnread = accessibleWhatsAppContacts.reduce((sum, c) => {
     return sum + (c?.id && safeUnread[c.id] ? Number(safeUnread[c.id]) : 0);
   }, 0);
 
@@ -352,7 +364,11 @@ export default function Sidebar({
           /* ABA WHATSAPP ALUNOS */
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
-              <span>Atendimento WhatsApp ({filteredWhatsAppContacts.length})</span>
+              <span>
+                {isManager
+                  ? `Atendimento WhatsApp (${filteredWhatsAppContacts.length})`
+                  : `Minha Carteira (${filteredWhatsAppContacts.length})`}
+              </span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -374,64 +390,92 @@ export default function Sidebar({
               </div>
             </div>
 
-            {filteredWhatsAppContacts.map((contact) => {
-              const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
-              const contactUnread = unreadCounts[contact.id] || 0;
-              return (
-                <button
-                  key={contact.id}
-                  onClick={() => onSelectWhatsAppContact(contact.id)}
-                  className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
-                    isActive
-                      ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-500/50 shadow-xs'
-                      : 'border-transparent hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 truncate">
-                    <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-slate-200 dark:border-chatBorder shadow-2xs">
-                      <span>{contact.avatar}</span>
-                      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel" />
-                    </div>
-                    <div className="truncate">
-                      <div className="flex items-center gap-1.5">
-                        <p className={`text-xs leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'font-semibold text-chatTextTitle'}`}>
-                          {contact.name}
-                        </p>
-                        <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
-                          contact.status === 'carteira_ativa'
-                            ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
-                            : contact.status === 'veterano_retencao'
-                            ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
-                            : contact.status === 'lead_instagram'
-                            ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800/40'
-                            : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
-                        }`}>
-                          {contact.statusLabel}
-                        </span>
-                      </div>
-                      <p className="text-[10px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
-                        <span>{contact.phone}</span>
-                        <span>•</span>
-                        <span className="font-semibold text-brand-700 dark:text-brand-400">{contact.department}</span>
-                      </p>
-                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                        {contact.triageContext}
-                      </p>
-                    </div>
-                  </div>
+            {/* Identificador de Carteira Exclusiva para Consultores */}
+            {!isManager && (
+              <div className="mx-1 mb-2 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 flex items-center justify-between">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <span className="text-[10.5px] font-bold text-emerald-800 dark:text-emerald-300 truncate">
+                    Consultor: {currentUser.name}
+                  </span>
+                </div>
+                <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-400 bg-white dark:bg-chatPanel px-1.5 py-0.5 rounded shadow-2xs shrink-0">
+                  Carteira Exclusiva
+                </span>
+              </div>
+            )}
 
-                  {contactUnread > 0 ? (
-                    <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                      {contactUnread}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-chatTextMuted font-medium">
-                      {contact.lastInteraction}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            {filteredWhatsAppContacts.length === 0 ? (
+              <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-chatPanel/40 border border-slate-200/80 dark:border-chatBorder/80 mx-1 my-2">
+                <p className="text-xs font-semibold text-chatTextTitle mb-1">
+                  {isManager ? 'Nenhum atendimento encontrado' : 'Nenhum atendimento na sua carteira'}
+                </p>
+                <p className="text-[10.5px] text-chatTextMuted leading-relaxed">
+                  {isManager
+                    ? 'Nenhuma conversa coincide com os filtros da busca.'
+                    : 'Você não possui conversas atribuídas à sua carteira no momento. Novos atendimentos distribuídos pela gestão aparecerão aqui automaticamente.'}
+                </p>
+              </div>
+            ) : (
+              filteredWhatsAppContacts.map((contact) => {
+                const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
+                const contactUnread = unreadCounts[contact.id] || 0;
+                return (
+                  <button
+                    key={contact.id}
+                    onClick={() => onSelectWhatsAppContact(contact.id)}
+                    className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
+                      isActive
+                        ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-500/50 shadow-xs'
+                        : 'border-transparent hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-slate-200 dark:border-chatBorder shadow-2xs">
+                        <span>{contact.avatar}</span>
+                        <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel" />
+                      </div>
+                      <div className="truncate">
+                        <div className="flex items-center gap-1.5">
+                          <p className={`text-xs leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'font-semibold text-chatTextTitle'}`}>
+                            {contact.name}
+                          </p>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                            contact.status === 'carteira_ativa'
+                              ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+                              : contact.status === 'veterano_retencao'
+                              ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+                              : contact.status === 'lead_instagram'
+                              ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800/40'
+                              : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                          }`}>
+                            {contact.statusLabel}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
+                          <span>{contact.phone}</span>
+                          <span>•</span>
+                          <span className="font-semibold text-brand-700 dark:text-brand-400">{contact.department}</span>
+                        </p>
+                        <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                          {contact.triageContext}
+                        </p>
+                      </div>
+                    </div>
+
+                    {contactUnread > 0 ? (
+                      <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                        {contactUnread}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-chatTextMuted font-medium">
+                        {contact.lastInteraction}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
           </div>
         ) : (
           /* ABA EQUIPE INTERNA (CANAIS + DMS) */

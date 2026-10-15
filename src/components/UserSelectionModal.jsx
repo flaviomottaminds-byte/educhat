@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, UserCheck, Shield, Building2, Mail, CheckCircle2, ArrowRight } from 'lucide-react';
+import { hasFullPortfolioAccess } from '../lib/portfolioAccess';
 
 export default function UserSelectionModal({ isOpen, onClose, collaborators, onSelectUser, currentUserId }) {
   const [search, setSearch] = useState('');
@@ -101,9 +102,13 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
                       <h3 className="font-semibold text-sm text-chatTextTitle truncate">
                         {user.name}
                       </h3>
-                      {isDirector && (
+                      {hasFullPortfolioAccess(user) ? (
                         <span className="text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400 font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-amber-500/30">
-                          <Shield size={10} /> Diretor
+                          <Shield size={10} /> Gestão Geral
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-emerald-500/30">
+                          <UserCheck size={10} /> Carteira Própria
                         </span>
                       )}
                     </div>

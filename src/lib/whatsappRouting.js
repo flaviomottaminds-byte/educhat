@@ -16,6 +16,19 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     triageContext: 'Negociação ativa de matrícula com bolsa para MBA em Gestão Estratégica.'
   },
   {
+    id: 'wa-mariana-costa',
+    name: 'Mariana Costa (Lead Graduação)',
+    phone: '+55 11 97654-3210',
+    avatar: '👩‍💼',
+    department: 'Comercial',
+    assignee: 'Tatiane Salatinos',
+    status: 'carteira_ativa',
+    statusLabel: 'Carteira Ativa',
+    aiActive: false,
+    lastInteraction: '15 min atrás',
+    triageContext: 'Interessada no curso de Pedagogia EAD. Atendimento da carteira de Tatiane Salatinos.'
+  },
+  {
     id: 'wa-juliana-rocha',
     name: 'Juliana Rocha (Aluna Pós)',
     phone: '+55 19 97123-4567',
@@ -60,6 +73,26 @@ export const INITIAL_WHATSAPP_MESSAGES = {
       senderName: 'Gabriel Carvalho',
       text: 'Fala Lucas! Tudo bem? Consegui aprovação sim com o Flávio! Vou te enviar o link de inscrição com o cupom aplicado.',
       timestamp: '13:15',
+      isWhatsApp: true,
+      fromStudent: false
+    }
+  ],
+  'wa-mariana-costa': [
+    {
+      id: 'wa_msg_m1',
+      senderId: 'wa-mariana-costa',
+      senderName: 'Mariana Costa',
+      text: 'Olá Tatiane, boa tarde! Gostaria de saber os valores e a grade da licenciatura em Pedagogia EAD.',
+      timestamp: '14:20',
+      isWhatsApp: true,
+      fromStudent: true
+    },
+    {
+      id: 'wa_msg_m2',
+      senderId: 'u2',
+      senderName: 'Tatiane Salatinos',
+      text: 'Olá Mariana! Tudo ótimo? Claro! Vou te encaminhar a matriz curricular e o plano com condição especial desta semana.',
+      timestamp: '14:25',
       isWhatsApp: true,
       fromStudent: false
     }

@@ -40,6 +40,7 @@ import {
   routeIncomingWhatsAppWebhook,
   processTriageResponse
 } from './lib/whatsappRouting';
+import { hasFullPortfolioAccess, isChatAssignedToUser } from './lib/portfolioAccess';
 
 // Helper: Horário formatado no fuso oficial de São Paulo (America/Sao_Paulo, UTC-3)
 const getSaoPauloTime = (d = new Date()) => {
@@ -310,13 +311,18 @@ export default function App() {
       }
     }
 
-    // Trava de Carteira Ativa do WhatsApp: Se o lead tiver card ativo com um consultor específico, notifica APENAS ele!
-    if (cKey.startsWith('wa-')) {
+    // Trava de Carteira Ativa do WhatsApp: Notifica APENAS o consultor dono da carteira (gestores mantêm auditoria)
+    if (cKey.startsWith('wa-') && !hasFullPortfolioAccess(currentUser)) {
       const contact = whatsAppContacts.find((c) => c.id === cKey);
-      if (contact && contact.status === 'carteira_ativa' && contact.assignee) {
-        if (currentUser.name !== contact.assignee && currentUser.roleType !== 'diretor') {
-          return; // Exclusivo do consultor dono da carteira
-        }
+      const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === cKey);
+      let cachedAsgn = null;
+      try {
+        const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+        cachedAsgn = stored[cKey];
+      } catch {}
+      const targetAssignee = contact?.assignee || cachedAsgn?.assignee || initialContact?.assignee || '';
+      if (!isChatAssignedToUser(targetAssignee, currentUser)) {
+        return; // Exclusivo do consultor dono da carteira
       }
     }
 
@@ -361,12 +367,33 @@ export default function App() {
       setLastSyncTime(timeStr);
 
       // 1. Mensagens
+      const isManager = hasFullPortfolioAccess(currentUser);
+
+      // Pre-carrega mapa de atribuições a partir do localStorage para correlação rápida
+      const storedAssignments = {};
+      try {
+        const cached = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+        Object.assign(storedAssignments, cached);
+      } catch {}
+
       const { data: dbMessages, error: msgError } = await supabase
         .from('messages')
         .select('*')
         .order('created_at', { ascending: true });
 
       if (dbMessages && dbMessages.length > 0) {
+        // Pré-extrai tags de atribuição mais recentes para todas as mensagens recebidas
+        dbMessages.forEach((m) => {
+          if (m.chat_id?.startsWith('wa-') && m.text?.includes('<!-- ASSIGNMENT:')) {
+            const match = m.text.match(/<!-- ASSIGNMENT:(.*?) -->/);
+            if (match) {
+              try {
+                storedAssignments[m.chat_id] = JSON.parse(match[1]);
+              } catch {}
+            }
+          }
+        });
+
         const grouped = {};
         dbMessages.forEach((m) => {
           const key = normalizeChatKey(m.chat_id, currentUser.id);
@@ -377,9 +404,21 @@ export default function App() {
             if (parts.length >= 2) {
               const id1 = parts[0];
               const id2 = parts[1];
-              if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
+              if (currentUser.id !== id1 && currentUser.id !== id2 && !isManager) {
                 return;
               }
+            }
+          }
+
+          // ISOLAMENTO DE CARTEIRA SUPABASE (ITEM 1 E 3):
+          // Se for mensagem de WhatsApp e o usuário for consultor, NÃO expor nem carregar no estado local
+          // conversas que pertençam a outro consultor ou leads não atribuídos a ele.
+          if (key.startsWith('wa-') && !isManager) {
+            const asgn = storedAssignments[key];
+            const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === key);
+            const assignee = asgn?.assignee || initialContact?.assignee || '';
+            if (!isChatAssignedToUser(assignee, currentUser)) {
+              return; // Descarta mensagem da carteira alheia
             }
           }
 
@@ -441,82 +480,99 @@ export default function App() {
           });
         });
 
-        setMessages((prev) => ({ ...prev, ...grouped }));
+        // Limpa e sanitiza o estado de mensagens para que consultores não guardem chaves residuais
+        setMessages((prev) => {
+          const sanitized = {};
+          Object.keys(prev).forEach((k) => {
+            if (k.startsWith('c-')) {
+              sanitized[k] = prev[k];
+            } else if (k.startsWith('dm-')) {
+              const parts = k.replace('dm-', '').split('-');
+              if (isManager || parts.includes(currentUser.id)) {
+                sanitized[k] = prev[k];
+              }
+            } else if (k.startsWith('wa-')) {
+              if (isManager) {
+                sanitized[k] = prev[k];
+              } else {
+                const asgn = storedAssignments[k];
+                const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === k);
+                const assignee = asgn?.assignee || initialContact?.assignee || '';
+                if (isChatAssignedToUser(assignee, currentUser)) {
+                  sanitized[k] = prev[k];
+                }
+              }
+            }
+          });
+          return { ...sanitized, ...grouped };
+        });
 
         // Descoberta dinâmica e restauração de atribuições (Sticky Assignment) a partir do Supabase
         const waKeys = Object.keys(grouped).filter((k) => k.startsWith('wa-'));
-        if (waKeys.length > 0) {
-          // Extrai atribuições salvas em mensagens de histórico e cache local
-          const storedAssignments = {};
-          try {
-            const cached = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-            Object.assign(storedAssignments, cached);
-          } catch {}
 
+        setWhatsAppContacts((prev) => {
+          // Se for consultor, purga contatos que não pertencem à sua carteira
+          const sourceContacts = isManager
+            ? prev
+            : prev.filter((c) => isChatAssignedToUser(c, currentUser));
+
+          const existingIds = new Set(sourceContacts.map((c) => c.id));
+          const newContacts = [];
+
+          // 1. Atualiza contatos existentes com as atribuições persistidas do Supabase
+          const updatedExisting = sourceContacts.map((c) => {
+            const asgn = storedAssignments[c.id];
+            if (asgn) {
+              return {
+                ...c,
+                department: asgn.department || c.department,
+                assignee: asgn.assignee || c.assignee,
+                status: asgn.status || c.status,
+                statusLabel: asgn.statusLabel || c.statusLabel,
+                triageContext: asgn.updatedBy
+                  ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy}`
+                  : c.triageContext
+              };
+            }
+            return c;
+          }).filter((c) => isManager || isChatAssignedToUser(c, currentUser));
+
+          // 2. Adiciona novos contatos descobertos via Supabase aplicando atribuições salvas
           for (const waKey of waKeys) {
-            const list = grouped[waKey] || [];
-            for (let i = list.length - 1; i >= 0; i--) {
-              const match = list[i].text?.match(/<!-- ASSIGNMENT:(.*?) -->/);
-              if (match) {
-                try {
-                  storedAssignments[waKey] = JSON.parse(match[1]);
-                  break;
-                } catch {}
+            if (!existingIds.has(waKey)) {
+              const asgn = storedAssignments[waKey];
+              const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
+              const assignee = asgn?.assignee || initialContact?.assignee || 'Gabriel Carvalho';
+
+              // ISOLAMENTO: Só adiciona se for atribuído ao consultor ou se for gestor
+              if (!isManager && !isChatAssignedToUser(assignee, currentUser)) {
+                continue;
               }
+
+              const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
+              const rawDigits = waKey.replace('wa-', '');
+              const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+
+              newContacts.push({
+                id: waKey,
+                name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
+                phone: formattedPhone,
+                avatar: '👤',
+                department: asgn?.department || 'Comercial',
+                assignee: assignee,
+                status: asgn?.status || 'ura_inedito',
+                statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
+                aiActive: false,
+                lastInteraction: latestMsg?.timestamp || 'Recente',
+                triageContext: asgn
+                  ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}`
+                  : 'Histórico sincronizado do WhatsApp.'
+              });
             }
           }
 
-          setWhatsAppContacts((prev) => {
-            const existingIds = new Set(prev.map((c) => c.id));
-            const newContacts = [];
-
-            // 1. Atualiza contatos existentes com as atribuições persistidas do Supabase
-            const updatedExisting = prev.map((c) => {
-              const asgn = storedAssignments[c.id];
-              if (asgn) {
-                return {
-                  ...c,
-                  department: asgn.department || c.department,
-                  assignee: asgn.assignee || c.assignee,
-                  status: asgn.status || c.status,
-                  statusLabel: asgn.statusLabel || c.statusLabel,
-                  triageContext: asgn.updatedBy
-                    ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy}`
-                    : c.triageContext
-                };
-              }
-              return c;
-            });
-
-            // 2. Adiciona novos contatos descobertos via Supabase aplicando atribuições salvas
-            for (const waKey of waKeys) {
-              if (!existingIds.has(waKey)) {
-                const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
-                const rawDigits = waKey.replace('wa-', '');
-                const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
-                const asgn = storedAssignments[waKey];
-
-                newContacts.push({
-                  id: waKey,
-                  name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
-                  phone: formattedPhone,
-                  avatar: '👤',
-                  department: asgn?.department || 'Comercial',
-                  assignee: asgn?.assignee || 'Gabriel Carvalho',
-                  status: asgn?.status || 'ura_inedito',
-                  statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
-                  aiActive: false,
-                  lastInteraction: latestMsg?.timestamp || 'Recente',
-                  triageContext: asgn
-                    ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}`
-                    : 'Histórico sincronizado do WhatsApp.'
-                });
-              }
-            }
-
-            return newContacts.length > 0 ? [...updatedExisting, ...newContacts] : updatedExisting;
-          });
-        }
+          return newContacts.length > 0 ? [...updatedExisting, ...newContacts] : updatedExisting;
+        });
       }
 
       // 2. Tarefas do Kanban
@@ -645,8 +701,35 @@ export default function App() {
           if (cKey.startsWith('c-')) {
             const ch = channels.find((c) => c.id === cKey);
             const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-            if (ch && ch.department !== 'Todos' && norm(ch.department) !== norm(currentUser.department) && currentUser.roleType !== 'diretor') {
+            if (ch && ch.department !== 'Todos' && norm(ch.department) !== norm(currentUser.department) && !hasFullPortfolioAccess(currentUser)) {
               return; // Canal restrito de outro departamento
+            }
+          }
+
+          // ISOLAMENTO DE CARTEIRA REALTIME (ITEM 1 E 3):
+          // Se for mensagem de WhatsApp e o usuário logado for consultor, verifica se pertence estritamente à sua carteira
+          if (cKey.startsWith('wa-') && !hasFullPortfolioAccess(currentUser)) {
+            // Verifica se a mensagem contém nova tag de atribuição manual em tempo real
+            const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:(.*?) -->/);
+            let realtimeAsgn = null;
+            if (asgnMatch) {
+              try {
+                realtimeAsgn = JSON.parse(asgnMatch[1]);
+              } catch {}
+            }
+
+            let cachedAsgn = null;
+            try {
+              const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+              cachedAsgn = stored[cKey];
+            } catch {}
+
+            const existingContact = whatsAppContacts.find((c) => c.id === cKey);
+            const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === cKey);
+            const targetAssignee = realtimeAsgn?.assignee || existingContact?.assignee || cachedAsgn?.assignee || initialContact?.assignee || '';
+
+            if (!isChatAssignedToUser(targetAssignee, currentUser)) {
+              return; // Descarta: conversa da carteira de outro consultor ou lead não atribuído
             }
           }
 
@@ -1688,8 +1771,27 @@ export default function App() {
     try {
       localStorage.setItem('educhat_user_id', newUser.id);
     } catch {}
+
+    const isNewUserManager = hasFullPortfolioAccess(newUser);
+
     if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
       setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
+    }
+
+    // Se o chat ativo for WhatsApp e o novo perfil for consultor sem acesso a este chat,
+    // redireciona para a primeira conversa atribuída a ele ou para o canal #geral
+    if (activeChat.type === 'whatsapp' && !isNewUserManager) {
+      const currentContact = whatsAppContacts.find((c) => c.id === activeChat.id);
+      if (!currentContact || !isChatAssignedToUser(currentContact, newUser)) {
+        const myContact =
+          whatsAppContacts.find((c) => isChatAssignedToUser(c, newUser)) ||
+          INITIAL_WHATSAPP_CONTACTS.find((c) => isChatAssignedToUser(c, newUser));
+        if (myContact) {
+          setActiveChat({ type: 'whatsapp', id: myContact.id });
+        } else {
+          setActiveChat({ type: 'channel', id: 'c-geral' });
+        }
+      }
     }
   };
 
