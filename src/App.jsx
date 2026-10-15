@@ -455,16 +455,29 @@ export default function App() {
         });
         if (dbStudents.length > 0) {
           setEduControlStudents((prev) => {
-            const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
-            dbStudents.forEach((s) => {
-              const k = s.cleanDigits || s.id;
-              map.set(k, { ...(map.get(k) || {}), ...s });
+            const studentList = [...prev];
+            dbStudents.forEach((incoming) => {
+              const existingIdx = studentList.findIndex((s) => {
+                if (incoming.cleanCPF && s.cleanCPF && incoming.cleanCPF === s.cleanCPF) return true;
+                if (incoming.cleanDigits && s.cleanDigits && incoming.cleanDigits === s.cleanDigits) return true;
+                return false;
+              });
+              if (existingIdx !== -1) {
+                const existing = studentList[existingIdx];
+                studentList[existingIdx] = {
+                  ...existing,
+                  ...incoming,
+                  assignee: existing.assignee || incoming.assignee || 'Gabriel Carvalho',
+                  department: existing.department || incoming.department || 'Secretaria Acadêmica'
+                };
+              } else {
+                studentList.push(incoming);
+              }
             });
-            const merged = Array.from(map.values());
             try {
-              localStorage.setItem('educhat_educontrol_students', JSON.stringify(merged));
+              localStorage.setItem('educhat_educontrol_students', JSON.stringify(studentList));
             } catch {}
-            return merged;
+            return studentList;
           });
         }
 
@@ -766,13 +779,27 @@ export default function App() {
               try {
                 const sRecord = JSON.parse(match[1]);
                 setEduControlStudents((prev) => {
-                  const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
-                  map.set(sRecord.cleanDigits || sRecord.id, { ...(map.get(sRecord.cleanDigits || sRecord.id) || {}), ...sRecord });
-                  const updated = Array.from(map.values());
+                  const studentList = [...prev];
+                  const existingIdx = studentList.findIndex((s) => {
+                    if (sRecord.cleanCPF && s.cleanCPF && sRecord.cleanCPF === s.cleanCPF) return true;
+                    if (sRecord.cleanDigits && s.cleanDigits && sRecord.cleanDigits === s.cleanDigits) return true;
+                    return false;
+                  });
+                  if (existingIdx !== -1) {
+                    const existing = studentList[existingIdx];
+                    studentList[existingIdx] = {
+                      ...existing,
+                      ...sRecord,
+                      assignee: existing.assignee || sRecord.assignee || 'Gabriel Carvalho',
+                      department: existing.department || sRecord.department || 'Secretaria Acadêmica'
+                    };
+                  } else {
+                    studentList.push(sRecord);
+                  }
                   try {
-                    localStorage.setItem('educhat_educontrol_students', JSON.stringify(updated));
+                    localStorage.setItem('educhat_educontrol_students', JSON.stringify(studentList));
                   } catch {}
-                  return updated;
+                  return studentList;
                 });
               } catch {}
             }
@@ -2098,60 +2125,128 @@ export default function App() {
     }
   };
 
-  // Sincronização em Massa de Alunos e Clientes da Base EduControl (.CSV / .TXT)
-  const handleSyncEduControlStudents = async (newStudents) => {
+  // Sincronização em Massa de Alunos e Clientes da Base EduControl (Padrão Base44)
+  // Utiliza o CPF como chave primária de unicidade e aplica a regra de Sticky Assignment (permanência de consultor)
+  const handleSyncEduControlStudents = async (newStudents, overrideOptions = {}) => {
     if (!newStudents || newStudents.length === 0) return;
     const timeStr = getSaoPauloTime();
 
-    // 1. Atualizar base de alunos local (mesclando por cleanDigits/waId)
+    // 1. Atualizar base de alunos local com Upsert baseado em CPF (e fallback em Telefone)
     setEduControlStudents((prev) => {
-      const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
-      newStudents.forEach((s) => {
-        const key = s.cleanDigits || s.id;
-        map.set(key, { ...(map.get(key) || {}), ...s, lastSync: timeStr });
+      const studentList = [...prev];
+      newStudents.forEach((incoming) => {
+        // Encontra registro existente por CPF (chave primária) ou Telefone (fallback)
+        const existingIdx = studentList.findIndex((s) => {
+          if (incoming.cleanCPF && s.cleanCPF && incoming.cleanCPF === s.cleanCPF) return true;
+          if (incoming.cleanDigits && s.cleanDigits && incoming.cleanDigits === s.cleanDigits) return true;
+          return false;
+        });
+
+        if (existingIdx !== -1) {
+          // REGRA DE UPSERT: Atualiza dados cadastrais (telefone, e-mail, nome, curso, etc.)
+          // PRESERVA o consultor responsável atual (Sticky Assignment) e departamento
+          const existing = studentList[existingIdx];
+          studentList[existingIdx] = {
+            ...existing,
+            ...incoming,
+            // Sticky Assignment: Preserva consultor e departamento se já existirem (a menos que haja override explícito)
+            assignee: overrideOptions.forceAssignee || existing.assignee || incoming.assignee || 'Gabriel Carvalho',
+            department: overrideOptions.forceDepartment || existing.department || incoming.department || 'Secretaria Acadêmica',
+            lastSync: timeStr
+          };
+        } else {
+          // Novo cadastro
+          studentList.push({
+            ...incoming,
+            assignee: overrideOptions.forceAssignee || incoming.assignee || 'Gabriel Carvalho',
+            department: overrideOptions.forceDepartment || incoming.department || 'Secretaria Acadêmica',
+            lastSync: timeStr
+          });
+        }
       });
-      const updated = Array.from(map.values());
+
       try {
-        localStorage.setItem('educhat_educontrol_students', JSON.stringify(updated));
+        localStorage.setItem('educhat_educontrol_students', JSON.stringify(studentList));
       } catch {}
-      return updated;
+      return studentList;
     });
 
-    // 2. Atualizar ou incluir contatos correspondentes no WhatsApp
+    // 2. Atualizar ou incluir contatos correspondentes no WhatsApp (Sticky Assignment)
     setWhatsAppContacts((prev) => {
-      const contactMap = new Map(prev.map((c) => [c.id, c]));
+      const contactList = [...prev];
       newStudents.forEach((s) => {
         const contactId = s.waId || `wa-${s.cleanDigits}`;
-        const existing = contactMap.get(contactId);
-        contactMap.set(contactId, {
-          id: contactId,
-          name: s.name,
-          phone: s.phone,
-          avatar: '🎓',
-          department: s.department || existing?.department || 'Secretaria Acadêmica',
-          assignee: s.assignee || existing?.assignee || 'Gabriel Carvalho',
-          status: s.academicStatus === 'Certificado' || s.academicStatus === 'Veterano'
-            ? 'veterano_retencao'
-            : 'carteira_ativa',
-          statusLabel: `${s.academicStatus} • ${s.course}`,
-          aiActive: existing ? existing.aiActive : false,
-          lastInteraction: existing?.lastInteraction || 'Sincronizado EduControl',
-          triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • Matrícula ${s.matricula}`
+        // Procura contato por contactId, CPF ou Telefone
+        const existingIdx = contactList.findIndex((c) => {
+          if (c.id === contactId) return true;
+          if (s.cleanCPF && c.cleanCPF && s.cleanCPF === c.cleanCPF) return true;
+          if (s.cleanCPF && c.cpf && String(c.cpf).replace(/\D/g, '') === s.cleanCPF) return true;
+          if (s.cleanDigits && c.phone && String(c.phone).replace(/\D/g, '').endsWith(s.cleanDigits.slice(-8))) return true;
+          return false;
         });
+
+        if (existingIdx !== -1) {
+          // Atualiza dados cadastrais mantendo consultor responsável (Sticky Assignment)
+          const existing = contactList[existingIdx];
+          contactList[existingIdx] = {
+            ...existing,
+            name: s.name || existing.name,
+            phone: s.phone || existing.phone,
+            email: s.email || existing.email,
+            cpf: s.cpf || existing.cpf,
+            cleanCPF: s.cleanCPF || existing.cleanCPF,
+            // Preserva Sticky Assignment:
+            assignee: overrideOptions.forceAssignee || existing.assignee || s.assignee || 'Gabriel Carvalho',
+            department: overrideOptions.forceDepartment || existing.department || s.department || 'Secretaria Acadêmica',
+            status: s.academicStatus === 'Certificado' || s.academicStatus === 'Veterano'
+              ? 'veterano_retencao'
+              : 'carteira_ativa',
+            statusLabel: `${s.academicStatus} • ${s.course}`,
+            lastInteraction: existing.lastInteraction || 'Sincronizado EduControl (Base44)',
+            triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • CPF ${s.cpf || '-'} • Matrícula ${s.matricula}`
+          };
+        } else {
+          // Novo contato criado
+          contactList.push({
+            id: contactId,
+            name: s.name,
+            phone: s.phone,
+            email: s.email,
+            cpf: s.cpf,
+            cleanCPF: s.cleanCPF,
+            avatar: '🎓',
+            department: overrideOptions.forceDepartment || s.department || 'Secretaria Acadêmica',
+            assignee: overrideOptions.forceAssignee || s.assignee || 'Gabriel Carvalho',
+            status: s.academicStatus === 'Certificado' || s.academicStatus === 'Veterano'
+              ? 'veterano_retencao'
+              : 'carteira_ativa',
+            statusLabel: `${s.academicStatus} • ${s.course}`,
+            aiActive: false,
+            lastInteraction: 'Sincronizado EduControl (Base44)',
+            triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • CPF ${s.cpf || '-'} • Matrícula ${s.matricula}`
+          });
+        }
       });
-      return Array.from(contactMap.values());
+      return contactList;
     });
 
-    // 3. Persistência no Supabase para sincronização em tempo real entre todos os consultores
+    // 3. Persistência no Supabase com CPF como Chave Primária de Unicidade
     try {
-      const rowsToInsert = newStudents.map((s, idx) => ({
-        id: `ec_rec_${s.cleanDigits || Date.now() + '_' + idx}`,
-        chat_id: 'sys_educontrol_students',
-        sender_id: 'educontrol_sync',
-        sender_name: 'EduControl Database',
-        text: `<!-- STUDENT_RECORD:${JSON.stringify(s)} -->`,
-        timestamp: timeStr
-      }));
+      const rowsToInsert = newStudents.map((s, idx) => {
+        // Chave de unicidade no banco: prioriza ec_cpf_{CPF}
+        const recordKey = s.cleanCPF
+          ? `ec_cpf_${s.cleanCPF}`
+          : (s.cleanDigits ? `ec_wa_${s.cleanDigits}` : `ec_idx_${Date.now()}_${idx}`);
+
+        return {
+          id: recordKey,
+          chat_id: 'sys_educontrol_students',
+          sender_id: 'educontrol_sync',
+          sender_name: 'EduControl (Base44)',
+          text: `<!-- STUDENT_RECORD:${JSON.stringify(s)} -->`,
+          timestamp: timeStr
+        };
+      });
 
       const chunkSize = 20;
       for (let i = 0; i < rowsToInsert.length; i += chunkSize) {
@@ -2160,12 +2255,12 @@ export default function App() {
       }
 
       // Notificação de sistema no canal #geral
-      const noticeText = `🎓 **Base de Alunos EduControl Sincronizada!**\n\nForam sincronizados **${newStudents.length} alunos** da Faculdade Olavo Bilac / Grupo EstudeMais.\nO reconhecimento inteligente em tempo real e os crachás acadêmicos já estão ativos no atendimento WhatsApp.`;
+      const noticeText = `🎓 **Base de Alunos EduControl (Base44) Sincronizada!**\n\nForam processados e atualizados **${newStudents.length} alunos** via CPF e Telefone (Anti-duplicidade e Sticky Assignment ativos).\nO reconhecimento em tempo real e os dossiês 360º já estão atualizados no EduChat.`;
       await supabase.from('messages').insert([{
         id: `ec_sync_notif_${Date.now()}`,
         chat_id: 'c-geral',
         sender_id: 'system',
-        sender_name: 'EduControl (Sistema)',
+        sender_name: 'EduControl (Base44)',
         text: noticeText,
         timestamp: timeStr
       }]);

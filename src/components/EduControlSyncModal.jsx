@@ -18,7 +18,11 @@ import {
   Building,
   UserCheck,
   Award,
-  BookOpen
+  BookOpen,
+  Mail,
+  ShieldCheck,
+  Phone,
+  FileText
 } from 'lucide-react';
 import { parseEduControlFile } from '../lib/eduControl';
 
@@ -78,19 +82,20 @@ export default function EduControlSyncModal({
     setParsedStudents(parsed);
   };
 
+  // Modelo CSV Oficial Padrão Base44 (Nome Completo, CPF, Telefone e E-mail)
   const handleDownloadSample = () => {
-    const csvSample = `Nome;Telefone;Curso;Status;Polo;Matrícula;Consultor;Email
-Beatriz Oliveira;+55 11 97766-5544;MBA em Gestão Escolar e Inovação;Ativo;Polo São Paulo Matriz;EC-2024-5501;Gabriel Carvalho;beatriz@escola.com.br
-Lucas Fagundes;+55 19 98877-1122;Pós em Neuropsicopedagogia Clínica;Certificado;Polo Campinas;EC-2023-3321;Tatiane;lucas.fagundes@clinica.com.br
-Carla Martins;+55 21 99112-3344;Formação Pedagógica em Letras;Veterano;Polo Rio de Janeiro;EC-2022-7711;Luiz Augusto;carla.martins@ensino.br
-Rodrigo Alencar;+55 31 99554-2211;MBA em Docência no Ensino Superior;Ativo;Polo Belo Horizonte;EC-2024-9988;Gabriel Carvalho;rodrigo@faculdade.com.br
-Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Certificado;Polo Curitiba;EC-2023-1144;Tatiane;vanessa@oab.org.br`;
+    const csvSample = `Nome Completo;CPF;Telefone;E-mail;Curso;Status;Polo;Matrícula;Consultor
+Beatriz Oliveira;123.456.789-01;+55 (11) 97766-5544;beatriz@escola.com.br;MBA em Gestão Escolar e Inovação;Ativo;Polo São Paulo Matriz;EC-2024-5501;Gabriel Carvalho
+Lucas Fagundes;234.567.890-12;+55 (19) 98877-1122;lucas.fagundes@clinica.com.br;Pós em Neuropsicopedagogia Clínica;Certificado;Polo Campinas;EC-2023-3321;Tatiane
+Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formação Pedagógica em Letras;Veterano;Polo Rio de Janeiro;EC-2022-7711;Luiz Augusto
+Rodrigo Alencar;456.789.012-34;+55 (31) 99554-2211;rodrigo@faculdade.com.br;MBA em Docência no Ensino Superior;Ativo;Polo Belo Horizonte;EC-2024-9988;Gabriel Carvalho
+Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direito Educacional e Legislação MEC;Certificado;Polo Curitiba;EC-2023-1144;Tatiane`;
 
     const blob = new Blob([csvSample], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'modelo_alunos_educontrol.csv');
+    link.setAttribute('download', 'modelo_alunos_educontrol_base44.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -102,18 +107,17 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
 
     setSyncStatus('syncing');
 
-    // Aplica eventuais overrides de consultor e departamento se selecionados
-    const finalStudents = parsedStudents.map((s) => ({
-      ...s,
-      assignee: overrideAssignee || s.assignee || 'Gabriel Carvalho',
-      department: overrideDept || s.department || 'Secretaria Acadêmica'
-    }));
+    // Opções de sobrescrita caso o gestor defina manualmente; caso contrário, vigora o Sticky Assignment
+    const options = {
+      forceAssignee: overrideAssignee || undefined,
+      forceDepartment: overrideDept || undefined
+    };
 
     try {
       if (onSyncStudents) {
-        await onSyncStudents(finalStudents);
+        await onSyncStudents(parsedStudents, options);
       }
-      setSyncCount(finalStudents.length);
+      setSyncCount(parsedStudents.length);
       setSyncStatus('success');
     } catch (err) {
       console.error('Erro ao sincronizar base:', err);
@@ -121,21 +125,30 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
     }
   };
 
-  // Filtragem da base já sincronizada
+  // Filtragem da base já sincronizada (por Nome, CPF, Telefone, E-mail, Curso, Polo ou Status)
   const cleanFilter = searchFilter.trim().toLowerCase();
+  const cleanFilterDigits = searchFilter.replace(/\D/g, '');
+
   const filteredExisting = currentStudents.filter((s) => {
     if (!s) return false;
     const name = (s.name || '').toLowerCase();
-    const phone = (s.phone || '').toLowerCase();
+    const phoneDigits = (s.phone || s.cleanDigits || '').replace(/\D/g, '');
+    const cpfDigits = (s.cpf || s.cleanCPF || '').replace(/\D/g, '');
+    const email = (s.email || '').toLowerCase();
     const course = (s.course || '').toLowerCase();
     const polo = (s.polo || '').toLowerCase();
     const status = (s.academicStatus || '').toLowerCase();
+    const matricula = (s.matricula || '').toLowerCase();
+
     return (
       name.includes(cleanFilter) ||
-      phone.includes(cleanFilter) ||
+      (cleanFilterDigits && phoneDigits.includes(cleanFilterDigits)) ||
+      (cleanFilterDigits && cpfDigits.includes(cleanFilterDigits)) ||
+      email.includes(cleanFilter) ||
       course.includes(cleanFilter) ||
       polo.includes(cleanFilter) ||
-      status.includes(cleanFilter)
+      status.includes(cleanFilter) ||
+      matricula.includes(cleanFilter)
     );
   });
 
@@ -152,14 +165,17 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-slate-800 dark:text-slate-100 text-base leading-tight">
-                  Sincronização de Base EduControl
+                  Sincronização de Alunos EduControl
                 </h3>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/70 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
-                  Módulo Acadêmico & Dossiê
+                  Padrão Base44
+                </span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40 hidden sm:inline-block">
+                  Anti-duplicidade CPF Ativa
                 </span>
               </div>
               <p className="text-xs text-chatTextMuted">
-                Importe e cruze dados de alunos (cursos, polos, matrículas e status) para reconhecimento em tempo real no WhatsApp.
+                Importação blindada com os 4 campos essenciais: <strong>Nome Completo, CPF, Telefone e E-mail</strong>.
               </p>
             </div>
           </div>
@@ -209,7 +225,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
               }`}
             >
               <Users size={14} />
-              Alunos na Base ({currentStudents.length})
+              Alunos Reconhecidos ({currentStudents.length})
             </button>
           </div>
 
@@ -217,15 +233,26 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
             type="button"
             onClick={handleDownloadSample}
             className="text-[11px] text-purple-700 dark:text-purple-400 hover:underline flex items-center gap-1 font-semibold pb-2"
-            title="Baixar arquivo modelo no padrão do EduControl"
+            title="Baixar modelo com os 4 campos do EduControl (Nome, CPF, Telefone, E-mail)"
           >
-            <Download size={13} /> Baixar Modelo CSV
+            <Download size={13} /> Baixar Modelo Base44
           </button>
         </div>
 
         {/* Corpo do Modal */}
         <div className="p-4 sm:p-6 overflow-y-auto flex-1 space-y-4">
           
+          {/* Card explicativo sobre a Regra de Upsert e Anti-Duplicidade */}
+          <div className="p-3 bg-purple-50/60 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 rounded-xl text-xs text-purple-900 dark:text-purple-200 flex items-start gap-2.5">
+            <ShieldCheck size={18} className="text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <span className="font-bold">Regra Anti-Duplicidade & Permanência (Sticky Assignment):</span>
+              <p className="text-[11px] text-purple-800 dark:text-purple-300 mt-0.5">
+                O <strong>CPF</strong> é a chave primária única no Supabase. Se o aluno já existir, seus dados (telefone, e-mail, nome) são atualizados preservando integralmente o <strong>consultor responsável atual</strong>. Se o CPF for inédito, um novo cadastro é adicionado à carteira.
+              </p>
+            </div>
+          </div>
+
           {/* ABA 1: UPLOAD DE ARQUIVO */}
           {activeTab === 'upload' && (
             <div className="space-y-4">
@@ -244,10 +271,10 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                   <Upload size={22} />
                 </div>
                 <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  Arraste ou clique para selecionar o arquivo do EduControl
+                  Arraste ou clique para selecionar o CSV exportado do EduControl
                 </h4>
                 <p className="text-xs text-chatTextMuted max-w-md mx-auto">
-                  Suporta arquivos .CSV e .TXT delimitados por vírgula, ponto e vírgula, tabulação ou pipe (|).
+                  Suporta arquivos .CSV e .TXT codificados em UTF-8 com separadores por vírgula (,) ou ponto e vírgula (;), aspas e quebras de linha.
                 </p>
                 {fileName && (
                   <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 bg-white dark:bg-chatCard rounded-lg border border-purple-300 dark:border-purple-700 text-xs font-semibold text-purple-700 dark:text-purple-300 shadow-xs">
@@ -268,14 +295,14 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
               <textarea
                 value={fileContent}
                 onChange={(e) => handleTextPaste(e.target.value)}
-                placeholder="Nome;Telefone;Curso;Status;Polo;Matrícula;Consultor&#10;Mariana Silva;11988887777;MBA Gestão Escolar;Ativo;Polo Campinas;EC-2024-101;Tatiane"
+                placeholder="Nome Completo;CPF;Telefone;E-mail;Curso;Status&#10;Mariana Silva;123.456.789-01;11988887777;mariana@exemplo.com.br;MBA Gestão Escolar;Ativo"
                 rows={7}
                 className="w-full text-xs font-mono p-3 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-purple-500 transition"
               />
               <p className="text-[11px] text-chatTextMuted">
                 {parsedStudents.length > 0
                   ? `✅ ${parsedStudents.length} aluno(s) identificado(s) no texto colado.`
-                  : 'Cole as linhas diretamente da sua planilha ou sistema de gestão.'}
+                  : 'Cole as colunas de Nome, CPF, Telefone e E-mail diretamente da planilha do EduControl.'}
               </p>
             </div>
           )}
@@ -290,7 +317,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                     type="text"
                     value={searchFilter}
                     onChange={(e) => setSearchFilter(e.target.value)}
-                    placeholder="Filtrar por nome, telefone, curso, polo ou status..."
+                    placeholder="Filtrar por Nome, CPF, Telefone, E-mail, Curso, Polo ou Status..."
                     className="w-full text-xs pl-8 pr-3 py-2 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-purple-500"
                   />
                 </div>
@@ -312,7 +339,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                           {s.name?.charAt(0) || 'A'}
                         </div>
                         <div>
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="font-bold text-chatTextTitle">{s.name}</span>
                             <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
                               s.academicStatus === 'Ativo'
@@ -325,11 +352,20 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                             }`}>
                               {s.academicStatus}
                             </span>
-                            <span className="text-[10px] text-chatTextMuted">({s.matricula})</span>
+                            {s.cpf && (
+                              <span className="text-[10px] font-mono font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-chatSidebar px-1.5 py-0.2 rounded">
+                                CPF: {s.cpf}
+                              </span>
+                            )}
                           </div>
                           <p className="text-[10.5px] text-chatTextMuted mt-0.5">
                             {s.course} • 📍 {s.polo} • 👨‍💼 {s.assignee}
                           </p>
+                          {s.email && (
+                            <p className="text-[10px] text-blue-600 dark:text-blue-400 mt-0.5">
+                              ✉️ {s.email}
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="text-right shrink-0">
@@ -349,14 +385,14 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
                   <Sparkles size={14} className="text-purple-600" />
-                  Pré-visualização dos Alunos a Sincronizar ({parsedStudents.length}):
+                  Alunos Prontos para Sincronização ({parsedStudents.length}):
                 </span>
                 <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                  ✓ Validação e deduplicação aplicadas
+                  ✓ Validação por CPF & Telefone
                 </span>
               </div>
 
-              {/* Controles de Sobrescrita de Consultor e Fila */}
+              {/* Controles Opcionais de Sobrescrita de Consultor e Fila */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-3 bg-slate-50 dark:bg-chatCard rounded-xl border border-slate-200 dark:border-chatBorder text-xs">
                 <div>
                   <label className="block text-[10.5px] font-bold text-chatTextMuted uppercase mb-1">
@@ -367,7 +403,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                     onChange={(e) => setOverrideAssignee(e.target.value)}
                     className="w-full text-xs p-1.5 rounded-lg bg-white dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle font-medium"
                   >
-                    <option value="">-- Manter consultor indicado no arquivo --</option>
+                    <option value="">-- Preservar consultor atual (Sticky Assignment) --</option>
                     {(collaborators || []).filter(c => !c.isBot).map(c => (
                       <option key={c.id} value={c.name}>{c.name} ({c.department})</option>
                     ))}
@@ -391,15 +427,16 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                 </div>
               </div>
 
-              {/* Tabela de Amostra */}
-              <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 dark:border-chatBorder">
+              {/* Tabela de Amostra com os 4 Campos Essenciais em Destaque */}
+              <div className="max-h-52 overflow-y-auto rounded-xl border border-slate-200 dark:border-chatBorder">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-slate-100 dark:bg-chatSidebar sticky top-0 text-[10.5px] font-bold text-slate-700 dark:text-slate-300">
                     <tr>
-                      <th className="p-2 pl-3">Nome do Aluno</th>
-                      <th className="p-2">WhatsApp</th>
-                      <th className="p-2">Curso EduControl</th>
-                      <th className="p-2">Polo</th>
+                      <th className="p-2 pl-3">Nome Completo</th>
+                      <th className="p-2">CPF</th>
+                      <th className="p-2">Telefone</th>
+                      <th className="p-2">E-mail</th>
+                      <th className="p-2">Curso</th>
                       <th className="p-2">Status</th>
                       <th className="p-2 pr-3">Consultor</th>
                     </tr>
@@ -408,9 +445,10 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                     {parsedStudents.slice(0, 10).map((s, i) => (
                       <tr key={i} className="hover:bg-slate-50 dark:hover:bg-chatCard/50">
                         <td className="p-2 pl-3 font-semibold text-slate-800 dark:text-slate-200">{s.name}</td>
+                        <td className="p-2 font-mono text-[11px] text-purple-700 dark:text-purple-300 font-semibold">{s.cpf || '-'}</td>
                         <td className="p-2 font-mono text-slate-600 dark:text-slate-400">{s.phone}</td>
-                        <td className="p-2 text-slate-700 dark:text-slate-300 truncate max-w-[150px]">{s.course}</td>
-                        <td className="p-2 text-slate-600 dark:text-slate-400">{s.polo}</td>
+                        <td className="p-2 text-slate-600 dark:text-slate-400 truncate max-w-[140px]">{s.email || '-'}</td>
+                        <td className="p-2 text-slate-700 dark:text-slate-300 truncate max-w-[130px]">{s.course}</td>
                         <td className="p-2">
                           <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
                             s.academicStatus === 'Ativo'
@@ -425,7 +463,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                           </span>
                         </td>
                         <td className="p-2 pr-3 text-slate-700 dark:text-slate-300 font-medium">
-                          {overrideAssignee || s.assignee}
+                          {overrideAssignee || s.assignee || 'Gabriel Carvalho'}
                         </td>
                       </tr>
                     ))}
@@ -445,7 +483,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 rounded-xl flex items-center gap-2 text-xs text-emerald-900 dark:text-emerald-200 animate-in fade-in">
               <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
               <span>
-                <strong>Sincronização concluída com sucesso!</strong> {syncCount} alunos atualizados no Supabase e reconhecidos instantaneamente no EduChat.
+                <strong>Sincronização concluída com sucesso!</strong> {syncCount} alunos processados via CPF e Telefone, com atualização no Supabase e preservação de carteira (Sticky Assignment).
               </span>
             </div>
           )}
@@ -479,7 +517,7 @@ Vanessa Lima;+55 41 98443-6677;Pós em Direito Educacional e Legislação MEC;Ce
                 ) : (
                   <>
                     <Database size={14} />
-                    Sincronizar {parsedStudents.length} Alunos com o Supabase
+                    Sincronizar {parsedStudents.length} Alunos no Supabase
                   </>
                 )}
               </button>

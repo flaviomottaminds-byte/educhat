@@ -124,12 +124,17 @@ export default function Sidebar({
     const studentPolo = (student?.polo || '').toLowerCase();
     const studentStatus = (student?.academicStatus || '').toLowerCase();
     const studentMatricula = (student?.matricula || '').toLowerCase();
+    const studentCPF = (student?.cpf || student?.cleanCPF || '').replace(/\D/g, '');
+    const studentEmail = (student?.email || '').toLowerCase();
 
     const name = (c.name || '').toLowerCase();
     const phone = (c.phone || '').replace(/\D/g, '');
+    const contactCPF = (c.cpf || c.cleanCPF || '').replace(/\D/g, '');
+    const contactEmail = (c.email || '').toLowerCase();
     const department = (c.department || '').toLowerCase();
     const statusLabel = (c.statusLabel || '').toLowerCase();
-    const cleanSearchPhone = cleanSearch.replace(/\D/g, '');
+    const cleanSearchDigits = cleanSearch.replace(/\D/g, '');
+
     return (
       name.includes(cleanSearch) ||
       studentName.includes(cleanSearch) ||
@@ -137,7 +142,11 @@ export default function Sidebar({
       studentPolo.includes(cleanSearch) ||
       studentStatus.includes(cleanSearch) ||
       studentMatricula.includes(cleanSearch) ||
-      (cleanSearchPhone && phone.includes(cleanSearchPhone)) ||
+      studentEmail.includes(cleanSearch) ||
+      contactEmail.includes(cleanSearch) ||
+      (cleanSearchDigits && phone.includes(cleanSearchDigits)) ||
+      (cleanSearchDigits && studentCPF.includes(cleanSearchDigits)) ||
+      (cleanSearchDigits && contactCPF.includes(cleanSearchDigits)) ||
       department.includes(cleanSearch) ||
       statusLabel.includes(cleanSearch)
     );
@@ -498,6 +507,12 @@ export default function Sidebar({
                         </div>
                         <p className="text-[10px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
                           <span>{contact.phone}</span>
+                          {student?.cpf && (
+                            <>
+                              <span>•</span>
+                              <span className="font-mono text-purple-700 dark:text-purple-300 font-medium">CPF: {student.cpf}</span>
+                            </>
+                          )}
                           <span>•</span>
                           <span className="font-semibold text-brand-700 dark:text-brand-400">
                             {student ? student.course : contact.department}

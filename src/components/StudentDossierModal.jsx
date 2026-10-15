@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   GraduationCap,
   X,
@@ -15,7 +15,9 @@ import {
   ExternalLink,
   ShieldCheck,
   Clock,
-  Sparkles
+  Sparkles,
+  Copy,
+  Check
 } from 'lucide-react';
 
 export default function StudentDossierModal({
@@ -23,7 +25,16 @@ export default function StudentDossierModal({
   onClose,
   student
 }) {
+  const [copiedField, setCopiedField] = useState(null);
+
   if (!isOpen || !student) return null;
+
+  const handleCopy = (text, fieldName) => {
+    if (!text) return;
+    navigator.clipboard?.writeText(text);
+    setCopiedField(fieldName);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
 
   const statusBg =
     student.academicStatus === 'Ativo'
@@ -54,7 +65,7 @@ export default function StudentDossierModal({
               <p className="text-xs text-purple-200 mt-0.5 flex items-center gap-2">
                 <span>Matrícula: <strong>{student.matricula}</strong></span>
                 <span>•</span>
-                <span>Base Oficial EduControl</span>
+                <span>Base EduControl (Base44)</span>
               </p>
             </div>
           </div>
@@ -89,19 +100,87 @@ export default function StudentDossierModal({
               </div>
             </div>
 
-            {/* Atendimento & Consultor */}
+            {/* Atendimento & Consultor (Sticky Assignment) */}
             <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder space-y-2">
               <span className="text-[10.5px] font-bold text-chatTextMuted uppercase tracking-wider flex items-center gap-1.5">
-                <UserCheck size={13} className="text-brand-600" /> Consultor & Setor Responsável
+                <UserCheck size={13} className="text-brand-600" /> Consultor Titular (Sticky Assignment)
               </span>
               <div>
                 <p className="text-sm font-bold text-slate-800 dark:text-slate-100">
                   {student.assignee || 'Gabriel Carvalho'}
                 </p>
                 <p className="text-xs text-brand-600 dark:text-brand-400 font-semibold mt-1">
-                  {student.department || 'Secretaria Acadêmica'}
+                  Fila: {student.department || 'Secretaria Acadêmica'}
                 </p>
               </div>
+            </div>
+          </div>
+
+          {/* Dados Pessoais e Cadastrais Essenciais (Padrão Base44) */}
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder space-y-3 text-xs">
+            <span className="font-bold text-chatTextMuted uppercase tracking-wider block text-[10.5px]">
+              Dados Cadastrais Oficiais (EduControl Base44)
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-chatTextTitle">
+              
+              {/* CPF */}
+              <div className="p-2.5 rounded-xl bg-white dark:bg-chatPanel border border-slate-100 dark:border-chatBorder flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-chatTextMuted uppercase">CPF (Chave Única)</span>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="font-mono font-bold text-purple-700 dark:text-purple-300">
+                    {student.cpf || student.cleanCPF || 'Não informado'}
+                  </span>
+                  {(student.cpf || student.cleanCPF) && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(student.cpf || student.cleanCPF, 'cpf')}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-chatCard rounded text-slate-400 hover:text-purple-600 transition cursor-pointer"
+                      title="Copiar CPF"
+                    >
+                      {copiedField === 'cpf' ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Telefone / WhatsApp */}
+              <div className="p-2.5 rounded-xl bg-white dark:bg-chatPanel border border-slate-100 dark:border-chatBorder flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-chatTextMuted uppercase">WhatsApp / Telefone</span>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="font-mono font-medium text-emerald-700 dark:text-emerald-400">
+                    {student.phone}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(student.phone, 'phone')}
+                    className="p-1 hover:bg-slate-100 dark:hover:bg-chatCard rounded text-slate-400 hover:text-emerald-600 transition cursor-pointer"
+                    title="Copiar Telefone"
+                  >
+                    {copiedField === 'phone' ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* E-mail */}
+              <div className="p-2.5 rounded-xl bg-white dark:bg-chatPanel border border-slate-100 dark:border-chatBorder flex flex-col justify-between">
+                <span className="text-[10px] font-bold text-chatTextMuted uppercase">E-mail Cadastrado</span>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="truncate text-blue-600 dark:text-blue-400 font-medium" title={student.email}>
+                    {student.email || 'contato@olavobilac.edu.br'}
+                  </span>
+                  {student.email && (
+                    <button
+                      type="button"
+                      onClick={() => handleCopy(student.email, 'email')}
+                      className="p-1 hover:bg-slate-100 dark:hover:bg-chatCard rounded text-slate-400 hover:text-blue-600 transition cursor-pointer shrink-0"
+                      title="Copiar E-mail"
+                    >
+                      {copiedField === 'email' ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                    </button>
+                  )}
+                </div>
+              </div>
+
             </div>
           </div>
 
@@ -135,23 +214,6 @@ export default function StudentDossierModal({
             </div>
           </div>
 
-          {/* Contato & Identificação */}
-          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder space-y-2 text-xs">
-            <span className="font-bold text-chatTextMuted uppercase tracking-wider block text-[10.5px]">
-              Canais de Contato Verificados
-            </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-chatTextTitle">
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-chatPanel border border-slate-100 dark:border-chatBorder">
-                <Phone size={14} className="text-emerald-600" />
-                <span className="font-mono font-medium">{student.phone}</span>
-              </div>
-              <div className="flex items-center gap-2 p-2 rounded-lg bg-white dark:bg-chatPanel border border-slate-100 dark:border-chatBorder truncate">
-                <Mail size={14} className="text-blue-600 shrink-0" />
-                <span className="truncate">{student.email || 'contato@olavobilac.edu.br'}</span>
-              </div>
-            </div>
-          </div>
-
           {/* Selo de Conformidade MEC & Sincronização */}
           <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/30 flex items-start gap-2.5 text-xs text-emerald-900 dark:text-emerald-200">
             <ShieldCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
@@ -168,18 +230,15 @@ export default function StudentDossierModal({
         {/* Rodapé com Ações */}
         <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-slate-200 dark:border-chatBorder flex items-center justify-between">
           <span className="text-[11px] text-chatTextMuted">
-            Origem: {student.origin || 'EduControl Base'}
+            Origem: {student.origin || 'EduControl (Base44)'}
           </span>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                navigator.clipboard?.writeText(student.matricula);
-                alert(`Matrícula ${student.matricula} copiada para a área de transferência!`);
-              }}
+              onClick={() => handleCopy(student.matricula, 'matr')}
               className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-chatBorder text-xs font-semibold text-chatTextTitle hover:bg-slate-100 dark:hover:bg-chatCard transition cursor-pointer"
             >
-              Copiar Matrícula
+              {copiedField === 'matr' ? 'Matrícula Copiada!' : 'Copiar Matrícula'}
             </button>
             <button
               type="button"

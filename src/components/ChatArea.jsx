@@ -540,6 +540,14 @@ export default function ChatArea({
                 </span>
                 {matchedStudent && (
                   <>
+                    {matchedStudent.cpf && (
+                      <>
+                        <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
+                        <span className="font-mono text-purple-700 dark:text-purple-300 font-medium shrink-0">
+                          CPF: {matchedStudent.cpf}
+                        </span>
+                      </>
+                    )}
                     <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
                     <span className="text-purple-700 dark:text-purple-300 font-medium shrink-0">
                       📍 {matchedStudent.polo} ({matchedStudent.matricula})
@@ -819,10 +827,10 @@ export default function ChatArea({
           <div className="flex items-center gap-2 truncate">
             <span className="font-bold flex items-center gap-1.5 shrink-0 text-purple-700 dark:text-purple-300">
               <GraduationCap size={15} />
-              Aluno Reconhecido EduControl:
+              Aluno Reconhecido EduControl (Base44):
             </span>
             <span className="font-semibold truncate">
-              {matchedStudent.name} ({matchedStudent.matricula}) • <strong>{matchedStudent.course}</strong> • {matchedStudent.polo}
+              {matchedStudent.name} {matchedStudent.cpf ? `(CPF: ${matchedStudent.cpf})` : ''} • <strong>{matchedStudent.course}</strong> • {matchedStudent.polo}
             </span>
             <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
               matchedStudent.academicStatus === 'Ativo'
