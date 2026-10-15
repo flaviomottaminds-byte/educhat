@@ -22,7 +22,9 @@ import {
   Key,
   Globe,
   Server,
-  Code2
+  Code2,
+  RotateCcw,
+  Power
 } from 'lucide-react';
 
 export default function WhatsAppConnectionModal({
@@ -61,7 +63,48 @@ export default function WhatsAppConnectionModal({
   const [errorMessage, setErrorMessage] = useState('');
   const [successFeedback, setSuccessFeedback] = useState('');
 
-  // Gerador de QR Code com QRCode library
+  // Helper: Extrai diretamente a URL de imagem Base64 da Evolution API sem passar por biblioteca de QR Code
+  const extractBase64Image = (data) => {
+    if (!data) return null;
+
+    // Se for objeto
+    if (typeof data === 'object') {
+      const candidate =
+        data.base64 ||
+        (typeof data.qrcode === 'string' ? data.qrcode : null) ||
+        data.qrcode?.base64 ||
+        data.instance?.qrcode?.base64 ||
+        data.instance?.base64 ||
+        (Array.isArray(data) && (data[0]?.base64 || data[0]?.qrcode?.base64 || (typeof data[0] === 'string' ? data[0] : null)));
+
+      if (candidate && typeof candidate === 'string') {
+        const trimmed = candidate.trim();
+        if (trimmed.startsWith('data:image/')) return trimmed;
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+        return `data:image/png;base64,${trimmed.replace(/\s/g, '')}`;
+      }
+    }
+
+    // Se for string
+    if (typeof data === 'string') {
+      const trimmed = data.trim();
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          return extractBase64Image(parsed);
+        } catch {}
+      }
+      if (trimmed.startsWith('data:image/')) return trimmed;
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+      if (trimmed.startsWith('iVBORw0KGgo') || trimmed.length > 250) {
+        return `data:image/png;base64,${trimmed.replace(/\s/g, '')}`;
+      }
+    }
+
+    return null;
+  };
+
+  // Gerador de QR Code fallback (apenas para modo demonstração local)
   const generateFreshQRCode = async () => {
     setIsLoadingQR(true);
     setErrorMessage('');
@@ -79,7 +122,7 @@ export default function WhatsAppConnectionModal({
       });
       setQrCodeDataUrl(url);
       setConnectionStatus('connecting');
-      setTimer(45);
+      setTimer(60);
     } catch (err) {
       console.error('Erro ao gerar QR Code inicial:', err);
       setErrorMessage('Falha ao renderizar código QR.');
@@ -92,11 +135,16 @@ export default function WhatsAppConnectionModal({
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setActiveTab(initialTab);
-      generateFreshQRCode();
+      // Se já possui URL da Evolution configurada que não seja a demo padrão, busca o QR real imediatamente
+      if (evolutionConfig.apiUrl && !evolutionConfig.apiUrl.includes('suaempresa.com') && evolutionConfig.instanceName) {
+        handleFetchFromEvolutionEndpoint();
+      } else {
+        generateFreshQRCode();
+      }
     }
   }, [isOpen, initialTab]);
 
-  // Contagem regressiva de expiração do QR Code (45 segundos)
+  // Contagem regressiva de expiração do QR Code (60 segundos)
   useEffect(() => {
     let interval = null;
     if (activeTab === 'qrcode' && connectionStatus === 'connecting') {
@@ -113,11 +161,11 @@ export default function WhatsAppConnectionModal({
     return () => clearInterval(interval);
   }, [activeTab, connectionStatus]);
 
-  // Parser Universal para Retorno da Evolution API (JSON, Base64 puro, DataURL ou Token)
+  // Parser Universal para Retorno da Evolution API (Item 1: Renderização Direta em <img src={base64} />)
   const handleConvertAndPlotQRCode = async (rawInput) => {
-    const content = (rawInput || manualPayloadInput || '').trim();
+    const content = rawInput !== undefined ? rawInput : manualPayloadInput;
     if (!content) {
-      setErrorMessage('Por favor, informe ou cole o retorno da Evolution API (JSON, base64 ou token).');
+      setErrorMessage('Por favor, informe ou cole o retorno da Evolution API (JSON ou Base64).');
       return;
     }
 
@@ -126,72 +174,47 @@ export default function WhatsAppConnectionModal({
     setSuccessFeedback('');
 
     try {
-      let target = content;
+      // 1. Extração Direta da Imagem Base64 (Sem Dupla Codificação)
+      const directImage = extractBase64Image(content);
 
-      // 1. Caso o conteúdo seja um JSON stringificado
-      if ((target.startsWith('{') && target.endsWith('}')) || (target.startsWith('[') && target.endsWith(']'))) {
-        try {
-          const parsed = JSON.parse(target);
-          if (parsed.base64) {
-            target = parsed.base64;
-          } else if (parsed.qrcode?.base64) {
-            target = parsed.qrcode.base64;
-          } else if (parsed.code) {
-            target = parsed.code;
-          } else if (parsed.qrcode?.code) {
-            target = parsed.qrcode.code;
-          } else if (Array.isArray(parsed) && parsed[0]?.base64) {
-            target = parsed[0].base64;
-          }
-          if (parsed.pairingCode || parsed.qrcode?.pairingCode) {
-            setPairingCode(parsed.pairingCode || parsed.qrcode?.pairingCode);
-          }
-        } catch (e) {
-          console.warn('Payload não é JSON estrito, processando como string direta:', e);
+      if (directImage) {
+        // Atribui DIRETAMENTE ao src da tag <img> sem passar por biblioteca de QR Code!
+        setQrCodeDataUrl(directImage);
+        setConnectionStatus('connecting');
+        setTimer(60);
+        setSuccessFeedback('✅ QR Code em Base64 nativo da Evolution API renderizado diretamente na imagem!');
+
+        // Extrai pairing code se houver
+        if (typeof content === 'object') {
+          const pCode = content.pairingCode || content.qrcode?.pairingCode;
+          if (pCode) setPairingCode(String(pCode));
+        } else if (typeof content === 'string') {
+          const pMatch = content.match(/"pairingCode":\s*"([^"]+)"/);
+          if (pMatch) setPairingCode(pMatch[1]);
         }
-      }
-
-      // 2. Se for uma Data URL direta (data:image/png;base64,...)
-      if (target.startsWith('data:image/')) {
-        setQrCodeDataUrl(target);
-        setConnectionStatus('connecting');
-        setTimer(45);
-        setSuccessFeedback('QR Code visual em Base64 renderizado com sucesso!');
-        setIsLoadingQR(false);
         return;
       }
 
-      // 3. Se for string Base64 pura sem o prefixo data:image/png;base64,
-      if (target.startsWith('iVBORw0KGgo') || (/^[A-Za-z0-9+/=]{80,}$/.test(target.replace(/\s/g, '')))) {
-        const cleanBase64 = target.replace(/\s/g, '');
-        const fullDataUrl = `data:image/png;base64,${cleanBase64}`;
-        setQrCodeDataUrl(fullDataUrl);
+      // 2. Se for exclusivamente um Token de Pareamento puro (ex: 2@...) e NÃO uma imagem
+      const rawString = typeof content === 'string' ? content.trim() : (content.code || content.qrcode?.code || '');
+      if (rawString.startsWith('2@') || rawString.startsWith('1@')) {
+        const generatedUrl = await QRCode.toDataURL(rawString, {
+          width: 320,
+          margin: 2,
+          color: { dark: '#111b21', light: '#ffffff' },
+          errorCorrectionLevel: 'M'
+        });
+        setQrCodeDataUrl(generatedUrl);
         setConnectionStatus('connecting');
-        setTimer(45);
-        setSuccessFeedback('Base64 pura da Evolution API convertida em imagem PNG e renderizada!');
-        setIsLoadingQR(false);
+        setTimer(60);
+        setSuccessFeedback('✅ Token 2@ da Evolution API convertido em QR Code escaneável!');
         return;
       }
 
-      // 4. Se for token ou pairing code do WhatsApp (ex: 2@..., URL ou string de texto)
-      // Desenha com a biblioteca QRCode nativa
-      const generatedUrl = await QRCode.toDataURL(target, {
-        width: 320,
-        margin: 2,
-        color: {
-          dark: '#111b21', // Cor oficial do WhatsApp
-          light: '#ffffff'
-        },
-        errorCorrectionLevel: 'M'
-      });
-
-      setQrCodeDataUrl(generatedUrl);
-      setConnectionStatus('connecting');
-      setTimer(45);
-      setSuccessFeedback('Token / código de pareamento convertido em QR Code escaneável com sucesso!');
+      throw new Error('Formato não reconhecido. Certifique-se de colar o Base64 nativo da Evolution API ou o JSON retornado.');
     } catch (err) {
       console.error('Falha ao processar QR Code:', err);
-      setErrorMessage('Não foi possível converter o payload da Evolution API em imagem.');
+      setErrorMessage(`Erro ao renderizar QR Code: ${err.message}`);
     } finally {
       setIsLoadingQR(false);
     }
@@ -205,7 +228,8 @@ export default function WhatsAppConnectionModal({
 
     try {
       const cleanUrl = evolutionConfig.apiUrl.replace(/\/+$/, '');
-      const endpoint = `${cleanUrl}/instance/connect/${evolutionConfig.instanceName}`;
+      const instName = evolutionConfig.instanceName.trim();
+      const endpoint = `${cleanUrl}/instance/connect/${instName}`;
 
       localStorage.setItem('educhat_evo_url', evolutionConfig.apiUrl);
       localStorage.setItem('educhat_evo_instance', evolutionConfig.instanceName);
@@ -213,7 +237,7 @@ export default function WhatsAppConnectionModal({
 
       const headers = { 'Content-Type': 'application/json' };
       if (evolutionConfig.apiKey) {
-        headers['apikey'] = evolutionConfig.apiKey;
+        headers['apikey'] = evolutionConfig.apiKey.trim();
       }
 
       const response = await fetch(endpoint, { method: 'GET', headers });
@@ -223,12 +247,72 @@ export default function WhatsAppConnectionModal({
 
       const data = await response.json();
       await handleConvertAndPlotQRCode(data);
-      setSuccessFeedback(`Conectado à instância "${evolutionConfig.instanceName}" e QR Code carregado!`);
+      setSuccessFeedback(`✅ Conectado à instância "${instName}" e QR Code carregado!`);
     } catch (err) {
       console.warn('Erro ao chamar Evolution API:', err);
-      setErrorMessage(`Falha na requisição (${err.message}). Verifique o CORS ou cole o payload JSON/Base64 diretamente abaixo.`);
+      setErrorMessage(`Falha na requisição (${err.message}). Se houver bloqueio de CORS no navegador, use o botão "Resetar Instância" ou cole o payload JSON/Base64 diretamente abaixo.`);
     } finally {
       setIsLoadingQR(false);
+    }
+  };
+
+  // Reset de Instância Travada na Evolution API (Logout + Connect) - Item 2
+  const handleResetInstance = async () => {
+    setIsLoadingQR(true);
+    setErrorMessage('');
+    setSuccessFeedback('');
+    setQrCodeDataUrl('');
+
+    const cleanUrl = evolutionConfig.apiUrl.replace(/\/+$/, '');
+    const instName = evolutionConfig.instanceName.trim();
+    const headers = { 'Content-Type': 'application/json' };
+    if (evolutionConfig.apiKey) {
+      headers['apikey'] = evolutionConfig.apiKey.trim();
+    }
+
+    try {
+      setSuccessFeedback(`1/2 Desconectando instância "${instName}" (logout) para limpar sessão fantasma...`);
+
+      // 1. Executa Logout da instância para limpar socket fantasma
+      const logoutEndpoint = `${cleanUrl}/instance/logout/${instName}`;
+      try {
+        await fetch(logoutEndpoint, { method: 'DELETE', headers });
+      } catch (err1) {
+        try {
+          await fetch(logoutEndpoint, { method: 'POST', headers });
+        } catch {}
+      }
+
+      // Pausa técnica de 1.5s para a Evolution API finalizar o processo
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      setSuccessFeedback(`2/2 Solicitando novo QR Code limpo para "${instName}"...`);
+
+      // 2. Solicita um novo QR Code limpo (/instance/connect)
+      const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
+      const connResponse = await fetch(connectEndpoint, { method: 'GET', headers });
+
+      if (!connResponse.ok) {
+        throw new Error(`Status ${connResponse.status}: ${connResponse.statusText}`);
+      }
+
+      const connData = await connResponse.json();
+      await handleConvertAndPlotQRCode(connData);
+      setSuccessFeedback(`✅ Instância "${instName}" resetada com sucesso! Escaneie o novo QR Code abaixo com seu WhatsApp.`);
+    } catch (err) {
+      console.warn('Erro ao resetar instância na Evolution API:', err);
+      setErrorMessage(`Falha ao resetar via endpoint: ${err.message}. Verifique a URL/Key ou use a colagem manual abaixo.`);
+    } finally {
+      setIsLoadingQR(false);
+    }
+  };
+
+  // Recarregar inteligente
+  const handleRefreshClick = () => {
+    if (evolutionConfig.apiUrl && !evolutionConfig.apiUrl.includes('suaempresa.com') && evolutionConfig.instanceName) {
+      handleFetchFromEvolutionEndpoint();
+    } else {
+      generateFreshQRCode();
     }
   };
 
@@ -490,13 +574,22 @@ export default function WhatsAppConnectionModal({
                           <p className="text-[11px] text-chatTextMuted mb-3">
                             O tempo limite de segurança expirou. Clique abaixo para atualizar o código.
                           </p>
-                          <button
-                            type="button"
-                            onClick={generateFreshQRCode}
-                            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition"
-                          >
-                            <RefreshCw size={14} /> Atualizar QR Code
-                          </button>
+                          <div className="flex flex-col gap-2 w-full max-w-[200px]">
+                            <button
+                              type="button"
+                              onClick={handleRefreshClick}
+                              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-sm flex items-center justify-center gap-1.5 transition"
+                            >
+                              <RefreshCw size={14} /> Atualizar QR Code
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleResetInstance}
+                              className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition"
+                            >
+                              <RotateCcw size={13} /> Resetar Instância
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -510,12 +603,37 @@ export default function WhatsAppConnectionModal({
                         </span>
                         <button
                           type="button"
-                          onClick={generateFreshQRCode}
+                          onClick={handleRefreshClick}
+                          disabled={isLoadingQR}
                           className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-semibold"
                           title="Atualizar o QR Code agora"
                         >
-                          <RefreshCw size={12} /> Recarregar
+                          <RefreshCw size={12} className={isLoadingQR ? 'animate-spin' : ''} /> Recarregar
                         </button>
+                      </div>
+                    )}
+
+                    {/* BOTÃO CRÍTICO: Resetar Instância Travada (Logout & Connect) */}
+                    <button
+                      type="button"
+                      onClick={handleResetInstance}
+                      disabled={isLoadingQR}
+                      className="mt-2.5 px-3.5 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/40 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-xs font-bold flex items-center gap-1.5 transition shadow-2xs disabled:opacity-50"
+                      title="Desconecta a sessão fantasma (/instance/logout) e gera um QR Code 100% novo (/instance/connect)"
+                    >
+                      <RotateCcw size={13} className={isLoadingQR ? 'animate-spin' : ''} />
+                      <span>Resetar Instância (Logout & Novo QR)</span>
+                    </button>
+
+                    {/* Exibição de Pairing Code (se disponível) */}
+                    {pairingCode && (
+                      <div className="mt-2.5 p-2 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-800 rounded-xl text-center w-60">
+                        <span className="text-[10px] text-emerald-800 dark:text-emerald-300 block font-medium">
+                          Código de Pareamento (Opcional):
+                        </span>
+                        <span className="text-sm font-mono font-bold tracking-widest text-emerald-900 dark:text-emerald-200">
+                          {pairingCode}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -577,7 +695,17 @@ export default function WhatsAppConnectionModal({
                     </div>
                   </div>
 
-                  <div className="flex justify-end">
+                  <div className="flex items-center justify-end gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleResetInstance}
+                      disabled={isLoadingQR}
+                      className="px-3.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border border-rose-300 dark:border-rose-800 text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                      title="Efetua logout da instância para limpar o estado fantasma e gera um novo QR Code"
+                    >
+                      <RotateCcw size={13} className={isLoadingQR ? 'animate-spin' : ''} />
+                      <span>Resetar Instância (Logout & Novo QR)</span>
+                    </button>
                     <button
                       type="button"
                       onClick={handleFetchFromEvolutionEndpoint}
