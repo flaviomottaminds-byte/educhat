@@ -91,9 +91,165 @@ export function analyzeTaskPriorityAI(title, description, vipClients = [], learn
   };
 }
 
-// Motor de Resposta do Copiloto de IA para Consultas de Colaboradores (com RAG de Documentos Aprendidos)
+// =========================================================================
+// AI BUG TRACKER: System Prompt Oficial & Motor de Detecção e Parsing
+// =========================================================================
+
+export const AI_BUG_TRACKER_SYSTEM_PROMPT = `Você é o módulo de inteligência técnica do EduChat (AI Bug Tracker).
+Sua função primária com usuários administradores (role = admin ou diretoria) é atuar como um formulário invisível de captação e cadastro de falhas técnicas.
+
+REGRAS OBRIGATÓRIAS DE COMPORTAMENTO:
+1. GATILHO & PERMISSÃO:
+   - Se o remetente possuir 'role = admin' E a mensagem relatar um erro, bug, exceção, falha de interface, inconsistência de dados ou melhoria técnica: ATIVE IMEDIATAMENTE O MODO BUG TRACKER.
+2. BYPASS DE SUPORTE:
+   - NÃO tente dar suporte ao administrador.
+   - NÃO dê instruções de 'como usar o sistema', 'recarregue a página' ou tutoriais.
+   - NÃO faça perguntas adicionais desnecessárias.
+   - Você é um coletor silencioso que traduz linguagem natural em chamado de engenharia de software.
+3. EXTRAÇÃO DE DADOS (PARSING):
+   - Extraia as informações do relato e estruture no seguinte formato JSON:
+     {
+       "titulo_do_bug": "Resumo técnico objetivo do problema em até 60 caracteres",
+       "problema_relatado": "Descrição completa do que está falhando no sistema e seu comportamento",
+       "solucao_esperada": "O que deveria acontecer ou ação técnica corretiva esperada",
+       "prioridade": "baixa" | "media" | "alta"
+     }
+   - Critérios de Prioridade:
+     * "alta": Travamento geral, perda de dados, quebra de QR Code, autenticação, áudio, webhooks essenciais ou erro bloqueante.
+     * "media": Falhas de UI, modais, contadores de notificação, formatação, botões secundários.
+     * "baixa": Pequenos ajustes visuais, textos, cosméticos ou sugestões incrementais.
+4. INSERÇÃO NO BANCO DE DADOS:
+   - Salve o JSON gerado diretamente na tabela 'bug_reports' do Supabase.
+5. RESPOSTA VISUAL OBRIGATÓRIA NO CHAT:
+   - Responda EXATAMENTE E APENAS:
+     "🛠️ Chamado técnico registrado com sucesso no banco de dados."
+   - NADA MAIS. Sem saudações prévias, sem desculpas, sem acréscimos.`;
+
+// Identifica se a mensagem é um relato de bug / chamado técnico
+export function isBugReportIntent(text) {
+  if (!text || text.length < 10) return false;
+  const lower = text.toLowerCase();
+
+  // 1. Padrão estruturado explícito (ex: Problema:... Ação esperada:...)
+  if (lower.includes('problema:') || lower.includes('ação esperada:') || lower.includes('acao esperada:')) {
+    return true;
+  }
+
+  // 2. Termos e intenções inequívocas de falha no sistema / bug técnico
+  const bugKeywords = [
+    'bug', 'defeito', 'falha técnica', 'falha tecnica', 'erro no sistema',
+    'erro de ui', 'erro de ux', 'não está funcionando', 'nao esta funcionando',
+    'não funciona', 'nao funciona', 'não está renderizando', 'nao esta renderizando',
+    'tela preta', 'travando', 'crash', 'quebrou', 'comportamento incorreto',
+    'chamado técnico', 'chamado tecnico', 'melhoria técnica', 'melhoria tecnica',
+    'falha na captura', 'falha no envio', 'lógica incorreta', 'logica incorreta',
+    'ausência da funcionalidade', 'ausencia da funcionalidade', 'botão quebrado',
+    'botão não clica', 'registro de bug', 'reportar bug', 'reportar erro'
+  ];
+
+  return bugKeywords.some((kw) => lower.includes(kw));
+}
+
+// Extrai e formata os dados do bug em JSON estruturado
+export function parseBugReport(text, user) {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  let titulo = '';
+  let problema = '';
+  let solucao = '';
+  let prioridade = 'media';
+
+  // 1. Parsing para formato estruturado
+  if (lower.includes('problema:')) {
+    const probMatch = trimmed.match(/problema:\s*([\s\S]+?)(?=(causa prov[aá]vel:|a[cç][aã]o esperada:|$))/i);
+    if (probMatch) problema = probMatch[1].trim();
+
+    const acaoMatch = trimmed.match(/a[cç][aã]o esperada:\s*([\s\S]+?)$/i);
+    if (acaoMatch) solucao = acaoMatch[1].trim();
+
+    if (!solucao) {
+      const causaMatch = trimmed.match(/causa prov[aá]vel:\s*([\s\S]+?)$/i);
+      if (causaMatch) solucao = `Investigar e corrigir: ${causaMatch[1].trim()}`;
+    }
+
+    if (problema) {
+      const firstSentence = problema.split(/[.\n]/)[0].trim();
+      titulo = firstSentence.length > 60 ? firstSentence.slice(0, 57) + '...' : firstSentence;
+    }
+  }
+
+  // 2. Parsing para linguagem natural não estruturada
+  if (!problema) {
+    problema = trimmed;
+    const clean = trimmed
+      .replace(/^(tem um bug|identifiquei um bug|bug[:\s-]*|erro[:\s-]*|falha[:\s-]*|relato de bug[:\s-]*)/i, '')
+      .replace(/^no sistema[:\s-]*/i, '')
+      .trim();
+
+    const first = clean.split(/[.\n!?;]/)[0].trim();
+    if (first.length > 5) {
+      titulo = first.charAt(0).toUpperCase() + first.slice(1);
+      if (titulo.length > 60) titulo = titulo.slice(0, 57) + '...';
+    } else {
+      titulo = 'Falha técnica relatada pelo administrador';
+    }
+
+    if (lower.includes('deveria') || lower.includes('precisa') || lower.includes('esperado') || lower.includes('corrigir')) {
+      const solMatch = trimmed.match(/(?:deveria|precisa|esperado|corrigir)\s+([\s\S]+?)(?=[.]|$)/i);
+      solucao = solMatch ? `Ajustar para que ${solMatch[1].trim()}` : 'Ajustar o sistema conforme o comportamento esperado da especificação.';
+    } else {
+      solucao = 'Analisar causa raiz e aplicar correção no front-end/back-end.';
+    }
+  }
+
+  // 3. Classificação de Prioridade
+  const highPriorityKeywords = [
+    'crítico', 'critico', 'urgente', 'travando', 'crash', 'login', 'banco', 'perda',
+    'bloqueio', 'qr code', 'áudio', 'audio', 'não funciona nada', 'parou tudo',
+    'webhook', 'pagamento', 'asaas', 'offline', 'derrubou'
+  ];
+  const lowPriorityKeywords = [
+    'melhoria', 'sugestão', 'sugestao', 'layout', 'cor', 'ajuste visual', 'espaçamento',
+    'cosmético', 'cosmetico', 'texto', 'typo'
+  ];
+
+  if (highPriorityKeywords.some((kw) => lower.includes(kw))) {
+    prioridade = 'alta';
+  } else if (lowPriorityKeywords.some((kw) => lower.includes(kw))) {
+    prioridade = 'baixa';
+  } else {
+    prioridade = 'media';
+  }
+
+  return {
+    titulo_do_bug: titulo || 'Correção técnica no sistema',
+    problema_relatado: problema || trimmed,
+    solucao_esperada: solucao || 'Corrigir falha técnica apontada no relato.',
+    prioridade
+  };
+}
+
+// Motor de Resposta do Copiloto de IA para Consultas de Colaboradores (com RAG e AI Bug Tracker)
 export function answerCopilotQuery(query, user, vipClients = [], customGuidelines = '', learnedDocuments = []) {
   const q = query.toLowerCase();
+
+  // 0. AI BUG TRACKER: Interceptação Especial para Administrador com Bypass de Suporte (Item 1 e 2)
+  const isAdmin =
+    user?.role === 'admin' ||
+    user?.roleType === 'diretor' ||
+    user?.id === 'u1' ||
+    (user?.role && user.role.toLowerCase().includes('diretor')) ||
+    (user?.role && user.role.toLowerCase().includes('admin'));
+
+  if (isAdmin && isBugReportIntent(query)) {
+    const bugData = parseBugReport(query, user);
+    return {
+      isBugReport: true,
+      reply: '🛠️ Chamado técnico registrado com sucesso no banco de dados.',
+      bugData
+    };
+  }
 
   // 1. Busca em Documentos e Memorandos Aprendidos (RAG Institucional)
   const matchingDoc = learnedDocuments.find((doc) => {

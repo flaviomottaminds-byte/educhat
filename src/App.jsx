@@ -726,15 +726,52 @@ export default function App() {
       if (error) console.warn('Erro ao salvar msg no Supabase:', error);
     });
 
-    // GATILHO IA: Se for conversa com o Assistente IA (incorporando memorandos aprendidos)
-    if (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot') {
+    // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot
+    const isIAChat = (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot');
+    const isIAMention = text.toLowerCase().includes('@ia') || text.toLowerCase().includes('@copilot');
+
+    if (isIAChat || isIAMention) {
       setTimeout(() => {
-        const aiAnswer = answerCopilotQuery(text, currentUser, vipClients, customAIPrompt, learnedDocuments);
+        const cleanQuery = text.replace(/@(ia|copilot)\b/gi, '').trim();
+        const aiResult = answerCopilotQuery(cleanQuery || text, currentUser, vipClients, customAIPrompt, learnedDocuments);
+        const replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
+
+        // Se for detecção do AI Bug Tracker (Bypass de suporte e inserção automática em bug_reports)
+        if (typeof aiResult === 'object' && aiResult?.isBugReport && aiResult?.bugData) {
+          const bugPayload = {
+            titulo: aiResult.bugData.titulo_do_bug,
+            problema: aiResult.bugData.problema_relatado,
+            solucao_esperada: aiResult.bugData.solucao_esperada,
+            prioridade: aiResult.bugData.prioridade,
+            status: 'aberto',
+            reporter_name: currentUser?.name || 'Administrador',
+            reporter_id: currentUser?.id || 'admin'
+          };
+
+          // Salva no Supabase na tabela bug_reports
+          supabase.from('bug_reports').insert([bugPayload]).then(({ error }) => {
+            if (error) console.warn('Erro ao inserir bug_report no Supabase:', error);
+          });
+
+          // Backup persistente em localStorage
+          try {
+            const storedBugs = JSON.parse(localStorage.getItem('educhat_bug_reports') || '[]');
+            storedBugs.unshift({
+              id: 'bug_' + Date.now(),
+              created_at: new Date().toISOString(),
+              ...bugPayload
+            });
+            localStorage.setItem('educhat_bug_reports', JSON.stringify(storedBugs));
+          } catch (e) {
+            console.error('Erro ao armazenar bug_report em localStorage:', e);
+          }
+        }
+
         const aiReply = {
           id: 'ia_' + Date.now(),
           senderId: 'u_ia_copilot',
           senderName: 'Assistente IA (MEC & Processos)',
-          text: aiAnswer,
+          text: replyText,
           timestamp: `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`,
           actionExtracted: false
         };
