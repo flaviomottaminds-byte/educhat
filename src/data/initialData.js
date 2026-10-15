@@ -60,6 +60,16 @@ export const normalizeChatKey = (rawKey, currentUserId = 'u1') => {
       return `dm-${ids[0]}-${ids[1]}`;
     }
   }
+
+  // Normalização de Canais de Comunicação (Ex: 'geral', '#geral', 'c-geral')
+  const cleanChannel = rawKey.replace(/^#/, '').trim().toLowerCase();
+  if (cleanChannel === 'geral' || cleanChannel === 'c-geral') return 'c-geral';
+
+  const matchedChannel = INITIAL_CHANNELS.find(
+    (c) => c.id === rawKey || c.id === `c-${cleanChannel}` || c.name.toLowerCase() === cleanChannel
+  );
+  if (matchedChannel) return matchedChannel.id;
+
   return rawKey;
 };
 

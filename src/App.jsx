@@ -189,6 +189,13 @@ export default function App() {
     setUnreadCounts((prev) => {
       const next = { ...prev };
       delete next[targetId];
+      if (targetId.startsWith('c-')) {
+        delete next[targetId.replace('c-', '')];
+        delete next[`#${targetId.replace('c-', '')}`];
+      } else {
+        delete next[`c-${targetId}`];
+        delete next[`#${targetId}`];
+      }
       // Limpa também chaves compostas vinculadas (ex: dm-u1-u9, u9)
       Object.keys(next).forEach((k) => {
         if (k === targetId || k.includes(`-${targetId}`) || k.includes(`${targetId}-`)) {
@@ -298,13 +305,18 @@ export default function App() {
       // Se a conversa já está visível e aberta, marca como lida imediatamente sem criar badge
       markMessagesAsRead(activeChat);
     } else {
-      // Identifica o identificador correto da badge (para DMs, sempre o outro usuário!)
+      // Identifica o identificador correto da badge (para DMs, o outro usuário; para canais, o ID do canal)
       let targetBadgeKey = cKey;
+      let notificationTitle = msg.senderName;
       if (cKey.startsWith('dm-')) {
         const parts = cKey.replace('dm-', '').split('-');
         targetBadgeKey = parts[0] === currentUser.id ? parts[1] : parts[0];
       } else if (cKey.startsWith('wa-')) {
         targetBadgeKey = cKey;
+      } else if (cKey.startsWith('c-')) {
+        targetBadgeKey = cKey;
+        const channelName = cKey.replace('c-', '');
+        notificationTitle = `#${channelName} • ${msg.senderName}`;
       }
 
       setUnreadCounts((prev) => {
@@ -314,7 +326,7 @@ export default function App() {
 
       // Toca áudio e faz a barra de tarefas do Windows piscar
       playMessageSound();
-      notifyIncomingMessage(msg.senderName, msg.text);
+      notifyIncomingMessage(notificationTitle, msg.text);
     }
   };
 
@@ -499,7 +511,8 @@ export default function App() {
           // Verificação de Canais para Usuários Não-Diretores (Item 4)
           if (cKey.startsWith('c-')) {
             const ch = channels.find((c) => c.id === cKey);
-            if (ch && ch.department !== 'Todos' && ch.department !== currentUser.department && currentUser.roleType !== 'diretor') {
+            const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+            if (ch && ch.department !== 'Todos' && norm(ch.department) !== norm(currentUser.department) && currentUser.roleType !== 'diretor') {
               return; // Canal restrito de outro departamento
             }
           }
@@ -593,6 +606,42 @@ export default function App() {
               [cKey]: list.map((m) => (m.id === row.id ? { ...m, status: parsedStatus } : m))
             };
           });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications' },
+        (payload) => {
+          const notif = payload.new;
+          if (!notif) return;
+
+          // Se a notificação for destinada ao usuário atual (ou legado recipient_id)
+          const isForMe = notif.user_id === currentUser.id || notif.recipient_id === currentUser.id;
+          const isNotFromMe = notif.sender_id !== currentUser.id;
+
+          if (isForMe && isNotFromMe) {
+            const rawChat = notif.chat_id || 'c-geral';
+            const cKey = normalizeChatKey(rawChat, currentUser.id);
+            const currentKey = getChatKey(activeChat, currentUser.id);
+
+            if (cKey === currentKey && !document.hidden) {
+              markMessagesAsRead(activeChat);
+            } else {
+              let targetBadgeKey = cKey;
+              if (cKey.startsWith('dm-')) {
+                const parts = cKey.replace('dm-', '').split('-');
+                targetBadgeKey = parts[0] === currentUser.id ? parts[1] : parts[0];
+              }
+
+              setUnreadCounts((prev) => ({
+                ...prev,
+                [targetBadgeKey]: (prev[targetBadgeKey] || 0) + 1
+              }));
+
+              playMessageSound();
+              notifyIncomingMessage(notif.title || 'EduChat', notif.content || 'Nova mensagem');
+            }
+          }
         }
       )
       .on(

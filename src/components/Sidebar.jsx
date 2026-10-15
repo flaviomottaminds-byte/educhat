@@ -86,7 +86,7 @@ export default function Sidebar({
   );
 
   const totalWhatsAppUnread = whatsAppContacts.reduce((sum, c) => sum + (unreadCounts[c.id] || 0), 0);
-  const totalInternalUnread = accessibleChannels.reduce((sum, c) => sum + (unreadCounts[c.id] || 0), 0) +
+  const totalInternalUnread = accessibleChannels.reduce((sum, c) => sum + (unreadCounts[c.id] || unreadCounts[c.name] || unreadCounts[`#${c.name}`] || 0), 0) +
     filteredCollaborators.reduce((sum, u) => sum + (unreadCounts[u.id] || 0), 0);
 
   return (
@@ -442,7 +442,7 @@ export default function Sidebar({
               <div className="space-y-0.5">
             {filteredChannels.map((c) => {
               const isActive = activeView === 'chat' && activeChat.type === 'channel' && activeChat.id === c.id;
-              const channelUnread = unreadCounts[c.id] || c.unread || 0;
+              const channelUnread = unreadCounts[c.id] || unreadCounts[c.name] || unreadCounts[`#${c.name}`] || c.unread || 0;
               return (
                 <button
                   key={c.id}
