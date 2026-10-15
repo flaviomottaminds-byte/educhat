@@ -321,7 +321,9 @@ export default function App() {
       sender_name: newMsg.senderName,
       text: newMsg.text,
       timestamp: newMsg.timestamp
-    }]).catch((err) => console.warn('Erro ao salvar msg no Supabase:', err));
+    }]).then(({ error }) => {
+      if (error) console.warn('Erro ao salvar msg no Supabase:', error);
+    });
 
     // GATILHO 1: Comando manual explícito /tarefa
     if (text.startsWith('/tarefa')) {
@@ -400,7 +402,9 @@ export default function App() {
       due_date: autoTask.dueDate,
       channel: autoTask.channel,
       source_message: autoTask.sourceMessage
-    }]).catch((err) => console.warn('Erro ao salvar autoTask no Supabase:', err));
+    }]).then(({ error }) => {
+      if (error) console.warn('Erro ao salvar autoTask no Supabase:', error);
+    });
 
     // O Bot dá o feedback inteligente no chat destacando o status VIP
     const botReply = {
@@ -429,7 +433,9 @@ export default function App() {
       sender_name: botReply.senderName,
       text: botReply.text,
       timestamp: botReply.timestamp
-    }]).catch((err) => console.warn('Erro ao salvar botReply no Supabase:', err));
+    }]).then(({ error }) => {
+      if (error) console.warn('Erro ao salvar botReply no Supabase:', error);
+    });
   };
 
   // Abrir modal de IA para extrair tarefa de mensagem específica
@@ -460,7 +466,9 @@ export default function App() {
       .from('tasks')
       .update({ status: newStatus })
       .eq('id', taskId)
-      .catch((err) => console.warn('Erro ao atualizar status da tarefa no Supabase:', err));
+      .then(({ error }) => {
+        if (error) console.warn('Erro ao atualizar status da tarefa no Supabase:', error);
+      });
   };
 
   // Adicionar tarefa confirmada pelo modal de IA ou manualmente
@@ -480,7 +488,9 @@ export default function App() {
       due_date: newTask.dueDate,
       channel: newTask.channel,
       source_message: newTask.sourceMessage
-    }]).catch((err) => console.warn('Erro ao salvar nova tarefa no Supabase:', err));
+    }]).then(({ error }) => {
+      if (error) console.warn('Erro ao salvar nova tarefa no Supabase:', error);
+    });
   };
 
   // Salvar novo canal
