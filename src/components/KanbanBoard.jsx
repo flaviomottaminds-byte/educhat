@@ -9,28 +9,31 @@ const COLUMNS = [
   { id: 'done', title: 'Concluído', color: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10' },
 ];
 
-export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, currentUser }) {
+export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, currentUser, collaborators = [] }) {
   const isDirector = currentUser?.roleType === 'diretor';
 
   // Estados de filtro para o Diretor
   const [filterAssignee, setFilterAssignee] = useState('todos');
 
-  // Estado de aba para o Colaborador ('my_tasks' | 'dept_tasks')
+  // Estado de aba para o Colaborador ('my_tasks' | 'dept_tasks' | 'my_requests')
   const [collabTab, setCollabTab] = useState('my_tasks');
 
-  // Filtragem estrita com base no Perfil (Opção 1)
+  // Filtragem estrita com base no Perfil (Opção 1 com Rastreamento Intersetorial)
   const filteredTasks = tasks.filter((t) => {
     if (isDirector) {
       // Diretor pode ver todas ou filtrar por responsável específico
       if (filterAssignee !== 'todos' && t.assignee !== filterAssignee) return false;
       return true;
     } else {
-      // Colaborador comum: só vê o que é dele ou do seu departamento
+      // Colaborador comum:
       if (collabTab === 'my_tasks') {
         return t.assignee === currentUser.name;
       }
       if (collabTab === 'dept_tasks') {
-        return t.department === currentUser.department || t.assignee === currentUser.name;
+        return t.department === currentUser.department;
+      }
+      if (collabTab === 'my_requests') {
+        return t.requester === currentUser.name;
       }
       return false;
     }
@@ -38,7 +41,8 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
 
   // Métricas para os botões do colaborador
   const myTasksCount = tasks.filter((t) => t.assignee === currentUser?.name).length;
-  const deptTasksCount = tasks.filter((t) => t.department === currentUser?.department || t.assignee === currentUser?.name).length;
+  const deptTasksCount = tasks.filter((t) => t.department === currentUser?.department).length;
+  const myRequestsCount = tasks.filter((t) => t.requester === currentUser?.name).length;
 
   const handleMove = (taskId, currentStatus, direction) => {
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
@@ -99,14 +103,14 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
           <p className="text-xs text-chatTextMuted">
             {isDirector
               ? 'Acompanhamento executivo de todos os processos e colaboradores da empresa'
-              : 'Demandas atribuídas a você e processos internos do seu setor'}
+              : 'Demandas atribuídas a você, do seu setor e solicitações abertas por você'}
           </p>
         </div>
 
         {/* Controles de Visibilidade e Filtro baseados no Perfil */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           {isDirector ? (
-            /* Filtros do Diretor: pode filtrar por quem quiser */
+            /* Filtros do Diretor: pode filtrar por quem quiser dinamicamente */
             <div className="flex items-center gap-2">
               <span className="text-xs text-chatTextMuted font-medium">Filtrar por:</span>
               <select
@@ -114,16 +118,16 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                 onChange={(e) => setFilterAssignee(e.target.value)}
                 className="bg-white dark:bg-chatCard text-chatTextTitle text-xs border border-slate-300 dark:border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-xs"
               >
-                <option value="todos">🌐 Todos os Colaboradores ({tasks.length})</option>
-                <option value="Flávio Motta">Flávio Motta (Diretoria)</option>
-                <option value="Fernanda Silva">Fernanda Silva (Financeiro)</option>
-                <option value="Juliana Mendes">Juliana Mendes (Secretaria)</option>
-                <option value="Carlos Eduardo">Carlos Eduardo (Suporte)</option>
-                <option value="Roberto Lima">Roberto Lima (Comercial)</option>
+                <option value="todos">🌐 Toda a Equipe ({tasks.length})</option>
+                {collaborators.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name} ({c.department})
+                  </option>
+                ))}
               </select>
             </div>
           ) : (
-            /* Abas de visualização restrita do Colaborador */
+            /* Abas de visualização restrita do Colaborador com Rastreamento de Solicitações */
             <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs">
               <button
                 onClick={() => setCollabTab('my_tasks')}
@@ -145,7 +149,18 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                 }`}
               >
                 <Building2 size={14} />
-                <span>Setor: {currentUser.department} ({deptTasksCount})</span>
+                <span>Meu Setor ({deptTasksCount})</span>
+              </button>
+              <button
+                onClick={() => setCollabTab('my_requests')}
+                title="Demandas que você abriu para outros setores acompanharem"
+                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                  collabTab === 'my_requests'
+                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle'
+                }`}
+              >
+                <span>📤 Minhas Solicitações ({myRequestsCount})</span>
               </button>
             </div>
           )}
@@ -212,6 +227,20 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                           </p>
                         )}
                       </div>
+
+                      {/* Solicitante da Demanda (Rastreamento Intersetorial) */}
+                      {t.requester && (
+                        <div className="bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-500/30 px-2 py-1 rounded text-[11px] text-brand-800 dark:text-brand-300 flex items-center justify-between">
+                          <span className="truncate">
+                            📌 Solicitado por: <strong>{t.requester === currentUser.name ? 'Você' : t.requester}</strong>
+                          </span>
+                          {t.requesterDept && (
+                            <span className="text-[10px] bg-brand-100 dark:bg-brand-900/60 px-1.5 py-0.2 rounded font-semibold text-brand-700 dark:text-brand-300">
+                              {t.requesterDept}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Trecho da Mensagem de Origem */}
                       {t.sourceMessage && (

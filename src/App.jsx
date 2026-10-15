@@ -7,6 +7,7 @@ import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
 import WhatsAppDossierModal from './components/WhatsAppDossierModal';
+import UserSelectionModal from './components/UserSelectionModal';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import {
@@ -62,6 +63,13 @@ export default function App() {
       return INITIAL_COLLABORATORS[0];
     }
   });
+  const [isUserSelectOpen, setIsUserSelectOpen] = useState(() => {
+    try {
+      return !localStorage.getItem('educhat_user_id');
+    } catch {
+      return false;
+    }
+  });
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [messages, setMessages] = useState(INITIAL_MESSAGES);
   const [tasks, setTasks] = useState(INITIAL_TASKS);
@@ -75,10 +83,10 @@ export default function App() {
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
   const [isDossierOpen, setIsDossierOpen] = useState(false);
 
-  // Chat ativo: canal ou DM
+  // Chat ativo: canal ou DM (padrão canal #geral)
   const [activeChat, setActiveChat] = useState({
     type: 'channel', // 'channel' | 'dm'
-    id: 'c-financeiro'
+    id: 'c-geral'
   });
 
   // Modo da IA Autônoma (Se ativo, cria o card sozinho ao detectar intenção de tarefa)
@@ -166,37 +174,52 @@ export default function App() {
           .order('created_at', { ascending: false });
 
         if (dbTasks && dbTasks.length > 0) {
-          setTasks(dbTasks.map((t) => ({
-            id: t.id,
-            title: t.title,
-            desc: t.description || '',
-            status: t.status,
-            priority: t.priority,
-            isVip: t.is_vip,
-            assignee: t.assignee,
-            assigneeAvatar: t.assignee_avatar || '👤',
-            department: t.department || 'Geral',
-            dueDate: t.due_date,
-            channel: t.channel,
-            sourceMessage: t.source_message
-          })));
-        } else if (!taskError) {
-          // Inicializar tabela de tarefas
-          const seedTasks = INITIAL_TASKS.map((t) => ({
-            id: t.id,
-            title: t.title,
-            description: t.desc || '',
-            status: t.status,
-            priority: t.priority,
-            is_vip: t.isVip || false,
-            assignee: t.assignee,
-            assignee_avatar: t.assigneeAvatar || '👤',
-            department: t.department || 'Geral',
-            due_date: t.dueDate,
-            channel: t.channel,
-            source_message: t.sourceMessage
+          setTasks(dbTasks.map((t) => {
+            let reqName = t.requester || '';
+            let reqDept = t.requester_dept || '';
+            if (!reqName && t.source_message && t.source_message.includes('Solicitado por:')) {
+              const match = t.source_message.match(/Solicitado por:\s*([^(•]+)\s*(?:\(([^)]+)\))?/);
+              if (match) {
+                reqName = match[1].trim();
+                reqDept = match[2]?.trim() || '';
+              }
+            }
+            return {
+              id: t.id,
+              title: t.title,
+              desc: t.description || '',
+              status: t.status,
+              priority: t.priority,
+              isVip: t.is_vip,
+              assignee: t.assignee,
+              assigneeAvatar: t.assignee_avatar || '👤',
+              department: t.department || 'Geral',
+              dueDate: t.due_date,
+              channel: t.channel,
+              sourceMessage: t.source_message,
+              requester: reqName,
+              requesterDept: reqDept
+            };
           }));
-          await supabase.from('tasks').insert(seedTasks);
+        } else if (!taskError) {
+          // Inicializar tabela de tarefas vazia se zerado
+          if (INITIAL_TASKS.length > 0) {
+            const seedTasks = INITIAL_TASKS.map((t) => ({
+              id: t.id,
+              title: t.title,
+              description: t.desc || '',
+              status: t.status,
+              priority: t.priority,
+              is_vip: t.isVip || false,
+              assignee: t.assignee,
+              assignee_avatar: t.assigneeAvatar || '👤',
+              department: t.department || 'Geral',
+              due_date: t.dueDate,
+              channel: t.channel,
+              source_message: t.sourceMessage
+            }));
+            await supabase.from('tasks').insert(seedTasks);
+          }
         }
       } catch (err) {
         console.warn('Conexão Supabase inicial:', err);
@@ -242,6 +265,15 @@ export default function App() {
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new;
+            let reqName = row.requester || '';
+            let reqDept = row.requester_dept || '';
+            if (!reqName && row.source_message && row.source_message.includes('Solicitado por:')) {
+              const match = row.source_message.match(/Solicitado por:\s*([^(•]+)\s*(?:\(([^)]+)\))?/);
+              if (match) {
+                reqName = match[1].trim();
+                reqDept = match[2]?.trim() || '';
+              }
+            }
             const newTask = {
               id: row.id,
               title: row.title,
@@ -254,7 +286,9 @@ export default function App() {
               department: row.department || 'Geral',
               dueDate: row.due_date,
               channel: row.channel,
-              sourceMessage: row.source_message
+              sourceMessage: row.source_message,
+              requester: reqName,
+              requesterDept: reqDept
             };
             setTasks((prev) => {
               if (prev.some((t) => t.id === newTask.id)) return prev;
@@ -359,15 +393,21 @@ export default function App() {
     const vipInfo = matchedVip || vipClients.find(v => fullText.toLowerCase().includes(v.name.toLowerCase()));
 
     // 2. Define o responsável
-    let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : 'Fernanda Silva';
+    let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : collaborators[1]?.name || 'Tatiane Salatinos';
     const foundUser = collaborators.find(c =>
       fullText.toLowerCase().includes(c.name.split(' ')[0].toLowerCase())
     );
     if (foundUser) targetAssignee = foundUser.name;
+    const assigneeObj = collaborators.find(c => c.name === targetAssignee);
+    const targetDept = assigneeObj?.department || (activeChat.type === 'channel' ? chatMeta.data.department : 'Comercial');
 
     const channelTag = activeChat.type === 'channel'
       ? `#${chatMeta.data.name}`
       : `Privado (${chatMeta.data.name.split(' ')[0]})`;
+
+    const taskRequester = currentUser.name;
+    const taskRequesterDept = currentUser.department;
+    const fullSourceMessage = `Solicitado por: ${taskRequester} (${taskRequesterDept}) • "${fullText}"`;
 
     // 3. Aplica a Regra VIP: se for VIP, vira prioridade Máxima com SLA urgente!
     const autoTask = {
@@ -380,10 +420,13 @@ export default function App() {
       priority: isVip ? 'vip' : fullText.toLowerCase().includes('urgente') ? 'alta' : 'baixa',
       isVip: isVip,
       assignee: targetAssignee,
-      assigneeAvatar: '👤',
+      assigneeAvatar: assigneeObj?.avatar || '👤',
+      department: targetDept,
       dueDate: isVip ? 'Prioridade VIP (Hoje, 4h)' : 'Em 48h',
       channel: channelTag,
-      sourceMessage: `Flávio: "${fullText}"`
+      sourceMessage: fullSourceMessage,
+      requester: taskRequester,
+      requesterDept: taskRequesterDept
     };
 
     setTasks((prev) => [autoTask, ...prev]);
@@ -398,10 +441,10 @@ export default function App() {
       is_vip: autoTask.isVip || false,
       assignee: autoTask.assignee,
       assignee_avatar: autoTask.assigneeAvatar || '👤',
-      department: targetAssignee.includes('Fernanda') ? 'Financeiro' : targetAssignee.includes('Juliana') ? 'Secretaria' : 'Atendimento',
+      department: targetDept,
       due_date: autoTask.dueDate,
       channel: autoTask.channel,
-      source_message: autoTask.sourceMessage
+      source_message: fullSourceMessage
     }]).then(({ error }) => {
       if (error) console.warn('Erro ao salvar autoTask no Supabase:', error);
     });
@@ -473,21 +516,32 @@ export default function App() {
 
   // Adicionar tarefa confirmada pelo modal de IA ou manualmente
   const handleConfirmTaskCreation = (newTask) => {
-    setTasks((prev) => [newTask, ...prev]);
+    const taskRequester = newTask.requester || currentUser.name;
+    const taskRequesterDept = newTask.requesterDept || currentUser.department;
+    const fullSourceMessage = `Solicitado por: ${taskRequester} (${taskRequesterDept})${newTask.sourceMessage ? ' • ' + newTask.sourceMessage : ''}`;
+
+    const completeTask = {
+      ...newTask,
+      requester: taskRequester,
+      requesterDept: taskRequesterDept,
+      sourceMessage: fullSourceMessage
+    };
+
+    setTasks((prev) => [completeTask, ...prev]);
     // Sincronizar criação no Supabase
     supabase.from('tasks').insert([{
-      id: newTask.id,
-      title: newTask.title,
-      description: newTask.desc || '',
-      status: newTask.status || 'backlog',
-      priority: newTask.priority || 'media',
-      is_vip: newTask.isVip || false,
-      assignee: newTask.assignee,
-      assignee_avatar: newTask.assigneeAvatar || '👤',
-      department: newTask.department || 'Geral',
-      due_date: newTask.dueDate,
-      channel: newTask.channel,
-      source_message: newTask.sourceMessage
+      id: completeTask.id,
+      title: completeTask.title,
+      description: completeTask.desc || '',
+      status: completeTask.status || 'backlog',
+      priority: completeTask.priority || 'media',
+      is_vip: completeTask.isVip || false,
+      assignee: completeTask.assignee,
+      assignee_avatar: completeTask.assigneeAvatar || '👤',
+      department: completeTask.department || 'Geral',
+      due_date: completeTask.dueDate,
+      channel: completeTask.channel,
+      source_message: fullSourceMessage
     }]).then(({ error }) => {
       if (error) console.warn('Erro ao salvar nova tarefa no Supabase:', error);
     });
@@ -591,6 +645,7 @@ export default function App() {
         currentUser={currentUser}
         onSwitchUser={handleSwitchUser}
         realtimeStatus={realtimeStatus}
+        onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
       />
 
       {/* Área Central Baseada na Visualização Ativa */}
@@ -611,6 +666,7 @@ export default function App() {
         <KanbanBoard
           tasks={tasks}
           currentUser={currentUser}
+          collaborators={collaborators}
           onUpdateTaskStatus={handleUpdateTaskStatus}
           onAddTask={() =>
             setAiModal({ isOpen: true, mode: 'extract_task', sourceMessage: null })
@@ -697,6 +753,15 @@ export default function App() {
         onClose={() => setIsDossierOpen(false)}
         onCreateTasks={handleCreateTasksFromDossier}
         onFeedAIMemory={handleFeedAIMemory}
+      />
+
+      {/* Modal de Seleção de Usuário (Login / Identificação Opção A) */}
+      <UserSelectionModal
+        isOpen={isUserSelectOpen}
+        onClose={() => setIsUserSelectOpen(false)}
+        collaborators={collaborators}
+        onSelectUser={handleSwitchUser}
+        currentUserId={currentUser?.id}
       />
     </div>
   );

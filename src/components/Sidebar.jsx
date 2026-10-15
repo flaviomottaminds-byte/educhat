@@ -36,7 +36,8 @@ export default function Sidebar({
   onToggleTheme,
   currentUser,
   onSwitchUser,
-  realtimeStatus = 'connected'
+  realtimeStatus = 'connected',
+  onOpenUserSelectModal
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const isDirector = currentUser?.roleType === 'diretor';
@@ -315,14 +316,23 @@ export default function Sidebar({
             </div>
           </div>
 
-          {/* Botão Sol/Lua Discreto */}
-          <button
-            onClick={onToggleTheme}
-            title={theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
-            className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition"
-          >
-            {theme === 'light' ? <Moon size={15} /> : <Sun size={15} className="text-yellow-400" />}
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={onOpenUserSelectModal}
+              title="Trocar Perfil / Identificação de Usuário"
+              className="text-[10px] bg-slate-100 dark:bg-chatCard hover:bg-brand-50 dark:hover:bg-brand-950/40 text-[#54656f] dark:text-[#aebac1] hover:text-brand-600 font-semibold px-2 py-1 rounded-md border border-slate-200 dark:border-chatBorder transition"
+            >
+              Trocar
+            </button>
+            {/* Botão Sol/Lua Discreto */}
+            <button
+              onClick={onToggleTheme}
+              title={theme === 'light' ? 'Modo Escuro' : 'Modo Claro'}
+              className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200/70 dark:hover:bg-chatCard transition"
+            >
+              {theme === 'light' ? <Moon size={15} /> : <Sun size={15} className="text-yellow-400" />}
+            </button>
+          </div>
         </div>
 
         {/* Simulador de Acesso: Permite ao Diretor testar a visão de qualquer colaborador */}
