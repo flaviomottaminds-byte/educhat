@@ -123,8 +123,8 @@ export default function Sidebar({
         {/* Botões de Ação: Conexão WhatsApp, IA & Base de Conhecimento */}
         <div className="flex items-center gap-1.5">
           <button
-            onClick={onOpenWhatsAppConnection}
-            title="Conexão WhatsApp & Simulador de Webhook"
+            onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
+            title="Conexão WhatsApp & QR Code Oficial"
             className="p-1.5 rounded-full text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition flex items-center gap-1"
           >
             <Smartphone size={18} />
@@ -258,8 +258,8 @@ export default function Sidebar({
             <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
-                onClick={onOpenWhatsAppConnection}
-                title="Abrir Simulador de Webhook & QR Code"
+                onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('simulator')}
+                title="Abrir Simulador de Webhook & Carteira"
                 className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold flex items-center gap-1 shadow-2xs transition"
               >
                 <Zap size={11} /> Testar
@@ -307,7 +307,7 @@ export default function Sidebar({
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>Atendimento WhatsApp ({filteredWhatsAppContacts.length})</span>
               <button
-                onClick={onOpenWhatsAppConnection}
+                onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
                 className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-0.5 text-[10px] normal-case font-bold"
               >
                 <QrCode size={12} /> Conectar Número

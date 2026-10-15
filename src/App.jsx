@@ -101,7 +101,7 @@ export default function App() {
   });
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [whatsAppContacts, setWhatsAppContacts] = useState(INITIAL_WHATSAPP_CONTACTS);
-  const [isWhatsAppConnectionOpen, setIsWhatsAppConnectionOpen] = useState(false);
+  const [whatsAppModal, setWhatsAppModal] = useState({ isOpen: false, tab: 'qrcode' });
   const [messages, setMessages] = useState(() => ({
     ...INITIAL_MESSAGES,
     ...INITIAL_WHATSAPP_MESSAGES
@@ -1359,7 +1359,7 @@ export default function App() {
           setActiveView('chat');
           clearUnread(contactId);
         }}
-        onOpenWhatsAppConnection={() => setIsWhatsAppConnectionOpen(true)}
+        onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
         aiAutonomous={aiAutonomous}
         setAiAutonomous={setAiAutonomous}
         onOpenAICopilot={() =>
@@ -1530,8 +1530,9 @@ export default function App() {
 
       {/* Modal de Conexão WhatsApp & Simulador de Webhooks */}
       <WhatsAppConnectionModal
-        isOpen={isWhatsAppConnectionOpen}
-        onClose={() => setIsWhatsAppConnectionOpen(false)}
+        isOpen={whatsAppModal.isOpen}
+        initialTab={whatsAppModal.tab}
+        onClose={() => setWhatsAppModal((prev) => ({ ...prev, isOpen: false }))}
         onSimulateWebhook={handleWhatsAppWebhookEvent}
       />
     </div>
