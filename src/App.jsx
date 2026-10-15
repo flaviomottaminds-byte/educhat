@@ -1632,6 +1632,9 @@ export default function App() {
         onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
         unreadCounts={unreadCounts}
         lastSyncTime={lastSyncTime}
+        officialWhatsAppNumber="+55 (11) 93059-4591"
+        institutionName="Faculdade Olavo Bilac • Grupo EstudeMais"
+        portfolioLabel="Matriz Olavo Bilac • Carteira Ativa"
       />
 
       {/* Área Central Baseada na Visualização Ativa */}

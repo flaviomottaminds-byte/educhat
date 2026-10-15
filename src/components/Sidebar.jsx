@@ -47,7 +47,10 @@ export default function Sidebar({
   realtimeStatus = 'connected',
   onOpenUserSelectModal,
   unreadCounts = {},
-  lastSyncTime = ''
+  lastSyncTime = '',
+  officialWhatsAppNumber = import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
+  institutionName = import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+  portfolioLabel = import.meta.env.VITE_PORTFOLIO_LABEL || 'Matriz Olavo Bilac • Carteira Ativa'
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarTab, setSidebarTab] = useState('whatsapp'); // 'whatsapp' | 'internal'
@@ -131,8 +134,8 @@ export default function Sidebar({
           <div>
             <h1 className="font-bold text-chatTextTitle text-base leading-tight flex items-center gap-1.5">
               EduChat
-              <span className="text-[10px] bg-brand-600/15 text-brand-600 dark:text-brand-500 font-semibold px-1.5 py-0.5 rounded">
-                PRO
+              <span className="text-[10px] bg-brand-600/15 text-brand-600 dark:text-brand-500 font-semibold px-1.5 py-0.5 rounded" title="Faculdade Olavo Bilac • Grupo EstudeMais">
+                Olavo Bilac
               </span>
             </h1>
             <p className="text-[11px] text-chatTextMuted flex items-center gap-1.5" title="Sincronização em segundo plano a cada 2 minutos">
@@ -281,8 +284,11 @@ export default function Sidebar({
                 <p className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 leading-tight truncate">
                   Gateway WhatsApp Ativo
                 </p>
-                <p className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate">
-                  +55 (11) 98765-4321 • Carteira Ativa
+                <p
+                  className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate"
+                  title={`${officialWhatsAppNumber} • ${institutionName} (${portfolioLabel})`}
+                >
+                  {officialWhatsAppNumber} • {portfolioLabel}
                 </p>
               </div>
             </div>
@@ -338,9 +344,12 @@ export default function Sidebar({
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>Atendimento WhatsApp ({filteredWhatsAppContacts.length})</span>
               <button
+                type="button"
                 onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
-                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-0.5 text-[10px] normal-case font-bold"
+                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold"
+                title="Conexão Railway ativa em background. Clique para ver status da instância."
               >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
                 <QrCode size={12} /> Conectar Número
               </button>
             </div>

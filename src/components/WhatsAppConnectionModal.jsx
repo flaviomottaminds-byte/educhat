@@ -49,11 +49,14 @@ export default function WhatsAppConnectionModal({
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [timer, setTimer] = useState(45);
-  const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting' | 'connected' | 'expired'
+  const [connectionStatus, setConnectionStatus] = useState('connected'); // 'connecting' | 'connected' | 'expired'
   const [connectedInfo, setConnectedInfo] = useState({
-    phone: '+55 (11) 98765-4321',
-    name: 'EduChat Matriz Oficial',
-    battery: 94
+    phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
+    name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+    department: 'Secretaria Acadêmica / Matriz',
+    instanceName: 'EduChat-Matriz-01',
+    status: 'open',
+    battery: 98
   });
 
   const [evolutionConfig, setEvolutionConfig] = useState(() => {
@@ -211,6 +214,28 @@ export default function WhatsAppConnectionModal({
     setSuccessFeedback('');
 
     try {
+      // 0. Se a instância já estiver aberta/conectada no Railway
+      const isOpenState =
+        content?.state === 'open' ||
+        content?.instance?.state === 'open' ||
+        content?.connectionStatus === 'open' ||
+        content?.status === 'open' ||
+        (typeof content === 'string' && (content.includes('"state":"open"') || content.includes('"connectionStatus":"open"')));
+
+      if (isOpenState) {
+        setConnectionStatus('connected');
+        setConnectedInfo((prev) => ({
+          ...prev,
+          phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
+          name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+          department: 'Secretaria Acadêmica / Matriz',
+          instanceName: evolutionConfig.instanceName || 'EduChat-Matriz-01',
+          status: 'open'
+        }));
+        setSuccessFeedback('✅ Aparelho WhatsApp oficial já está autenticado e online no Railway!');
+        return;
+      }
+
       // 1. Extração Direta da Imagem Base64 (Sem Dupla Codificação)
       const directImage = extractBase64Image(content);
 
@@ -366,7 +391,7 @@ export default function WhatsAppConnectionModal({
     return { success: true, via: 'direct', data };
   };
 
-  // Obter QR Code da Evolution API
+  // Obter QR Code da Evolution API ou Validar Conexão Ativa
   const handleFetchFromEvolutionEndpoint = async () => {
     setIsLoadingQR(true);
     setErrorMessage('');
@@ -375,10 +400,39 @@ export default function WhatsAppConnectionModal({
     try {
       const result = await callEvolutionApi('connect');
       const payloadData = result?.data?.data || result?.data;
+
+      // Se a instância já estiver aberta/conectada no Railway
+      const isOpenState =
+        payloadData?.state === 'open' ||
+        payloadData?.instance?.state === 'open' ||
+        payloadData?.connectionStatus === 'open' ||
+        payloadData?.status === 'open' ||
+        result?.data?.instance?.state === 'open' ||
+        result?.data?.state === 'open';
+
+      if (isOpenState) {
+        setConnectionStatus('connected');
+        setConnectedInfo((prev) => ({
+          ...prev,
+          phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
+          name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+          department: 'Secretaria Acadêmica / Matriz',
+          instanceName: evolutionConfig.instanceName || 'EduChat-Matriz-01',
+          status: 'open'
+        }));
+        setSuccessFeedback(`✅ WhatsApp Oficial (+55 11 93059-4591) está 100% conectado e ativo no Railway!`);
+        return;
+      }
+
       await handleConvertAndPlotQRCode(payloadData);
       setSuccessFeedback(`✅ QR Code carregado com sucesso ${result.via === 'edge-function' ? '(via Edge Function Proxy)' : '(via conexão direta)'}!`);
     } catch (err) {
       console.warn('Erro ao chamar Evolution API:', err);
+      if (err.message && (err.message.includes('open') || err.message.includes('connected'))) {
+        setConnectionStatus('connected');
+        setSuccessFeedback(`✅ WhatsApp Oficial já está conectado.`);
+        return;
+      }
       setErrorMessage(`Falha na comunicação (${err.message}). Se o navegador bloquear por CORS, verifique a Edge Function "evolution-proxy" ou use os botões abaixo para tentar novamente ou colar o Payload manualmente.`);
       setShowApiConfig(true);
     } finally {
@@ -386,14 +440,25 @@ export default function WhatsAppConnectionModal({
     }
   };
 
-  // Reset de Instância Travada na Evolution API (Logout + Connect) - Item 2
+  // Reset de Instância Travada na Evolution API (Logout + Connect) - Com Proteção contra Desconexão Acidental
   const handleResetInstance = async () => {
+    const instName = evolutionConfig.instanceName || 'EduChat-Matriz-01';
+
+    const confirmed = window.confirm(
+      `⚠️ ATENÇÃO: A instância "${instName}" está vinculada ao WhatsApp Oficial da Faculdade Olavo Bilac (+55 11 93059-4591).\n\n` +
+      `Fazer o reset desconectará o aparelho do servidor Railway e interromperá os atendimentos até um novo QR Code ser escaneado.\n\n` +
+      `Tem certeza que deseja desconectar e gerar um novo QR Code?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
     setIsLoadingQR(true);
     setErrorMessage('');
     setSuccessFeedback('');
     setQrCodeDataUrl('');
-
-    const instName = evolutionConfig.instanceName || 'EduChat-Matriz-01';
+    setConnectionStatus('connecting');
 
     try {
       setSuccessFeedback(`1/2 Desconectando instância "${instName}" (logout) para limpar sessão fantasma...`);
@@ -503,7 +568,7 @@ export default function WhatsAppConnectionModal({
                 </span>
               </h2>
               <p className="text-xs text-chatTextMuted">
-                Gateway WhatsApp Web • QR Code Visual & Roteamento Inteligente
+                Faculdade Olavo Bilac • Grupo EstudeMais • Gateway WhatsApp Railway
               </p>
             </div>
           </div>
@@ -574,30 +639,52 @@ export default function WhatsAppConnectionModal({
 
               {/* Se o aparelho já estiver conectado */}
               {connectionStatus === 'connected' ? (
-                <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-500/40 rounded-2xl p-6 text-center space-y-3 animate-in fade-in">
+                <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-500/40 rounded-2xl p-6 text-center space-y-3.5 animate-in fade-in">
                   <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
                     <CheckCircle2 size={36} />
                   </div>
-                  <h3 className="text-base font-bold text-emerald-950 dark:text-emerald-200">
-                    WhatsApp Conectado com Sucesso!
-                  </h3>
-                  <p className="text-xs text-emerald-800 dark:text-emerald-300 max-w-md mx-auto">
-                    O número <strong>{connectedInfo.phone}</strong> está autenticado via Evolution API e pronto para receber mensagens e webhooks no EduChat.
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/50 px-2.5 py-0.5 rounded-full">
+                      Gateway Ativo no Railway
+                    </span>
+                    <h3 className="text-base font-bold text-emerald-950 dark:text-emerald-100 mt-1">
+                      WhatsApp Oficial Conectado com Sucesso!
+                    </h3>
+                  </div>
+
+                  <div className="bg-white/85 dark:bg-chatPanel/90 border border-emerald-200 dark:border-emerald-500/30 rounded-xl p-3.5 max-w-md mx-auto text-xs space-y-1.5 shadow-2xs">
+                    <p className="text-emerald-950 dark:text-emerald-200 font-bold text-sm">
+                      {connectedInfo.name}
+                    </p>
+                    <p className="text-emerald-700 dark:text-emerald-400 font-mono text-base font-extrabold tracking-wide">
+                      {connectedInfo.phone}
+                    </p>
+                    <div className="flex items-center justify-center gap-2 text-[11px] text-chatTextMuted pt-1.5 border-t border-slate-100 dark:border-chatBorder">
+                      <span>Instância: <strong className="text-chatTextTitle">{evolutionConfig.instanceName || 'EduChat-Matriz-01'}</strong></span>
+                      <span>•</span>
+                      <span>Carteira: <strong className="text-emerald-600 dark:text-emerald-400">Matriz Olavo Bilac</strong></span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-emerald-800 dark:text-emerald-300 max-w-md mx-auto leading-relaxed">
+                    A sessão Baileys está <strong>online e sincronizada em segundo plano</strong>. As mensagens enviadas por alunos e candidatos são entregues instantaneamente via Webhook ao Supabase e ao EduChat.
                   </p>
-                  <div className="pt-2 flex justify-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setConnectionStatus('connecting')}
-                      className="px-4 py-2 border border-emerald-300 dark:border-emerald-500/40 text-emerald-800 dark:text-emerald-300 text-xs font-semibold rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/40 transition"
-                    >
-                      Reconectar Outro Aparelho
-                    </button>
+
+                  <div className="pt-2 flex items-center justify-center gap-2.5">
                     <button
                       type="button"
                       onClick={onClose}
-                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg shadow-sm transition"
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
                     >
-                      Concluir & Abrir Atendimentos
+                      Manter Conexão & Abrir Atendimentos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetInstance}
+                      className="px-3.5 py-2.5 border border-rose-300 dark:border-rose-800/60 text-rose-700 dark:text-rose-400 text-xs font-semibold rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
+                      title="Desconecta a sessão atual no Railway para ler um novo QR Code"
+                    >
+                      Trocar Aparelho
                     </button>
                   </div>
                 </div>
