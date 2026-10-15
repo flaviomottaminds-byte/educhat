@@ -11,8 +11,12 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
 };
 
+const DEFAULT_EVO_URL = "https://evolution-api-production-3fb2.up.railway.app";
+const DEFAULT_EVO_KEY = "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
+const DEFAULT_EVO_INSTANCE = "EduChat-Matriz-01";
+
 interface ProxyPayload {
-  action?: "connect" | "logout" | "status" | "restart";
+  action?: "connect" | "logout" | "status" | "create" | "restart";
   apiUrl?: string;
   instanceName?: string;
   apiKey?: string;
@@ -80,41 +84,22 @@ serve(async (req: Request) => {
       };
     }
 
-    const envApiUrl = Deno.env.get("EVOLUTION_API_URL") || Deno.env.get("VITE_EVOLUTION_API_URL") || "";
-    const envApiKey = Deno.env.get("EVOLUTION_API_KEY") || Deno.env.get("VITE_EVOLUTION_API_KEY") || "";
-    const envInstance = Deno.env.get("EVOLUTION_INSTANCE") || Deno.env.get("VITE_EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
+    const envApiUrl = Deno.env.get("EVOLUTION_API_URL") || Deno.env.get("VITE_EVOLUTION_API_URL") || DEFAULT_EVO_URL;
+    const envApiKey = Deno.env.get("EVOLUTION_API_KEY") || Deno.env.get("VITE_EVOLUTION_API_KEY") || DEFAULT_EVO_KEY;
+    const envInstance = Deno.env.get("EVOLUTION_INSTANCE") || Deno.env.get("VITE_EVOLUTION_INSTANCE") || DEFAULT_EVO_INSTANCE;
 
-    const apiUrl = (payload.apiUrl || envApiUrl || "").replace(/\/+$/, "");
-    const instanceName = (payload.instanceName || envInstance || "").trim();
-    const apiKey = (payload.apiKey || envApiKey || "").trim();
+    let apiUrl = (payload.apiUrl || envApiUrl || DEFAULT_EVO_URL).replace(/\/+$/, "");
+    if (apiUrl.includes("suaempresa.com")) {
+      apiUrl = DEFAULT_EVO_URL;
+    }
+    const instanceName = (payload.instanceName || envInstance || DEFAULT_EVO_INSTANCE).trim();
+    const apiKey = (payload.apiKey || envApiKey || DEFAULT_EVO_KEY).trim();
     const action = payload.action || "connect";
-
-    if (!apiUrl) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "URL da Evolution API não configurada. Defina a variável VITE_EVOLUTION_API_URL ou informe a URL no formulário.",
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (!instanceName) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Nome da instância da Evolution API não informado.",
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     const evoHeaders: Record<string, string> = {
       "Content-Type": "application/json",
+      apikey: apiKey,
     };
-    if (apiKey) {
-      evoHeaders["apikey"] = apiKey;
-    }
 
     // 2. Ação: Logout da Instância (Reset de socket fantasma)
     if (action === "logout") {
@@ -144,7 +129,36 @@ serve(async (req: Request) => {
       );
     }
 
-    // 3. Ação: Status da Conexão
+    // 3. Ação: Criar Instância Explicitamente
+    if (action === "create") {
+      const createUrl = `${apiUrl}/instance/create`;
+      const createRes = await fetch(createUrl, {
+        method: "POST",
+        headers: evoHeaders,
+        body: JSON.stringify({
+          instanceName: instanceName,
+          qrcode: true,
+          integration: "WHATSAPP-BAILEYS",
+        }),
+      });
+
+      const createData = await createRes.json();
+      const base64Image = extractBase64(createData);
+
+      return new Response(
+        JSON.stringify({
+          success: createRes.ok,
+          status: createRes.status,
+          instance: instanceName,
+          base64: base64Image,
+          pairingCode: createData?.qrcode?.pairingCode || null,
+          data: createData,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // 4. Ação: Status da Conexão
     if (action === "status") {
       const stateUrl = `${apiUrl}/instance/connectionState/${instanceName}`;
       const stateRes = await fetch(stateUrl, { method: "GET", headers: evoHeaders });
@@ -163,9 +177,48 @@ serve(async (req: Request) => {
       );
     }
 
-    // 4. Ação: Conectar / Obter QR Code (action === 'connect')
+    // 5. Ação Principal: Conectar / Obter QR Code (com Auto-Criação em caso de 404)
     const connectUrl = `${apiUrl}/instance/connect/${instanceName}`;
-    const evoResponse = await fetch(connectUrl, { method: "GET", headers: evoHeaders });
+    let evoResponse = await fetch(connectUrl, { method: "GET", headers: evoHeaders });
+
+    // Se retornar 404 (instância inexistente), auto-cria a instância
+    if (evoResponse.status === 404) {
+      console.log(`Instância "${instanceName}" não encontrada (404). Criando automaticamente via /instance/create...`);
+      const createUrl = `${apiUrl}/instance/create`;
+      const createResponse = await fetch(createUrl, {
+        method: "POST",
+        headers: evoHeaders,
+        body: JSON.stringify({
+          instanceName: instanceName,
+          qrcode: true,
+          integration: "WHATSAPP-BAILEYS",
+        }),
+      });
+
+      if (createResponse.ok) {
+        const createData = await createResponse.json();
+        const createdBase64 = extractBase64(createData);
+
+        if (createdBase64) {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              instance: instanceName,
+              base64: createdBase64,
+              pairingCode: createData?.qrcode?.pairingCode || null,
+              code: createData?.qrcode?.code || null,
+              data: createData,
+              created: true,
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
+      // Aguarda 1 segundo e tenta /instance/connect novamente
+      await new Promise((r) => setTimeout(r, 1000));
+      evoResponse = await fetch(connectUrl, { method: "GET", headers: evoHeaders });
+    }
 
     if (!evoResponse.ok) {
       const errText = await evoResponse.text();

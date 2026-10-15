@@ -28,6 +28,10 @@ import {
   Power
 } from 'lucide-react';
 
+const PROD_EVO_URL = 'https://evolution-api-production-3fb2.up.railway.app';
+const PROD_EVO_KEY = 'e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f';
+const PROD_EVO_INSTANCE = 'EduChat-Matriz-01';
+
 export default function WhatsAppConnectionModal({
   isOpen,
   onClose,
@@ -52,11 +56,31 @@ export default function WhatsAppConnectionModal({
     battery: 94
   });
 
-  const [evolutionConfig, setEvolutionConfig] = useState(() => ({
-    apiUrl: localStorage.getItem('educhat_evo_url') || import.meta.env.VITE_EVOLUTION_API_URL || '',
-    instanceName: localStorage.getItem('educhat_evo_instance') || import.meta.env.VITE_EVOLUTION_INSTANCE || 'EduChat-Matriz-01',
-    apiKey: localStorage.getItem('educhat_evo_key') || import.meta.env.VITE_EVOLUTION_API_KEY || ''
-  }));
+  const [evolutionConfig, setEvolutionConfig] = useState(() => {
+    let savedUrl = localStorage.getItem('educhat_evo_url');
+    if (!savedUrl || savedUrl.includes('suaempresa.com')) {
+      savedUrl = import.meta.env.VITE_EVOLUTION_API_URL || PROD_EVO_URL;
+      localStorage.setItem('educhat_evo_url', savedUrl);
+    }
+
+    let savedKey = localStorage.getItem('educhat_evo_key');
+    if (!savedKey || savedKey.length < 10) {
+      savedKey = import.meta.env.VITE_EVOLUTION_API_KEY || PROD_EVO_KEY;
+      localStorage.setItem('educhat_evo_key', savedKey);
+    }
+
+    let savedInst = localStorage.getItem('educhat_evo_instance');
+    if (!savedInst || savedInst === 'nome-da-instancia') {
+      savedInst = import.meta.env.VITE_EVOLUTION_INSTANCE || PROD_EVO_INSTANCE;
+      localStorage.setItem('educhat_evo_instance', savedInst);
+    }
+
+    return {
+      apiUrl: savedUrl,
+      instanceName: savedInst,
+      apiKey: savedKey
+    };
+  });
 
   const [manualPayloadInput, setManualPayloadInput] = useState('');
   const [showApiConfig, setShowApiConfig] = useState(false);
@@ -136,12 +160,24 @@ export default function WhatsAppConnectionModal({
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setActiveTab(initialTab);
-      // Se já possui URL da Evolution configurada que não seja a demo padrão, busca o QR real imediatamente
-      if (evolutionConfig.apiUrl && !evolutionConfig.apiUrl.includes('suaempresa.com') && evolutionConfig.instanceName) {
-        handleFetchFromEvolutionEndpoint();
-      } else {
-        generateFreshQRCode();
+      // Limpeza forçada de cache/localStorage caso tenha URL fictícia antiga
+      const currentUrl = localStorage.getItem('educhat_evo_url');
+      if (!currentUrl || currentUrl.includes('suaempresa.com')) {
+        const prodUrl = import.meta.env.VITE_EVOLUTION_API_URL || PROD_EVO_URL;
+        const prodKey = import.meta.env.VITE_EVOLUTION_API_KEY || PROD_EVO_KEY;
+        const prodInst = import.meta.env.VITE_EVOLUTION_INSTANCE || PROD_EVO_INSTANCE;
+        localStorage.setItem('educhat_evo_url', prodUrl);
+        localStorage.setItem('educhat_evo_key', prodKey);
+        localStorage.setItem('educhat_evo_instance', prodInst);
+        setEvolutionConfig({
+          apiUrl: prodUrl,
+          apiKey: prodKey,
+          instanceName: prodInst
+        });
       }
+
+      // Busca o QR Code real da Evolution API
+      handleFetchFromEvolutionEndpoint();
     }
   }, [isOpen, initialTab]);
 
@@ -273,7 +309,35 @@ export default function WhatsAppConnectionModal({
     }
 
     const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
-    const response = await fetch(connectEndpoint, { method: 'GET', headers });
+    let response = await fetch(connectEndpoint, { method: 'GET', headers });
+
+    // Auto-criação caso a instância ainda não exista no servidor Railway (404)
+    if (response.status === 404) {
+      console.log(`Instância "${instName}" não existe (404). Criando automaticamente via POST /instance/create...`);
+      try {
+        const createRes = await fetch(`${cleanUrl}/instance/create`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            instanceName: instName,
+            qrcode: true,
+            integration: 'WHATSAPP-BAILEYS'
+          })
+        });
+
+        if (createRes.ok) {
+          const createData = await createRes.json();
+          if (createData?.qrcode?.base64 || createData?.base64) {
+            return { success: true, via: 'direct-created', data: createData };
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+          response = await fetch(connectEndpoint, { method: 'GET', headers });
+        }
+      } catch (createErr) {
+        console.warn('Falha na tentativa de auto-criação da instância:', createErr);
+      }
+    }
+
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`Evolution API retornou status ${response.status}: ${errText || response.statusText}`);
@@ -335,11 +399,7 @@ export default function WhatsAppConnectionModal({
 
   // Recarregar inteligente
   const handleRefreshClick = () => {
-    if (evolutionConfig.apiUrl && !evolutionConfig.apiUrl.includes('suaempresa.com') && evolutionConfig.instanceName) {
-      handleFetchFromEvolutionEndpoint();
-    } else {
-      generateFreshQRCode();
-    }
+    handleFetchFromEvolutionEndpoint();
   };
 
   // Executar simulação de webhooks (Portas 1, 2, 3 e Áudio)
@@ -735,7 +795,7 @@ export default function WhatsAppConnectionModal({
                         type="text"
                         value={evolutionConfig.apiUrl}
                         onChange={(e) => setEvolutionConfig({ ...evolutionConfig, apiUrl: e.target.value })}
-                        placeholder="https://api.evolution.suaempresa.com"
+                        placeholder="https://evolution-api-production-3fb2.up.railway.app"
                         className="w-full bg-white dark:bg-chatCard border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-1.5 text-chatTextTitle focus:outline-none focus:border-brand-500"
                       />
                     </div>
