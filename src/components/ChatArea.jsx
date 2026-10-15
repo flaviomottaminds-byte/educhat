@@ -22,8 +22,156 @@ import {
   Smartphone,
   UserCheck,
   Headphones,
-  PhoneCall
+  PhoneCall,
+  Reply
 } from 'lucide-react';
+
+// Helper para renderizar texto com links clicáveis (Item 6)
+function FormattedMessageText({ text }) {
+  if (!text) return null;
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+  const parts = text.split(urlRegex);
+
+  return (
+    <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">
+      {parts.map((part, i) => {
+        if (part && part.match(urlRegex)) {
+          const href = part.startsWith('http://') || part.startsWith('https://') ? part : `https://${part}`;
+          return (
+            <a
+              key={i}
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 dark:text-blue-400 underline hover:text-blue-700 dark:hover:text-blue-300 break-all font-semibold transition"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {part}
+            </a>
+          );
+        }
+        return part;
+      })}
+    </p>
+  );
+}
+
+// Player interativo de áudio com reprodução real e barra de onda (Item 2)
+function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [currentTime, setCurrentTime] = useState('0:00');
+  const audioRef = useRef(null);
+
+  const togglePlay = () => {
+    if (audioRef.current && audioUrl) {
+      if (isPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      } else {
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
+    } else {
+      // Simulação visual quando não há stream binário
+      setIsPlaying((prev) => !prev);
+    }
+  };
+
+  useEffect(() => {
+    let interval = null;
+    if (isPlaying && (!audioUrl || !audioRef.current)) {
+      interval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 100) {
+            setIsPlaying(false);
+            return 0;
+          }
+          return prev + 5;
+        });
+      }, 500);
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, audioUrl]);
+
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      const current = audioRef.current.currentTime;
+      const total = audioRef.current.duration || 1;
+      setProgress((current / total) * 100);
+      const mins = Math.floor(current / 60);
+      const secs = Math.floor(current % 60);
+      setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+    }
+  };
+
+  const handleEnded = () => {
+    setIsPlaying(false);
+    setProgress(0);
+    setCurrentTime('0:00');
+  };
+
+  return (
+    <div className="space-y-2 max-w-sm">
+      {audioUrl && (
+        <audio
+          ref={audioRef}
+          src={audioUrl}
+          onTimeUpdate={handleTimeUpdate}
+          onEnded={handleEnded}
+          className="hidden"
+        />
+      )}
+      <div className="flex items-center gap-3 p-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10">
+        <button
+          type="button"
+          onClick={togglePlay}
+          className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs hover:scale-105 transition"
+          title={isPlaying ? "Pausar áudio" : "Reproduzir áudio"}
+        >
+          {isPlaying ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
+        </button>
+        <div className="flex-1 space-y-1">
+          <div
+            className="relative flex items-center gap-1 h-5 items-end cursor-pointer"
+            onClick={togglePlay}
+            title="Clique para reproduzir"
+          >
+            {[40, 75, 30, 90, 60, 100, 50, 80, 45, 95, 60, 30, 85, 50, 70, 40].map((h, idx) => {
+              const barPercent = (idx / 16) * 100;
+              const isActive = progress >= barPercent;
+              return (
+                <div
+                  key={idx}
+                  className={`flex-1 rounded-full transition-colors ${
+                    isActive
+                      ? 'bg-emerald-600 dark:bg-emerald-400'
+                      : 'bg-emerald-600/30 dark:bg-emerald-400/30'
+                  }`}
+                  style={{ height: `${h}%` }}
+                />
+              );
+            })}
+          </div>
+          <div className="flex items-center justify-between text-[10px] opacity-70">
+            <span>{isPlaying ? currentTime : duration}</span>
+            <span>Mensagem de Voz</span>
+          </div>
+        </div>
+      </div>
+
+      {transcription && (
+        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
+          <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
+            <Headphones size={12} /> Transcrição Speech-to-Text:
+          </div>
+          <p className="italic text-chatTextTitle leading-relaxed">
+            "{transcription}"
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function ChatArea({
   chatMeta, // { type: 'channel' | 'dm' | 'whatsapp', data: Channel | Collaborator | WhatsAppContact }
@@ -45,6 +193,15 @@ export default function ChatArea({
   const [pendingAttachment, setPendingAttachment] = useState(null);
   const [activeScheduleId, setActiveScheduleId] = useState(null);
   const [activeDelegateId, setActiveDelegateId] = useState(null);
+  const [replyingTo, setReplyingTo] = useState(null); // Estado para Resposta / Quote (Item 5)
+  
+  // Estado para Gravação de Áudio Nativo com MediaRecorder (Item 2)
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const timerIntervalRef = useRef(null);
+
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -61,13 +218,127 @@ export default function ChatArea({
     scrollToBottom();
   }, [messages, chatMeta]);
 
+  // Limpeza de recursos ao desmontar
+  useEffect(() => {
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stream.getTracks().forEach((t) => t.stop());
+          mediaRecorderRef.current.stop();
+        } catch {}
+      }
+    };
+  }, []);
+
   const handleSend = (e) => {
     e?.preventDefault();
     if (!inputText.trim() && !pendingAttachment) return;
 
-    onSendMessage(inputText, pendingAttachment);
+    onSendMessage(inputText, pendingAttachment, {
+      replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null
+    });
     setInputText('');
     setPendingAttachment(null);
+    setReplyingTo(null);
+  };
+
+  // Iniciar Gravação de Áudio Nativa (Item 2)
+  const startRecording = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Seu navegador não possui suporte para captura de áudio.');
+        return;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      timerIntervalRef.current = setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.warn('Erro ao acessar microfone:', err);
+      alert('Permissão de microfone necessária para gravar mensagem de voz.');
+    }
+  };
+
+  // Finalizar e Enviar Gravação de Áudio Nativa (Item 2)
+  const stopAndSendRecording = () => {
+    if (!mediaRecorderRef.current) return;
+    const recorder = mediaRecorderRef.current;
+    const durationSec = recordingDuration;
+
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingDuration(0);
+
+    recorder.onstop = () => {
+      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const mins = Math.floor(durationSec / 60);
+        const secs = durationSec % 60;
+        const formattedTime = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+
+        onSendMessage(
+          `🎙️ Mensagem de voz (${formattedTime})`,
+          {
+            name: `audio_${Date.now()}.webm`,
+            size: `${(blob.size / 1024).toFixed(1)} KB`,
+            type: 'audio/webm',
+            dataUrl: reader.result,
+            duration: formattedTime
+          },
+          {
+            replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
+            isAudio: true,
+            duration: formattedTime
+          }
+        );
+        setReplyingTo(null);
+      };
+      reader.readAsDataURL(blob);
+
+      try {
+        recorder.stream.getTracks().forEach((track) => track.stop());
+      } catch {}
+    };
+
+    try {
+      recorder.stop();
+    } catch {}
+  };
+
+  // Cancelar Gravação de Áudio (Item 2)
+  const cancelRecording = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    setIsRecording(false);
+    setRecordingDuration(0);
+
+    if (mediaRecorderRef.current) {
+      try {
+        mediaRecorderRef.current.stream.getTracks().forEach((track) => track.stop());
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    audioChunksRef.current = [];
   };
 
   // Upload de arquivos (Item 8)
@@ -332,6 +603,18 @@ export default function ChatArea({
                         : 'bg-white dark:bg-chatBubbleOther text-[#111b21] dark:text-chatBubbleOtherText rounded-lg rounded-tl-none'
                     }`}
                   >
+                    {/* Bloco de Citação no Balão (Item 5) */}
+                    {m.replyTo && (
+                      <div className="mb-2 p-2 bg-black/5 dark:bg-white/5 border-l-4 border-brand-600 dark:border-brand-500 rounded-r-lg text-xs">
+                        <span className="font-bold text-brand-600 dark:text-brand-400 block text-[11px] mb-0.5">
+                          {m.replyTo.senderName || 'Mensagem'}:
+                        </span>
+                        <p className="text-chatTextMuted truncate text-[11.5px] line-clamp-2">
+                          {m.replyTo.text}
+                        </p>
+                      </div>
+                    )}
+
                     {/* Renderização de Anexo no Balão de Chat (Item 8) */}
                     {m.attachment && (
                       <div className="mb-2">
@@ -354,7 +637,7 @@ export default function ChatArea({
                               </a>
                             </div>
                           </div>
-                        ) : (
+                        ) : !m.attachment.type?.startsWith('audio/') ? (
                           <div className="p-2.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between gap-3 max-w-sm">
                             <div className="flex items-center gap-2 truncate">
                               <FileText size={24} className="text-rose-500 shrink-0" />
@@ -376,11 +659,11 @@ export default function ChatArea({
                               <Download size={14} />
                             </a>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     )}
 
-                    {/* Renderização Especial de Áudio WhatsApp com Speech-to-Text */}
+                    {/* Renderização de Áudio WhatsApp / Voz Nativa (Item 2) */}
                     {(() => {
                       const isAudioMessage = m.isAudio || m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:') || m.attachment?.type?.startsWith('audio/');
                       let transcription = m.audioTranscription || '';
@@ -391,44 +674,17 @@ export default function ChatArea({
 
                       if (isAudioMessage) {
                         return (
-                          <div className="space-y-2 max-w-sm">
-                            <div className="flex items-center gap-3 p-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10">
-                              <button
-                                type="button"
-                                className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs hover:scale-105 transition"
-                                title="Reproduzir áudio"
-                              >
-                                <Play size={16} className="ml-0.5" />
-                              </button>
-                              <div className="flex-1 space-y-1">
-                                <div className="flex items-center gap-1 h-5 items-end">
-                                  {[40, 75, 30, 90, 60, 100, 50, 80, 45, 95, 60, 30, 85, 50, 70, 40].map((h, idx) => (
-                                    <div key={idx} className="flex-1 bg-emerald-600/70 dark:bg-emerald-400/80 rounded-full" style={{ height: `${h}%` }} />
-                                  ))}
-                                </div>
-                                <div className="flex items-center justify-between text-[10px] opacity-70">
-                                  <span>0:14</span>
-                                  <span>Mensagem de Voz WhatsApp</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            {transcription && (
-                              <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-                                <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
-                                  <Headphones size={12} /> Transcrição Speech-to-Text:
-                                </div>
-                                <p className="italic text-chatTextTitle leading-relaxed">
-                                  "{transcription}"
-                                </p>
-                              </div>
-                            )}
-                          </div>
+                          <AudioMessagePlayer
+                            audioUrl={m.attachment?.dataUrl || m.audioUrl}
+                            duration={m.attachment?.duration || m.duration || '0:14'}
+                            transcription={transcription}
+                          />
                         );
                       }
 
+                      {/* Renderização de Texto com Hiperlinks Clicáveis (Item 6) */}
                       return (
-                        <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">{m.text}</p>
+                        <FormattedMessageText text={m.text} />
                       );
                     })()}
 
@@ -606,33 +862,51 @@ export default function ChatArea({
                       </div>
                     )}
 
+                    {/* Confirmação de Leitura Dinâmica (Item 3) */}
                     <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-[#667781] dark:text-chatTextMuted select-none">
                       <span>{m.timestamp}</span>
                       {isMe && (
-                        <span className="text-[#53bdeb] font-bold text-xs leading-none">
-                          ✓✓
+                        <span title={m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'}>
+                          {m.status === 'read' ? (
+                            <span className="text-[#53bdeb] font-bold text-xs leading-none">✓✓</span>
+                          ) : m.status === 'delivered' ? (
+                            <span className="text-[#8696a0] font-bold text-xs leading-none">✓✓</span>
+                          ) : (
+                            <span className="text-[#8696a0] font-bold text-xs leading-none">✓</span>
+                          )}
                         </span>
                       )}
                     </div>
                   </div>
 
-                  {/* Botão Hover da IA para Gerar Card no Kanban */}
-                  {!isBot && (
-                    <div
-                      className={`absolute top-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-all duration-150 z-10 flex gap-1 ${
-                        isMe ? 'left-0 -translate-x-full pr-2' : 'right-0 translate-x-full pl-2'
-                      }`}
+                  {/* Botões Hover: Responder (Item 5) & Gerar Card no Kanban */}
+                  <div
+                    className={`absolute top-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-all duration-150 z-10 flex items-center gap-1 ${
+                      isMe ? 'left-0 -translate-x-full pr-2' : 'right-0 translate-x-full pl-2'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setReplyingTo(m)}
+                      title="Responder a esta mensagem diretamente"
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition"
                     >
+                      <Reply size={11} className="text-blue-300" />
+                      <span>Responder</span>
+                    </button>
+
+                    {!isBot && (
                       <button
+                        type="button"
                         onClick={() => onCreateTaskFromMessage(m)}
                         title="Transformar esta mensagem em Tarefa no Kanban com IA"
-                        className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-700 hover:bg-purple-600 text-white text-[11px] font-semibold shadow-md border border-purple-400/40 whitespace-nowrap hover:scale-105 transition"
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-700 hover:bg-purple-600 text-white text-[10px] font-semibold shadow-md border border-purple-400/40 whitespace-nowrap hover:scale-105 transition"
                       >
                         <Sparkles size={11} className="text-yellow-300 animate-pulse" />
                         <span>Gerar Card</span>
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
               </div>
             );
@@ -641,8 +915,30 @@ export default function ChatArea({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Barra de Entrada / Digitação com Anexo e Ações Rápidas */}
+      {/* Barra de Entrada / Digitação com Anexo, Citação e Áudio Nativo */}
       <div className="p-2.5 bg-[#f0f2f5] dark:bg-chatPanel border-t border-chatBorder">
+        {/* Barra de Visualização da Mensagem Respondida (Quote Preview - Item 5) */}
+        {replyingTo && (
+          <div className="mb-2 px-3 py-2 bg-white dark:bg-chatCard border-l-4 border-brand-600 dark:border-brand-500 rounded-r-lg flex items-center justify-between text-xs shadow-xs animate-in fade-in slide-in-from-bottom-1">
+            <div className="flex flex-col truncate pr-2">
+              <span className="font-bold text-brand-600 dark:text-brand-400 text-[11px] flex items-center gap-1">
+                <Reply size={12} /> Respondendo a {replyingTo.senderName || 'Mensagem'}:
+              </span>
+              <span className="text-chatTextMuted truncate text-[12px] mt-0.5">
+                {replyingTo.attachment ? `[Arquivo] ${replyingTo.attachment.name}` : replyingTo.text}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyingTo(null)}
+              className="p-1 text-slate-400 hover:text-red-500 transition rounded-full shrink-0"
+              title="Cancelar resposta"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* Preview do arquivo pronto para envio (Item 8) */}
         {pendingAttachment && (
           <div className="mb-2 px-3 py-1.5 bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-500/30 rounded-lg flex items-center justify-between text-xs animate-in fade-in slide-in-from-bottom-2">
@@ -688,61 +984,95 @@ export default function ChatArea({
           </button>
         </div>
 
-        <form onSubmit={handleSend} className="flex items-center gap-2">
-          {/* Input de arquivo invisível (Item 8) */}
-          <input
-            type="file"
-            ref={fileInputRef}
-            onChange={handleFileSelect}
-            className="hidden"
-            accept="image/*,.pdf,.doc,.docx,.txt,.xlsx,.csv"
-          />
+        {/* Formulário de Envio ou Interface de Gravação de Voz Nativa (Item 2) */}
+        {isRecording ? (
+          <div className="flex items-center justify-between bg-white dark:bg-chatInputBg px-4 py-2.5 rounded-lg border border-rose-300 dark:border-rose-500/40 shadow-xs animate-in fade-in">
+            <div className="flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-rose-600 animate-pulse" />
+              <span className="text-sm font-bold font-mono text-rose-600 dark:text-rose-400">
+                {Math.floor(recordingDuration / 60)}:{recordingDuration % 60 < 10 ? '0' : ''}{recordingDuration % 60}
+              </span>
+              <span className="text-xs text-chatTextMuted hidden sm:inline">
+                Gravando áudio de voz nativo...
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={cancelRecording}
+                className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-full transition"
+                title="Descartar gravação"
+              >
+                <Trash2 size={18} />
+              </button>
+              <button
+                type="button"
+                onClick={stopAndSendRecording}
+                className="px-3 py-1.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm flex items-center gap-1.5 transition"
+                title="Concluir e enviar áudio"
+              >
+                <Send size={14} />
+                <span>Enviar Áudio</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={handleSend} className="flex items-center gap-2">
+            {/* Input de arquivo invisível (Item 8) */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              className="hidden"
+              accept="image/*,.pdf,.doc,.docx,.txt,.xlsx,.csv"
+            />
 
-          <button
-            type="button"
-            onClick={() => setInputText((prev) => prev + ' 😊')}
-            className="p-1.5 text-[#54656f] dark:text-chatTextMuted hover:text-chatTextTitle transition rounded-full"
-            title="Inserir Emoji"
-          >
-            <Smile size={22} />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="p-1.5 text-[#54656f] dark:text-chatTextMuted hover:text-brand-600 transition rounded-full"
-            title="Anexar documento ou imagem"
-          >
-            <Paperclip size={22} />
-          </button>
-
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            placeholder={pendingAttachment ? "Adicione uma legenda ou envie..." : "Digite uma mensagem"}
-            className="flex-1 bg-white dark:bg-chatInputBg text-chatTextTitle text-[14px] placeholder:text-[#54656f] dark:placeholder:text-chatTextMuted px-4 py-2.5 rounded-lg border-none focus:outline-none shadow-xs transition"
-          />
-
-          {inputText.trim() || pendingAttachment ? (
-            <button
-              type="submit"
-              className="p-2.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white shadow-sm flex items-center justify-center transition"
-              title="Enviar mensagem"
-            >
-              <Send size={18} />
-            </button>
-          ) : (
             <button
               type="button"
-              onClick={() => onSendMessage('🎙️ [Mensagem de áudio recebida via WhatsApp]')}
-              className="p-2 text-[#54656f] dark:text-chatTextMuted hover:text-chatTextTitle transition rounded-full"
-              title="Gravar mensagem de voz"
+              onClick={() => setInputText((prev) => prev + ' 😊')}
+              className="p-1.5 text-[#54656f] dark:text-chatTextMuted hover:text-chatTextTitle transition rounded-full"
+              title="Inserir Emoji"
             >
-              <Mic size={22} />
+              <Smile size={22} />
             </button>
-          )}
-        </form>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="p-1.5 text-[#54656f] dark:text-chatTextMuted hover:text-brand-600 transition rounded-full"
+              title="Anexar documento ou imagem"
+            >
+              <Paperclip size={22} />
+            </button>
+
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder={pendingAttachment ? "Adicione uma legenda ou envie..." : replyingTo ? `Respondendo a ${replyingTo.senderName}...` : "Digite uma mensagem"}
+              className="flex-1 bg-white dark:bg-chatInputBg text-chatTextTitle text-[14px] placeholder:text-[#54656f] dark:placeholder:text-chatTextMuted px-4 py-2.5 rounded-lg border-none focus:outline-none shadow-xs transition"
+            />
+
+            {inputText.trim() || pendingAttachment ? (
+              <button
+                type="submit"
+                className="p-2.5 rounded-full bg-brand-600 hover:bg-brand-500 text-white shadow-sm flex items-center justify-center transition"
+                title="Enviar mensagem"
+              >
+                <Send size={18} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={startRecording}
+                className="p-2 text-[#54656f] dark:text-chatTextMuted hover:text-brand-600 transition rounded-full"
+                title="Gravar mensagem de voz nativa"
+              >
+                <Mic size={22} />
+              </button>
+            )}
+          </form>
+        )}
       </div>
     </section>
   );

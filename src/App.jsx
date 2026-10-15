@@ -24,7 +24,8 @@ import {
   INITIAL_COLLABORATORS,
   INITIAL_MESSAGES,
   INITIAL_TASKS,
-  getChatKey
+  getChatKey,
+  normalizeChatKey
 } from './data/initialData';
 import {
   INITIAL_WHATSAPP_CONTACTS,
@@ -182,29 +183,100 @@ export default function App() {
     requestDesktopNotificationPermission();
   }, []);
 
-  // Helper para limpar contador de mensagens não lidas
+  // Helper para limpar contador de mensagens não lidas instantaneamente (Item 7)
   const clearUnread = (targetId) => {
+    if (!targetId) return;
     setUnreadCounts((prev) => {
-      const next = { ...prev, [targetId]: 0 };
-      const totalUnread = Object.values(next).reduce((a, b) => a + b, 0);
+      const next = { ...prev };
+      delete next[targetId];
+      // Limpa também chaves compostas vinculadas (ex: dm-u1-u9, u9)
+      Object.keys(next).forEach((k) => {
+        if (k === targetId || k.includes(`-${targetId}`) || k.includes(`${targetId}-`)) {
+          delete next[k];
+        }
+      });
+      const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
       document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
       return next;
     });
     stopTaskbarBlink();
   };
 
-  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 1 e 2)
+  // Helper para marcar mensagens da conversa ativa como lidas no banco e no estado (Item 3)
+  const markMessagesAsRead = (chat) => {
+    if (!chat) return;
+    const cKey = getChatKey(chat, currentUser.id);
+    clearUnread(chat.id);
+
+    setMessages((prev) => {
+      const list = prev[cKey];
+      if (!list || list.length === 0) return prev;
+
+      let hasUnread = false;
+      const updated = list.map((m) => {
+        if (m.senderId !== currentUser.id && m.status !== 'read') {
+          hasUnread = true;
+          return { ...m, status: 'read' };
+        }
+        return m;
+      });
+
+      if (!hasUnread) return prev;
+
+      // Dispara atualização assíncrona no Supabase para que o remetente receba os dois checks azuis
+      supabase
+        .from('messages')
+        .select('id, text')
+        .eq('chat_id', cKey)
+        .neq('sender_id', currentUser.id)
+        .not('text', 'like', '%<!-- STATUS:read -->%')
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            data.forEach((row) => {
+              const newText = row.text.includes('<!-- STATUS:')
+                ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/, '<!-- STATUS:read -->')
+                : `${row.text}\n<!-- STATUS:read -->`;
+              supabase.from('messages').update({ text: newText }).eq('id', row.id).then(() => {});
+            });
+          }
+        });
+
+      return { ...prev, [cKey]: updated };
+    });
+  };
+
+  // Sincroniza limpeza de notificação ao alternar de chat ou receber mensagem no chat aberto (Item 7)
+  useEffect(() => {
+    if (activeChat?.id) {
+      clearUnread(activeChat.id);
+      markMessagesAsRead(activeChat);
+    }
+  }, [activeChat?.id, currentMessages?.length]);
+
+  // Limpa notificações fantasmas quando a janela/aba do navegador ganha foco (Item 7)
+  useEffect(() => {
+    const handleWindowFocus = () => {
+      if (activeChat?.id) {
+        clearUnread(activeChat.id);
+        markMessagesAsRead(activeChat);
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+    return () => window.removeEventListener('focus', handleWindowFocus);
+  }, [activeChat]);
+
+  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 1, 4 e 7)
   const handleIncomingNotification = (msg, cKey) => {
     if (msg.senderId === currentUser.id) return;
 
     // Trava de Privacidade: Se for conversa privada 1 a 1 (DM), só notifica os dois participantes
     if (cKey.startsWith('dm-')) {
-      const parts = cKey.split('-');
-      if (parts.length >= 3) {
-        const id1 = parts[1];
-        const id2 = parts[2];
-        if (currentUser.id !== id1 && currentUser.id !== id2) {
-          return; // Ignora 100%! Conversa privada entre outros dois colaboradores.
+      const parts = cKey.replace('dm-', '').split('-');
+      if (parts.length >= 2) {
+        const id1 = parts[0];
+        const id2 = parts[1];
+        if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
+          return; // Conversa confidencial de terceiros
         }
       }
     }
@@ -214,7 +286,7 @@ export default function App() {
       const contact = whatsAppContacts.find((c) => c.id === cKey);
       if (contact && contact.status === 'carteira_ativa' && contact.assignee) {
         if (currentUser.name !== contact.assignee && currentUser.roleType !== 'diretor') {
-          return; // Zero ruído na equipe geral: o atendimento é exclusivo do consultor dono da carteira!
+          return; // Exclusivo do consultor dono da carteira
         }
       }
     }
@@ -222,8 +294,19 @@ export default function App() {
     const currentKey = getChatKey(activeChat, currentUser.id);
     const isCurrentActive = cKey === currentKey && !document.hidden;
 
-    if (!isCurrentActive) {
-      const targetBadgeKey = cKey.startsWith('c-') ? cKey : msg.senderId;
+    if (isCurrentActive) {
+      // Se a conversa já está visível e aberta, marca como lida imediatamente sem criar badge
+      markMessagesAsRead(activeChat);
+    } else {
+      // Identifica o identificador correto da badge (para DMs, sempre o outro usuário!)
+      let targetBadgeKey = cKey;
+      if (cKey.startsWith('dm-')) {
+        const parts = cKey.replace('dm-', '').split('-');
+        targetBadgeKey = parts[0] === currentUser.id ? parts[1] : parts[0];
+      } else if (cKey.startsWith('wa-')) {
+        targetBadgeKey = cKey;
+      }
+
       setUnreadCounts((prev) => {
         const next = { ...prev, [targetBadgeKey]: (prev[targetBadgeKey] || 0) + 1 };
         return next;
@@ -253,18 +336,14 @@ export default function App() {
       if (dbMessages && dbMessages.length > 0) {
         const grouped = {};
         dbMessages.forEach((m) => {
-          const rawKey = m.chat_id;
-          const key = rawKey === 'dm-u2' ? 'dm-u1-u2' :
-                      rawKey === 'dm-u3' ? 'dm-u1-u3' :
-                      rawKey === 'dm-u4' ? 'dm-u1-u4' :
-                      rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
+          const key = normalizeChatKey(m.chat_id, currentUser.id);
 
-          // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros
+          // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros (Item 4)
           if (key.startsWith('dm-')) {
-            const parts = key.split('-');
-            if (parts.length >= 3) {
-              const id1 = parts[1];
-              const id2 = parts[2];
+            const parts = key.replace('dm-', '').split('-');
+            if (parts.length >= 2) {
+              const id1 = parts[0];
+              const id2 = parts[1];
               if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
                 return;
               }
@@ -276,6 +355,8 @@ export default function App() {
           let cleanText = m.text || '';
           let parsedAttachment = null;
           let linkedTaskId = null;
+          let parsedReplyTo = null;
+          let parsedStatus = 'sent';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
@@ -284,6 +365,24 @@ export default function App() {
                 parsedAttachment = JSON.parse(match[1]);
                 cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
               } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- REPLY_TO:')) {
+            const match = cleanText.match(/<!-- REPLY_TO:([\s\S]+?) -->/);
+            if (match) {
+              try {
+                parsedReplyTo = JSON.parse(match[1]);
+                cleanText = cleanText.replace(/<!-- REPLY_TO:[\s\S]+? -->/, '').trim();
+              } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- STATUS:')) {
+            const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
+            if (match) {
+              parsedStatus = match[1];
+              cleanText = cleanText.replace(/<!-- STATUS:[^\s>]+ -->/, '').trim();
             }
           }
 
@@ -302,6 +401,8 @@ export default function App() {
             text: cleanText,
             timestamp: m.timestamp,
             attachment: parsedAttachment,
+            replyTo: parsedReplyTo,
+            status: parsedStatus,
             taskId: linkedTaskId,
             actionExtracted: false
           });
@@ -381,27 +482,33 @@ export default function App() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
-          const rawKey = row.chat_id;
-          const cKey = rawKey === 'dm-u2' ? 'dm-u1-u2' :
-                       rawKey === 'dm-u3' ? 'dm-u1-u3' :
-                       rawKey === 'dm-u4' ? 'dm-u1-u4' :
-                       rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
+          const cKey = normalizeChatKey(row.chat_id, currentUser.id);
 
-          // Trava de Privacidade Realtime: Se for DM, só processa se o usuário for participante
+          // Trava de Privacidade Realtime: Se for DM, só processa se o usuário for participante (Item 4)
           if (cKey.startsWith('dm-')) {
-            const parts = cKey.split('-');
-            if (parts.length >= 3) {
-              const id1 = parts[1];
-              const id2 = parts[2];
-              if (currentUser.id !== id1 && currentUser.id !== id2) {
-                return; // Ignora 100%! Conversa privada confidencial de terceiros.
+            const parts = cKey.replace('dm-', '').split('-');
+            if (parts.length >= 2) {
+              const id1 = parts[0];
+              const id2 = parts[1];
+              if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
+                return; // Conversa privada de terceiros
               }
+            }
+          }
+
+          // Verificação de Canais para Usuários Não-Diretores (Item 4)
+          if (cKey.startsWith('c-')) {
+            const ch = channels.find((c) => c.id === cKey);
+            if (ch && ch.department !== 'Todos' && ch.department !== currentUser.department && currentUser.roleType !== 'diretor') {
+              return; // Canal restrito de outro departamento
             }
           }
 
           let cleanText = row.text || '';
           let parsedAttachment = null;
           let linkedTaskId = null;
+          let parsedReplyTo = null;
+          let parsedStatus = 'sent';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
@@ -410,6 +517,24 @@ export default function App() {
                 parsedAttachment = JSON.parse(match[1]);
                 cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
               } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- REPLY_TO:')) {
+            const match = cleanText.match(/<!-- REPLY_TO:([\s\S]+?) -->/);
+            if (match) {
+              try {
+                parsedReplyTo = JSON.parse(match[1]);
+                cleanText = cleanText.replace(/<!-- REPLY_TO:[\s\S]+? -->/, '').trim();
+              } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- STATUS:')) {
+            const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
+            if (match) {
+              parsedStatus = match[1];
+              cleanText = cleanText.replace(/<!-- STATUS:[^\s>]+ -->/, '').trim();
             }
           }
 
@@ -428,6 +553,8 @@ export default function App() {
             text: cleanText,
             timestamp: row.timestamp,
             attachment: parsedAttachment,
+            replyTo: parsedReplyTo,
+            status: parsedStatus,
             taskId: linkedTaskId,
             actionExtracted: false
           };
@@ -442,6 +569,30 @@ export default function App() {
           });
 
           handleIncomingNotification(incoming, cKey);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const row = payload.new;
+          const cKey = normalizeChatKey(row.chat_id, currentUser.id);
+
+          let cleanText = row.text || '';
+          let parsedStatus = 'sent';
+          if (cleanText.includes('<!-- STATUS:')) {
+            const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
+            if (match) parsedStatus = match[1];
+          }
+
+          setMessages((prev) => {
+            const list = prev[cKey];
+            if (!list) return prev;
+            return {
+              ...prev,
+              [cKey]: list.map((m) => (m.id === row.id ? { ...m, status: parsedStatus } : m))
+            };
+          });
         }
       )
       .on(
@@ -521,10 +672,21 @@ export default function App() {
     };
   }, [activeChat, currentUser]);
 
-  // Enviar nova mensagem no chat ativo com suporte a anexo
-  const handleSendMessage = (text, attachment = null) => {
+  // Enviar nova mensagem no chat ativo com suporte a anexo, resposta/citação e áudio (Item 2, 3, 5 e 7)
+  const handleSendMessage = (text, attachment = null, options = {}) => {
     const now = new Date();
     const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    // Limpa a notificação pendente do chat atual imediatamente (Item 7)
+    clearUnread(activeChat.id);
+
+    // Determina status de leitura inicial: IA e contatos online recebem entrega imediata
+    let initialStatus = 'sent';
+    if (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot') {
+      initialStatus = 'read';
+    } else if (chatMeta.data?.online) {
+      initialStatus = 'delivered';
+    }
 
     const newMsg = {
       id: 'm_' + Date.now(),
@@ -533,6 +695,9 @@ export default function App() {
       text: text || '',
       timestamp: timeStr,
       attachment: attachment || null,
+      replyTo: options.replyTo || null,
+      isAudio: !!options.isAudio,
+      status: initialStatus,
       actionExtracted: false,
     };
 
@@ -541,9 +706,14 @@ export default function App() {
       [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
     }));
 
-    const payloadText = attachment
-      ? `${text ? text + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachment)}]`
-      : text;
+    let payloadText = text || '';
+    if (attachment) {
+      payloadText = `${payloadText ? payloadText + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachment)}]`;
+    }
+    if (options.replyTo) {
+      payloadText = `${payloadText}\n<!-- REPLY_TO:${JSON.stringify(options.replyTo)} -->`;
+    }
+    payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
     supabase.from('messages').insert([{
       id: newMsg.id,

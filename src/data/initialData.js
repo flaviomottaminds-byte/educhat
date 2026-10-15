@@ -45,6 +45,24 @@ export const getChatKey = (activeChat, currentUserId) => {
   return `dm-${ids[0]}-${ids[1]}`;
 };
 
+export const normalizeChatKey = (rawKey, currentUserId = 'u1') => {
+  if (!rawKey) return 'c-geral';
+  if (rawKey.startsWith('dm-')) {
+    const rawIds = rawKey.replace('dm-', '').split('-').filter(Boolean);
+    if (rawIds.length === 1) {
+      const otherId = rawIds[0];
+      const partner = (currentUserId && currentUserId !== otherId) ? currentUserId : 'u1';
+      const ids = [partner, otherId].sort();
+      return `dm-${ids[0]}-${ids[1]}`;
+    }
+    if (rawIds.length >= 2) {
+      const ids = [rawIds[0], rawIds[1]].sort();
+      return `dm-${ids[0]}-${ids[1]}`;
+    }
+  }
+  return rawKey;
+};
+
 export const INITIAL_TASKS = [
   {
     id: 't_wa_lucas',

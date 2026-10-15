@@ -133,26 +133,44 @@ export default function AICopilotModal({
                   />
                 </div>
 
-                {/* Seleção do Responsável com Barra de Rolagem (Item 4) */}
+                {/* Seleção do Responsável com Barra de Rolagem Perfeita (Item 1) */}
                 <div>
                   <label className="block text-xs font-semibold text-chatTextMuted mb-1 flex items-center justify-between">
                     <span>Responsável Designado:</span>
-                    <span className="text-[11px] text-brand-600 dark:text-brand-400">
+                    <span className="text-[11px] text-brand-600 dark:text-brand-400 font-semibold">
                       {realCollaborators.length} colaboradores
                     </span>
                   </label>
-                  <select
-                    value={taskForm.assignee}
-                    onChange={(e) => setTaskForm({ ...taskForm, assignee: e.target.value })}
-                    className="w-full bg-chatInputBg text-chatTextTitle text-xs border border-chatBorder rounded-lg px-3 py-2.5 focus:outline-none focus:border-brand-500 shadow-xs max-h-48 overflow-y-auto cursor-pointer"
-                    size={Math.min(5, realCollaborators.length)}
-                  >
-                    {realCollaborators.map((c) => (
-                      <option key={c.id} value={c.name} className="py-1 px-2 hover:bg-brand-50">
-                        {c.avatar} {c.name} — {c.department} ({c.role})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="w-full bg-chatInputBg border border-chatBorder rounded-xl max-h-48 overflow-y-auto divide-y divide-chatBorder/50 shadow-inner scrollbar-thin">
+                    {realCollaborators.map((c) => {
+                      const isSelected = taskForm.assignee === c.name;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => setTaskForm({ ...taskForm, assignee: c.name })}
+                          className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between transition ${
+                            isSelected
+                              ? 'bg-brand-600 text-white font-bold'
+                              : 'text-chatTextTitle hover:bg-slate-100 dark:hover:bg-chatPanel'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="text-base shrink-0">{c.avatar}</span>
+                            <div className="truncate">
+                              <p className="leading-tight truncate">{c.name}</p>
+                              <p className={`text-[10px] truncate ${isSelected ? 'text-white/80' : 'text-chatTextMuted'}`}>
+                                {c.department} • {c.role}
+                              </p>
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <Check size={16} className="text-white shrink-0 ml-2" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
                 {/* Avaliação de Prioridade 100% Automática pela IA (Item 5) */}
