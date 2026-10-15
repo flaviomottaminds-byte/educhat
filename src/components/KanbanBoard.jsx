@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Clock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Shield, UserCheck, Building2, Lock } from 'lucide-react';
+import { Plus, Clock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Shield, UserCheck, Building2, Lock, Maximize2, Paperclip } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 const COLUMNS = [
@@ -9,7 +9,14 @@ const COLUMNS = [
   { id: 'done', title: 'Concluído', color: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10' },
 ];
 
-export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, currentUser, collaborators = [] }) {
+export default function KanbanBoard({
+  tasks,
+  onUpdateTaskStatus,
+  onAddTask,
+  onCardClick,
+  currentUser,
+  collaborators = []
+}) {
   const isDirector = currentUser?.roleType === 'diretor';
 
   // Estados de filtro para o Diretor
@@ -18,33 +25,59 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
   // Estado de aba para o Colaborador ('my_tasks' | 'dept_tasks' | 'my_requests')
   const [collabTab, setCollabTab] = useState('my_tasks');
 
-  // Filtragem estrita com base no Perfil (Opção 1 com Rastreamento Intersetorial)
+  // Normalização para comparações seguras de nomes
+  const normalize = (val) => (val || '').trim().toLowerCase();
+  const currentUserName = normalize(currentUser?.name);
+  const currentUserFirst = currentUserName.split(' ')[0];
+
+  // 1. Minhas Demandas: Tarefas que EU tenho que fazer (responsável sou eu)
+  const isAssignedToMe = (t) => {
+    const a = normalize(t.assignee);
+    return a === currentUserName || a.startsWith(currentUserFirst);
+  };
+
+  // 2. Minhas Solicitações: Demandas que EU abri para OUTROS colaboradores/setores
+  const isRequestedByMe = (t) => {
+    const r = normalize(t.requester);
+    return r === currentUserName || r.startsWith(currentUserFirst);
+  };
+
+  // 3. Demandas do meu departamento
+  const isMyDepartment = (t) => {
+    const d = normalize(t.department);
+    const userDept = normalize(currentUser?.department);
+    return d === userDept;
+  };
+
+  // Filtragem estrita com base no Perfil (Opção 1 com Rastreamento Intersetorial e correção de filtros)
   const filteredTasks = tasks.filter((t) => {
     if (isDirector) {
-      // Diretor pode ver todas ou filtrar por responsável específico
-      if (filterAssignee !== 'todos' && t.assignee !== filterAssignee) return false;
+      if (filterAssignee !== 'todos') {
+        return normalize(t.assignee) === normalize(filterAssignee);
+      }
       return true;
     } else {
-      // Colaborador comum:
       if (collabTab === 'my_tasks') {
-        return t.assignee === currentUser.name;
+        return isAssignedToMe(t);
       }
       if (collabTab === 'dept_tasks') {
-        return t.department === currentUser.department;
+        return isMyDepartment(t);
       }
       if (collabTab === 'my_requests') {
-        return t.requester === currentUser.name;
+        // Solicitações abertas por mim para outros
+        return isRequestedByMe(t) && !isAssignedToMe(t);
       }
       return false;
     }
   });
 
   // Métricas para os botões do colaborador
-  const myTasksCount = tasks.filter((t) => t.assignee === currentUser?.name).length;
-  const deptTasksCount = tasks.filter((t) => t.department === currentUser?.department).length;
-  const myRequestsCount = tasks.filter((t) => t.requester === currentUser?.name).length;
+  const myTasksCount = tasks.filter(isAssignedToMe).length;
+  const deptTasksCount = tasks.filter(isMyDepartment).length;
+  const myRequestsCount = tasks.filter((t) => isRequestedByMe(t) && !isAssignedToMe(t)).length;
 
-  const handleMove = (taskId, currentStatus, direction) => {
+  const handleMove = (e, taskId, currentStatus, direction) => {
+    e.stopPropagation(); // Evita abrir o modal de detalhes ao clicar na seta
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
     const currentIndex = statusOrder.indexOf(currentStatus);
     const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
@@ -103,7 +136,7 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
           <p className="text-xs text-chatTextMuted">
             {isDirector
               ? 'Acompanhamento executivo de todos os processos e colaboradores da empresa'
-              : 'Demandas atribuídas a você, do seu setor e solicitações abertas por você'}
+              : 'Demandas atribuídas a você, do seu setor e solicitações abertas por você (clique no card para ampliar)'}
           </p>
         </div>
 
@@ -116,10 +149,10 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
               <select
                 value={filterAssignee}
                 onChange={(e) => setFilterAssignee(e.target.value)}
-                className="bg-white dark:bg-chatCard text-chatTextTitle text-xs border border-slate-300 dark:border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-xs"
+                className="bg-white dark:bg-chatCard text-chatTextTitle text-xs border border-slate-300 dark:border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
               >
                 <option value="todos">🌐 Toda a Equipe ({tasks.length})</option>
-                {collaborators.map((c) => (
+                {collaborators.filter(c => !c.isBot).map((c) => (
                   <option key={c.id} value={c.name}>
                     {c.name} ({c.department})
                   </option>
@@ -127,7 +160,7 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
               </select>
             </div>
           ) : (
-            /* Abas de visualização restrita do Colaborador com Rastreamento de Solicitações */
+            /* Abas de visualização restrita do Colaborador (Corrigidas no Item 3) */
             <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs">
               <button
                 onClick={() => setCollabTab('my_tasks')}
@@ -206,19 +239,24 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                   colTasks.map((t) => (
                     <div
                       key={t.id}
-                      className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder hover:border-brand-500/50 rounded-lg p-3.5 shadow-xs space-y-2.5 transition group"
+                      onClick={() => onCardClick && onCardClick(t)}
+                      className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder hover:border-brand-500 hover:shadow-md rounded-lg p-3.5 shadow-xs space-y-2.5 transition group cursor-pointer"
+                      title="Clique para ampliar e ver detalhes, anexos e comentários"
                     >
-                      {/* Topo do Card: Prioridade e Canal */}
+                      {/* Topo do Card: Prioridade e Canal + Ícone de Ampliar */}
                       <div className="flex items-center justify-between">
                         {getPriorityBadge(t.priority, t.isVip)}
-                        <span className="text-[10px] text-brand-600 dark:text-brand-500 font-semibold">
-                          {t.channel}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-brand-600 dark:text-brand-500 font-semibold">
+                            {t.channel}
+                          </span>
+                          <Maximize2 size={12} className="text-chatTextMuted group-hover:text-brand-600 transition" />
+                        </div>
                       </div>
 
                       {/* Título e Descrição */}
                       <div>
-                        <h4 className="text-sm font-semibold text-chatTextTitle leading-snug">
+                        <h4 className="text-sm font-semibold text-chatTextTitle leading-snug group-hover:text-brand-700 dark:group-hover:text-brand-400 transition">
                           {t.title}
                         </h4>
                         {t.desc && (
@@ -227,6 +265,22 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                           </p>
                         )}
                       </div>
+
+                      {/* Anexos e Comentários (badges se houver) */}
+                      {((t.attachments && t.attachments.length > 0) || (t.comments && t.comments.length > 0)) && (
+                        <div className="flex items-center gap-2 text-[10px] text-chatTextMuted">
+                          {t.attachments && t.attachments.length > 0 && (
+                            <span className="flex items-center gap-1 bg-slate-100 dark:bg-chatSidebar px-1.5 py-0.5 rounded">
+                              <Paperclip size={10} /> {t.attachments.length} anexo{t.attachments.length > 1 ? 's' : ''}
+                            </span>
+                          )}
+                          {t.comments && t.comments.length > 0 && (
+                            <span className="bg-slate-100 dark:bg-chatSidebar px-1.5 py-0.5 rounded">
+                              💬 {t.comments.length} nota{t.comments.length > 1 ? 's' : ''}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Solicitante da Demanda (Rastreamento Intersetorial) */}
                       {t.requester && (
@@ -267,19 +321,21 @@ export default function KanbanBoard({ tasks, onUpdateTaskStatus, onAddTask, curr
                         </div>
                       </div>
 
-                      {/* Botões para mover coluna */}
+                      {/* Botões para mover coluna (com stopPropagation para não abrir modal) */}
                       <div className="pt-1 flex justify-between items-center text-xs text-chatTextMuted">
                         <button
-                          onClick={() => handleMove(t.id, t.status, 'prev')}
+                          onClick={(e) => handleMove(e, t.id, t.status, 'prev')}
                           disabled={t.status === 'backlog'}
                           className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition"
                           title="Mover para coluna anterior"
                         >
                           <ArrowLeft size={14} />
                         </button>
-                        <span className="text-[10px] text-chatTextMuted">Avançar</span>
+                        <span className="text-[10px] text-chatTextMuted group-hover:text-brand-600 font-medium transition">
+                          Ampliar Detalhes
+                        </span>
                         <button
-                          onClick={() => handleMove(t.id, t.status, 'next')}
+                          onClick={(e) => handleMove(e, t.id, t.status, 'next')}
                           disabled={t.status === 'done'}
                           className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition"
                           title="Avançar coluna"

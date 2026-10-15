@@ -15,7 +15,8 @@ import {
   Moon,
   Search,
   Filter,
-  ShieldCheck
+  ShieldCheck,
+  RefreshCw
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -37,7 +38,9 @@ export default function Sidebar({
   currentUser,
   onSwitchUser,
   realtimeStatus = 'connected',
-  onOpenUserSelectModal
+  onOpenUserSelectModal,
+  unreadCounts = {},
+  lastSyncTime
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const isDirector = currentUser?.roleType === 'diretor';
@@ -53,10 +56,16 @@ export default function Sidebar({
     c.desc?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Usuário Virtual de IA (Item 6)
+  const botCollaborator = collaborators.find((u) => u.isBot || u.id === 'u_ia_copilot');
+
+  // Colaboradores humanos filtrados
   const filteredCollaborators = collaborators.filter((u) =>
+    !u.isBot &&
     u.id !== currentUser?.id && (
       u.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      u.role.toLowerCase().includes(searchQuery.toLowerCase())
+      u.role.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      u.department?.toLowerCase().includes(searchQuery.toLowerCase())
     )
   );
 
@@ -75,14 +84,17 @@ export default function Sidebar({
                 PRO
               </span>
             </h1>
-            <p className="text-[11px] text-chatTextMuted flex items-center gap-1.5">
-              <span>WhatsApp Interno</span>
+            <p className="text-[11px] text-chatTextMuted flex items-center gap-1.5" title="Sincronização em segundo plano a cada 2 minutos">
+              <span>Sync 2 min</span>
               {realtimeStatus === 'connected' ? (
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Supabase Realtime Conectado" />
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Supabase Realtime Ativo" />
               ) : realtimeStatus === 'connecting' ? (
                 <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" title="Conectando..." />
               ) : (
                 <span className="w-2 h-2 rounded-full bg-red-500" title="Desconectado" />
+              )}
+              {lastSyncTime && (
+                <span className="text-[10px] text-chatTextMuted">({lastSyncTime})</span>
               )}
             </p>
           </div>
@@ -190,8 +202,58 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Lista de Canais e Conversas 1 a 1 */}
+      {/* Lista de Canais, Copiloto IA e Conversas 1 a 1 */}
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
+        {/* Assistente IA Institucional Pinned (Item 6) */}
+        {botCollaborator && (
+          <div className="px-1">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-400 mb-1 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <Sparkles size={11} /> Suporte & Dúvidas IA
+              </span>
+              <span className="text-[9px] bg-purple-100 dark:bg-purple-950/50 text-purple-700 dark:text-purple-300 px-1.5 py-0.2 rounded font-semibold">
+                Online 24h
+              </span>
+            </div>
+            <button
+              onClick={() => onSelectCollaborator(botCollaborator.id)}
+              className={`w-full flex items-center justify-between p-2.5 rounded-xl text-left transition border ${
+                activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === botCollaborator.id
+                  ? 'bg-purple-100/80 dark:bg-purple-950/40 border-purple-400 dark:border-purple-500 shadow-sm'
+                  : 'bg-purple-50/50 dark:bg-purple-950/20 border-purple-200 dark:border-purple-500/30 hover:bg-purple-100/60'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs">
+                  <span>🤖</span>
+                  <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel animate-pulse" />
+                </div>
+                <div className="truncate">
+                  <p className="text-xs font-bold text-chatTextTitle leading-tight truncate flex items-center gap-1">
+                    Assistente IA
+                    <span className="text-[9px] bg-yellow-400/20 text-yellow-800 dark:text-yellow-300 font-bold px-1 rounded">
+                      MEC & POP
+                    </span>
+                  </p>
+                  <p className="text-[10px] text-purple-700 dark:text-purple-300 truncate mt-0.5">
+                    Tire dúvidas de processos, Asaas e MEC
+                  </p>
+                </div>
+              </div>
+
+              {unreadCounts[botCollaborator.id] > 0 ? (
+                <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                  {unreadCounts[botCollaborator.id]}
+                </span>
+              ) : (
+                <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
+                  Perguntar →
+                </span>
+              )}
+            </button>
+          </div>
+        )}
+
         {/* Canais Operacionais */}
         <div>
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
@@ -210,6 +272,7 @@ export default function Sidebar({
           <div className="space-y-0.5">
             {filteredChannels.map((c) => {
               const isActive = activeView === 'chat' && activeChat.type === 'channel' && activeChat.id === c.id;
+              const channelUnread = unreadCounts[c.id] || c.unread || 0;
               return (
                 <button
                   key={c.id}
@@ -233,9 +296,9 @@ export default function Sidebar({
                       </p>
                     </div>
                   </div>
-                  {c.unread > 0 && (
-                    <span className="bg-brand-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center">
-                      {c.unread}
+                  {channelUnread > 0 && (
+                    <span className="bg-brand-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse">
+                      {channelUnread}
                     </span>
                   )}
                 </button>
@@ -244,7 +307,7 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Conversas Diretas (1 a 1) */}
+        {/* Conversas Diretas (1 a 1) com Badges de Mensagens Não Lidas (Item 2) */}
         <div>
           <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
             <span>Conversas 1 a 1 (WhatsApp)</span>
@@ -262,6 +325,7 @@ export default function Sidebar({
           <div className="space-y-0.5">
             {filteredCollaborators.map((user) => {
               const isActive = activeView === 'chat' && activeChat.type === 'dm' && activeChat.id === user.id;
+              const dmUnread = unreadCounts[user.id] || 0;
               return (
                 <button
                   key={user.id}
@@ -289,9 +353,15 @@ export default function Sidebar({
                     </div>
                   </div>
 
-                  <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
-                    1 a 1
-                  </span>
+                  {dmUnread > 0 ? (
+                    <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                      {dmUnread}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
+                      1 a 1
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -299,7 +369,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Rodapé: Perfil Ativo + Simulador de Usuário (Opção 1) + Alternador Sol/Lua */}
+      {/* Rodapé: Perfil Ativo + Simulador de Usuário (Apenas Humanos) + Alternador Sol/Lua */}
       <div className="p-3 bg-chatPanel border-t border-chatBorder space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 truncate">
@@ -335,7 +405,7 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Simulador de Acesso: Permite ao Diretor testar a visão de qualquer colaborador */}
+        {/* Simulador de Acesso: Permite ao Diretor testar a visão de qualquer colaborador humano */}
         <div className="flex items-center gap-1.5 bg-white dark:bg-chatCard p-1 rounded-lg border border-slate-300 dark:border-chatBorder shadow-xs">
           <span className="text-[10px] text-chatTextMuted font-medium px-1 shrink-0 flex items-center gap-1">
             <Users size={11} /> Simular:
@@ -348,7 +418,7 @@ export default function Sidebar({
             }}
             className="w-full bg-transparent text-[11px] text-chatTextTitle font-semibold focus:outline-none cursor-pointer"
           >
-            {collaborators.map((u) => (
+            {collaborators.filter(u => !u.isBot).map((u) => (
               <option key={u.id} value={u.id}>
                 {u.name} ({u.roleType === 'diretor' ? 'Diretor' : u.department})
               </option>

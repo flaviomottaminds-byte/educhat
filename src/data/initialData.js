@@ -11,6 +11,7 @@ export const INITIAL_COLLABORATORS = [
   { id: 'u10', name: 'Ana Livia', email: 'analiviamarquesribeiro@gmail.com', role: 'Marketing & Comunicação', roleType: 'colaborador', avatar: '👩‍🎨', online: true, department: 'Marketing' },
   { id: 'u11', name: 'Paulo do Vale', email: 'paulos.dovale@gmail.com', role: 'Coordenação Pedagógica', roleType: 'colaborador', avatar: '👨‍🏫', online: true, department: 'Pedagógico' },
   { id: 'u12', name: 'Luiz Augusto', email: 'luizdomingues08844@gmail.com', role: 'Expansão & Parcerias de Polos', roleType: 'colaborador', avatar: '👨‍💼', online: true, department: 'Expansão' },
+  { id: 'u_ia_copilot', name: 'Assistente IA (MEC & Processos)', email: 'ia@educhat.internal', role: 'Inteligência Artificial Institucional', roleType: 'bot', avatar: '🤖', online: true, department: 'Inteligência Artificial', isBot: true },
 ];
 
 export const INITIAL_CHANNELS = [
