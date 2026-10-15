@@ -95,11 +95,18 @@ serve(async (req) => {
     const { message, user } = await req.json();
 
     // 1. Verificação de Permissão: Apenas role = admin ou diretor
+    const role = (user?.role || "").toLowerCase();
+    const roleType = (user?.roleType || "").toLowerCase();
     const isAdmin =
-      user?.role === "admin" ||
-      user?.roleType === "diretor" ||
       user?.id === "u1" ||
-      (user?.role && user.role.toLowerCase().includes("diretor"));
+      user?.isAdmin === true ||
+      role === "admin" ||
+      role === "administrador" ||
+      roleType === "diretor" ||
+      roleType === "admin" ||
+      role.includes("admin") ||
+      role.includes("diretor") ||
+      role.includes("gestor");
 
     if (!isAdmin) {
       return new Response(

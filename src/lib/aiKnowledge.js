@@ -125,29 +125,73 @@ REGRAS OBRIGATÓRIAS DE COMPORTAMENTO:
      "🛠️ Chamado técnico registrado com sucesso no banco de dados."
    - NADA MAIS. Sem saudações prévias, sem desculpas, sem acréscimos.`;
 
+// Validador de privilégios de Administrador / Diretor
+export function isUserAdmin(user) {
+  if (!user) return false;
+  const role = (user.role || '').toLowerCase();
+  const roleType = (user.roleType || '').toLowerCase();
+  const email = (user.email || '').toLowerCase();
+
+  return (
+    user.id === 'u1' ||
+    user.isAdmin === true ||
+    role === 'admin' ||
+    role === 'administrador' ||
+    roleType === 'diretor' ||
+    roleType === 'admin' ||
+    role.includes('admin') ||
+    role.includes('diretor') ||
+    role.includes('gestor') ||
+    email.includes('flavio') ||
+    email.includes('admin')
+  );
+}
+
 // Identifica se a mensagem é um relato de bug / chamado técnico
 export function isBugReportIntent(text) {
-  if (!text || text.length < 10) return false;
+  if (!text || text.trim().length < 3) return false;
   const lower = text.toLowerCase();
 
   // 1. Padrão estruturado explícito (ex: Problema:... Ação esperada:...)
-  if (lower.includes('problema:') || lower.includes('ação esperada:') || lower.includes('acao esperada:')) {
+  if (
+    lower.includes('problema:') ||
+    lower.includes('erro:') ||
+    lower.includes('falha:') ||
+    lower.includes('bug:') ||
+    lower.includes('ação esperada:') ||
+    lower.includes('acao esperada:')
+  ) {
     return true;
   }
 
-  // 2. Termos e intenções inequívocas de falha no sistema / bug técnico
-  const bugKeywords = [
-    'bug', 'defeito', 'falha técnica', 'falha tecnica', 'erro no sistema',
-    'erro de ui', 'erro de ux', 'não está funcionando', 'nao esta funcionando',
-    'não funciona', 'nao funciona', 'não está renderizando', 'nao esta renderizando',
-    'tela preta', 'travando', 'crash', 'quebrou', 'comportamento incorreto',
-    'chamado técnico', 'chamado tecnico', 'melhoria técnica', 'melhoria tecnica',
-    'falha na captura', 'falha no envio', 'lógica incorreta', 'logica incorreta',
-    'ausência da funcionalidade', 'ausencia da funcionalidade', 'botão quebrado',
-    'botão não clica', 'registro de bug', 'reportar bug', 'reportar erro'
+  // 2. Termos e intenções inequívocas de falha no sistema / bug técnico (palavras-chave e raízes)
+  const singleWordKeywords = [
+    'bug', 'bugs', 'erro', 'erros', 'falha', 'falhas', 'defeito', 'defeitos',
+    'crash', 'crashes', 'travando', 'travou', 'trava', 'quebrou', 'quebrado',
+    'quebrada', 'quebrados', 'quebradas'
   ];
 
-  return bugKeywords.some((kw) => lower.includes(kw));
+  // Regex para palavras isoladas (evita falsos positivos com substrings sem contexto)
+  const regexPattern = new RegExp(`\\b(${singleWordKeywords.join('|')})\\b`, 'i');
+  if (regexPattern.test(lower)) {
+    return true;
+  }
+
+  // 3. Expressões e frases comuns de reporte de problemas
+  const bugPhrases = [
+    'não funciona', 'nao funciona', 'não está funcionando', 'nao esta funcionando',
+    'não abre', 'nao abre', 'não está abrindo', 'nao esta abrindo',
+    'não carrega', 'nao carrega', 'não está carregando', 'nao esta carregando',
+    'não renderiza', 'nao renderiza', 'não está renderizando', 'nao esta renderizando',
+    'não envia', 'nao envia', 'não grava', 'nao grava',
+    'tela preta', 'tela branca', 'comportamento incorreto',
+    'chamado técnico', 'chamado tecnico', 'melhoria técnica', 'melhoria tecnica',
+    'relato de bug', 'reportar bug', 'reportar erro',
+    'botão quebrado', 'botao quebrado', 'botão não clica', 'botao nao clica',
+    'failed to fetch', 'rls', 'cors'
+  ];
+
+  return bugPhrases.some((phrase) => lower.includes(phrase));
 }
 
 // Extrai e formata os dados do bug em JSON estruturado
@@ -235,12 +279,7 @@ export function answerCopilotQuery(query, user, vipClients = [], customGuideline
   const q = query.toLowerCase();
 
   // 0. AI BUG TRACKER: Interceptação Especial para Administrador com Bypass de Suporte (Item 1 e 2)
-  const isAdmin =
-    user?.role === 'admin' ||
-    user?.roleType === 'diretor' ||
-    user?.id === 'u1' ||
-    (user?.role && user.role.toLowerCase().includes('diretor')) ||
-    (user?.role && user.role.toLowerCase().includes('admin'));
+  const isAdmin = isUserAdmin(user);
 
   if (isAdmin && isBugReportIntent(query)) {
     const bugData = parseBugReport(query, user);

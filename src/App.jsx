@@ -18,7 +18,13 @@ import {
   notifyIncomingMessage,
   stopTaskbarBlink
 } from './lib/desktopNotification';
-import { answerCopilotQuery, analyzeTaskPriorityAI } from './lib/aiKnowledge';
+import {
+  answerCopilotQuery,
+  analyzeTaskPriorityAI,
+  isBugReportIntent,
+  isUserAdmin,
+  parseBugReport
+} from './lib/aiKnowledge';
 import {
   INITIAL_CHANNELS,
   INITIAL_COLLABORATORS,
@@ -812,31 +818,89 @@ export default function App() {
     });
 
     // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot
-    const isIAChat = (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot');
+    const isIAChat = (activeChat?.type === 'dm' && activeChat?.id === 'u_ia_copilot');
     const isIAMention = text.toLowerCase().includes('@ia') || text.toLowerCase().includes('@copilot');
 
     if (isIAChat || isIAMention) {
-      setTimeout(() => {
+      setTimeout(async () => {
         const cleanQuery = text.replace(/@(ia|copilot)\b/gi, '').trim();
-        const aiResult = answerCopilotQuery(cleanQuery || text, currentUser, vipClients, customAIPrompt, learnedDocuments);
-        const replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
+        const queryText = cleanQuery || text;
+        const isAdmin = isUserAdmin(currentUser);
+        const isBug = isBugReportIntent(queryText);
 
-        // Se for detecção do AI Bug Tracker (Bypass de suporte e inserção automática em bug_reports)
-        if (typeof aiResult === 'object' && aiResult?.isBugReport && aiResult?.bugData) {
-          const bugPayload = {
-            titulo: aiResult.bugData.titulo_do_bug,
-            problema: aiResult.bugData.problema_relatado,
-            solucao_esperada: aiResult.bugData.solucao_esperada,
-            prioridade: aiResult.bugData.prioridade,
-            status: 'aberto',
-            reporter_name: currentUser?.name || 'Administrador',
-            reporter_id: currentUser?.id || 'admin'
+        // LOGS DE DEPURAÇÃO NO CONSOLE (F12) - Item 3
+        console.group('🤖 [EduChat AI Message Interceptor]');
+        console.log('📝 Mensagem original:', text);
+        console.log('🧹 Query limpa:', queryText);
+        console.log('👤 Usuário ativo:', {
+          id: currentUser?.id,
+          name: currentUser?.name,
+          role: currentUser?.role,
+          roleType: currentUser?.roleType,
+          isAdmin
+        });
+        console.log('🔍 Análise de Intenção:', {
+          isBugReportIntent: isBug,
+          isAdminUser: isAdmin,
+          deveAcionarBugTracker: isAdmin && isBug
+        });
+
+        let replyText = '';
+
+        // =========================================================================
+        // 1. DESVIO CONDICIONAL: AI BUG TRACKER (Bypass de suporte para Admin)
+        // =========================================================================
+        if (isAdmin && isBug) {
+          console.log('🚨 [AI Bug Tracker] INTERCEPTAÇÃO ATIVADA: Desviando para Edge Function "ai-bug-tracker"...');
+          replyText = '🛠️ Chamado técnico registrado com sucesso no banco de dados.';
+
+          const bugEdgePayload = {
+            message: queryText,
+            user: {
+              id: currentUser?.id || 'u1',
+              name: currentUser?.name || 'Administrador',
+              role: currentUser?.role || 'admin',
+              roleType: currentUser?.roleType || 'diretor'
+            }
           };
 
-          // Salva no Supabase na tabela bug_reports
-          supabase.from('bug_reports').insert([bugPayload]).then(({ error }) => {
-            if (error) console.warn('Erro ao inserir bug_report no Supabase:', error);
-          });
+          try {
+            console.log('📡 [AI Bug Tracker] Executando supabase.functions.invoke("ai-bug-tracker", { body })...', bugEdgePayload);
+            const { data: edgeData, error: edgeError } = await supabase.functions.invoke('ai-bug-tracker', {
+              body: bugEdgePayload
+            });
+
+            console.log('📥 [AI Bug Tracker] Resposta recebida da Edge Function:', { edgeData, edgeError });
+
+            if (!edgeError && edgeData) {
+              if (edgeData.reply) replyText = edgeData.reply;
+              console.log('✅ [AI Bug Tracker] Chamado gravado no banco pela Edge Function com sucesso:', edgeData.bug_report);
+            } else {
+              throw edgeError || new Error('Edge Function retornou sem dados');
+            }
+          } catch (fnErr) {
+            console.warn('⚠️ [AI Bug Tracker] Edge Function falhou ou indisponível (' + fnErr.message + '). Executando fallback direto no banco de dados Supabase...');
+
+            // Fallback imediato: insere diretamente na tabela bug_reports do Supabase
+            const parsed = parseBugReport(queryText, currentUser);
+            const fallbackRecord = {
+              titulo: parsed.titulo_do_bug,
+              problema: parsed.problema_relatado,
+              solucao_esperada: parsed.solucao_esperada,
+              prioridade: parsed.prioridade,
+              status: 'aberto',
+              reporter_name: currentUser?.name || 'Administrador',
+              reporter_id: currentUser?.id || 'u1',
+              raw_payload: parsed
+            };
+
+            const { data: dbData, error: dbErr } = await supabase.from('bug_reports').insert([fallbackRecord]).select();
+            if (dbErr) {
+              console.error('❌ [AI Bug Tracker] Erro ao gravar fallback na tabela bug_reports:', dbErr);
+            } else {
+              console.log('✅ [AI Bug Tracker] Chamado gravado com sucesso no Supabase via fallback direto:', dbData);
+            }
+          }
 
           // Backup persistente em localStorage
           try {
@@ -844,13 +908,24 @@ export default function App() {
             storedBugs.unshift({
               id: 'bug_' + Date.now(),
               created_at: new Date().toISOString(),
-              ...bugPayload
+              titulo: queryText.slice(0, 50),
+              problema: queryText,
+              reporter_name: currentUser?.name || 'Administrador'
             });
             localStorage.setItem('educhat_bug_reports', JSON.stringify(storedBugs));
           } catch (e) {
             console.error('Erro ao armazenar bug_report em localStorage:', e);
           }
+        } else {
+          // =========================================================================
+          // 2. FLUXO REGULAR: Resposta convencional do Copiloto (RAG, MEC e POPs)
+          // =========================================================================
+          console.log('💬 [AI Chat] Usuário comum ou consulta regular: Acionando copiloto de IA padrão (RAG/MEC)...');
+          const aiResult = answerCopilotQuery(queryText, currentUser, vipClients, customAIPrompt, learnedDocuments);
+          replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
+          console.log('🤖 [AI Chat] Resposta gerada pela IA padrão:', replyText.slice(0, 100) + '...');
         }
+        console.groupEnd();
 
         const aiReply = {
           id: 'ia_' + Date.now(),
@@ -878,7 +953,7 @@ export default function App() {
         });
 
         playMessageSound();
-      }, 700);
+      }, 500);
       return;
     }
 
