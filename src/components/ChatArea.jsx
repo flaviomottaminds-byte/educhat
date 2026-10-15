@@ -517,6 +517,8 @@ export default function ChatArea({
               ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
               : target.status === 'veterano_retencao'
               ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+              : target.status === 'lead_instagram'
+              ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-300 dark:border-pink-500/30'
               : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
           }`}>
             {target.statusLabel || 'WhatsApp'}

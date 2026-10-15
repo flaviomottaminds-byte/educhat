@@ -1,7 +1,7 @@
 import React from 'react';
-import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck, Sparkles, MessageCircle } from 'lucide-react';
+import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck, Sparkles, MessageCircle, Upload } from 'lucide-react';
 
-export default function GestaoDashboard({ tasks, channels, collaborators }) {
+export default function GestaoDashboard({ tasks, channels, collaborators, onOpenInstagramImport }) {
   const totalTasks = tasks.length;
   const doneTasks = tasks.filter((t) => t.status === 'done').length;
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress').length;
@@ -9,14 +9,26 @@ export default function GestaoDashboard({ tasks, channels, collaborators }) {
   return (
     <div className="flex-1 flex flex-col h-full bg-chatBg p-8 overflow-y-auto transition-colors">
       {/* Header do Painel */}
-      <div className="mb-8">
-        <h2 className="text-3xl font-bold text-chatTextTitle flex items-center gap-3">
-          <BarChart3 className="text-brand-600 dark:text-brand-500" />
-          Painel de Gestão & Inteligência Operacional
-        </h2>
-        <p className="text-sm text-chatTextMuted mt-1">
-          Métricas de SLA por departamento, mineração de conversas recorrentes e oportunidades de melhoria contínua
-        </p>
+      <div className="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold text-chatTextTitle flex items-center gap-3">
+            <BarChart3 className="text-brand-600 dark:text-brand-500" />
+            Painel de Gestão & Inteligência Operacional
+          </h2>
+          <p className="text-sm text-chatTextMuted mt-1">
+            Métricas de SLA por departamento, mineração de conversas recorrentes e oportunidades de melhoria contínua
+          </p>
+        </div>
+        {onOpenInstagramImport && (
+          <button
+            type="button"
+            onClick={onOpenInstagramImport}
+            className="self-start md:self-auto px-4 py-2.5 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
+          >
+            <Upload size={16} />
+            <span>Importar Leads (Instagram Ads)</span>
+          </button>
+        )}
       </div>
 
       {/* Cards de Métricas Principais */}

@@ -8,6 +8,7 @@ import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
 import WhatsAppDossierModal from './components/WhatsAppDossierModal';
 import WhatsAppConnectionModal from './components/WhatsAppConnectionModal';
+import InstagramLeadImportModal from './components/InstagramLeadImportModal';
 import UserSelectionModal from './components/UserSelectionModal';
 import TaskDetailModal from './components/TaskDetailModal';
 import { Shield } from 'lucide-react';
@@ -122,6 +123,7 @@ export default function App() {
   const [channels, setChannels] = useState(INITIAL_CHANNELS);
   const [whatsAppContacts, setWhatsAppContacts] = useState(INITIAL_WHATSAPP_CONTACTS);
   const [whatsAppModal, setWhatsAppModal] = useState({ isOpen: false, tab: 'qrcode' });
+  const [isInstagramImportOpen, setIsInstagramImportOpen] = useState(false);
   const [messages, setMessages] = useState(() => ({
     ...INITIAL_MESSAGES,
     ...INITIAL_WHATSAPP_MESSAGES
@@ -1654,6 +1656,105 @@ export default function App() {
     setLearnedDocuments((prev) => prev.filter((d) => d.id !== docId));
   };
 
+  // Importação e Roteamento Exclusivo de Leads do Instagram Ads para a Expansão
+  const handleImportInstagramLeads = async (newLeads) => {
+    if (!newLeads || newLeads.length === 0) return;
+
+    const timeStr = getSaoPauloTime();
+
+    // 1. Atualizar contatos do WhatsApp no estado local (com tags e dados completos)
+    setWhatsAppContacts((prev) => {
+      const existingIds = new Set(prev.map((c) => c.id));
+      const filteredNew = newLeads.filter((l) => !existingIds.has(l.id));
+      return [...filteredNew, ...prev];
+    });
+
+    // 2. Preparar mensagens de entrada para cada lead e inserir no Supabase
+    const messagesToInsert = [];
+    const newMessagesMap = {};
+
+    newLeads.forEach((lead, idx) => {
+      const intakeText = `📥 [Lead Instagram Ads - Expansão]\n👤 Nome: ${lead.name}\n📞 WhatsApp: ${lead.phone}\n📧 Email: ${lead.email || 'Não informado'}\n📍 Cidade/Polo: ${lead.city || 'Não informada'}\n🎯 Campanha: ${lead.campaign || 'Instagram Ads - Expansão'}\n🏢 Fila: Departamento de Expansão\n👨‍💼 Responsável: Luiz Augusto`;
+
+      const msgObj = {
+        id: `wa_lead_${Date.now()}_${idx}`,
+        chat_id: lead.id,
+        sender_id: lead.id,
+        sender_name: lead.name,
+        text: intakeText,
+        timestamp: timeStr,
+        isWhatsApp: true,
+        fromStudent: true
+      };
+
+      messagesToInsert.push({
+        id: msgObj.id,
+        chat_id: msgObj.chat_id,
+        sender_id: msgObj.sender_id,
+        sender_name: msgObj.sender_name,
+        text: msgObj.text,
+        timestamp: msgObj.timestamp
+      });
+
+      newMessagesMap[lead.id] = [msgObj];
+    });
+
+    // 3. Gerar mensagem de notificação/resumo no canal #expansao
+    const samplePreview = newLeads
+      .slice(0, 5)
+      .map((l, i) => `${i + 1}. **${l.name}** - ${l.phone} (${l.city || 'Brasil'})`)
+      .join('\n');
+
+    const expansaoNoticeText = `🚀 **Novos Leads do Instagram Ads Recebidos (${newLeads.length})**\n\nTodos os ${newLeads.length} leads importados foram direcionados exclusivamente para a fila da **Expansão** sob responsabilidade de **Luiz Augusto**.\n\n${samplePreview}${newLeads.length > 5 ? `\n... e mais ${newLeads.length - 5} leads adicionados à carteira.` : ''}\n\n💬 Inicie o contato com os novos interessados e parceiros de polos!`;
+
+    const expansaoMsgObj = {
+      id: `exp_import_${Date.now()}`,
+      senderId: 'u_ia_copilot',
+      senderName: 'Assistente EduChat (Expansão)',
+      text: expansaoNoticeText,
+      timestamp: timeStr,
+      actionExtracted: false
+    };
+
+    messagesToInsert.push({
+      id: expansaoMsgObj.id,
+      chat_id: 'c-expansao',
+      sender_id: expansaoMsgObj.senderId,
+      sender_name: expansaoMsgObj.senderName,
+      text: expansaoMsgObj.text,
+      timestamp: expansaoMsgObj.timestamp
+    });
+
+    // 4. Atualizar o estado local de mensagens
+    setMessages((prev) => {
+      const updated = { ...prev };
+      Object.keys(newMessagesMap).forEach((chatId) => {
+        updated[chatId] = [...(updated[chatId] || []), ...newMessagesMap[chatId]];
+      });
+      updated['c-expansao'] = [...(updated['c-expansao'] || []), expansaoMsgObj];
+      return updated;
+    });
+
+    // 5. Gravar mensagens no Supabase
+    try {
+      const { error } = await supabase.from('messages').insert(messagesToInsert);
+      if (error) {
+        console.warn('Aviso ao gravar mensagens de leads importados no Supabase:', error);
+      }
+    } catch (dbErr) {
+      console.warn('Erro ao inserir leads no Supabase:', dbErr);
+    }
+
+    // 6. Tocar som de notificação e atualizar contador não lido em #expansao
+    playMessageSound();
+    if (activeChat.id !== 'c-expansao') {
+      setUnreadCounts((prev) => ({
+        ...prev,
+        'c-expansao': (prev['c-expansao'] || 0) + 1
+      }));
+    }
+  };
+
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
@@ -1680,6 +1781,7 @@ export default function App() {
           clearUnread(contactId);
         }}
         onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
+        onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
         aiAutonomous={aiAutonomous}
         setAiAutonomous={setAiAutonomous}
         onOpenAICopilot={() =>
@@ -1744,6 +1846,7 @@ export default function App() {
             tasks={tasks}
             channels={channels}
             collaborators={collaborators}
+            onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
           />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] dark:bg-chatBg p-8 text-center transition-colors">
@@ -1858,6 +1961,24 @@ export default function App() {
         initialTab={whatsAppModal.tab}
         onClose={() => setWhatsAppModal((prev) => ({ ...prev, isOpen: false }))}
         onSimulateWebhook={handleWhatsAppWebhookEvent}
+      />
+
+      {/* Modal de Importação de Leads do Instagram Ads para a Expansão */}
+      <InstagramLeadImportModal
+        isOpen={isInstagramImportOpen}
+        onClose={() => setIsInstagramImportOpen(false)}
+        existingContacts={whatsAppContacts}
+        onImportLeads={handleImportInstagramLeads}
+        onNavigateToChannel={(channelId) => {
+          setActiveChat({ type: 'channel', id: channelId });
+          setActiveView('chat');
+          clearUnread(channelId);
+        }}
+        onSelectContact={(contactId) => {
+          setActiveChat({ type: 'whatsapp', id: contactId });
+          setActiveView('chat');
+          clearUnread(contactId);
+        }}
       />
     </div>
   );

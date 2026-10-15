@@ -20,7 +20,8 @@ import {
   Smartphone,
   Zap,
   QrCode,
-  PhoneCall
+  PhoneCall,
+  Upload
 } from 'lucide-react';
 
 export default function Sidebar({
@@ -38,6 +39,7 @@ export default function Sidebar({
   onOpenNewChannel,
   onOpenNewCollaborator,
   onOpenWhatsAppConnection,
+  onOpenInstagramImport,
   aiAutonomous = true,
   setAiAutonomous,
   theme = 'light',
@@ -154,8 +156,16 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Botões de Ação: Conexão WhatsApp, IA & Base de Conhecimento */}
+        {/* Botões de Ação: Conexão WhatsApp, Importar Leads, IA & Base de Conhecimento */}
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={onOpenInstagramImport}
+            title="Importar Leads (Instagram Ads) para a Expansão"
+            className="p-1.5 rounded-full text-pink-600 dark:text-pink-400 hover:bg-pink-50 dark:hover:bg-pink-950/40 transition flex items-center gap-1 cursor-pointer"
+          >
+            <Upload size={18} />
+          </button>
+
           <button
             onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
             title="Conexão WhatsApp & QR Code Oficial"
@@ -343,15 +353,25 @@ export default function Sidebar({
           <div className="space-y-1">
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>Atendimento WhatsApp ({filteredWhatsAppContacts.length})</span>
-              <button
-                type="button"
-                onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
-                className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold"
-                title="Conexão Railway ativa em background. Clique para ver status da instância."
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                <QrCode size={12} /> Conectar Número
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenInstagramImport}
+                  className="text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold cursor-pointer"
+                  title="Importar leads em CSV do Instagram Ads diretamente para a Expansão"
+                >
+                  <Upload size={12} /> Importar Leads
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
+                  className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold"
+                  title="Conexão Railway ativa em background. Clique para ver status da instância."
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                  <QrCode size={12} /> Conectar
+                </button>
+              </div>
             </div>
 
             {filteredWhatsAppContacts.map((contact) => {
@@ -382,6 +402,8 @@ export default function Sidebar({
                             ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
                             : contact.status === 'veterano_retencao'
                             ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+                            : contact.status === 'lead_instagram'
+                            ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800/40'
                             : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
                         }`}>
                           {contact.statusLabel}
