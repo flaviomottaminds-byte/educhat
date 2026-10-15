@@ -13,7 +13,10 @@ import {
   Image as ImageIcon,
   HelpCircle,
   Bot,
-  Trash2
+  Trash2,
+  Edit2,
+  Calendar,
+  UserPlus
 } from 'lucide-react';
 
 export default function ChatArea({
@@ -22,6 +25,9 @@ export default function ChatArea({
   onSendMessage,
   onCreateTaskFromMessage,
   onDeleteTaskFromMessage,
+  onOpenTaskDetail,
+  onScheduleTask,
+  onDelegateTask,
   onSummarizeChat,
   onOpenWhatsAppDossier,
   currentUser,
@@ -30,6 +36,8 @@ export default function ChatArea({
 }) {
   const [inputText, setInputText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState(null);
+  const [activeScheduleId, setActiveScheduleId] = useState(null);
+  const [activeDelegateId, setActiveDelegateId] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -307,21 +315,138 @@ export default function ChatArea({
 
                     <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">{m.text}</p>
 
-                    {/* Botão de Excluir / Desfazer Card Criado no Chat (Item 1) */}
+                    {/* Barra de Ações Rápidas do Kanban Criado no Chat (Editar, Agendar, Delegar, Excluir) */}
                     {m.taskId && (
-                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 flex items-center justify-between gap-2">
-                        <span className="text-[10px] text-yellow-800 dark:text-yellow-300 font-semibold flex items-center gap-1">
-                          <Sparkles size={11} className="text-yellow-600 animate-pulse" /> Demanda criada no Kanban
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => onDeleteTaskFromMessage && onDeleteTaskFromMessage(m.taskId, m.id)}
-                          className="px-2.5 py-1 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/60 border border-rose-300 dark:border-rose-500/40 text-[11px] font-semibold flex items-center gap-1 transition shadow-2xs hover:scale-102"
-                          title="Excluir este card do Kanban caso não seja necessário"
-                        >
-                          <Trash2 size={12} />
-                          <span>Desfazer / Excluir Card</span>
-                        </button>
+                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 space-y-2">
+                        <div className="flex items-center justify-between gap-1 flex-wrap">
+                          <span className="text-[10px] text-yellow-800 dark:text-yellow-300 font-semibold flex items-center gap-1">
+                            <Sparkles size={11} className="text-yellow-600 animate-pulse" /> Demanda criada no Kanban
+                          </span>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => onOpenTaskDetail && onOpenTaskDetail(m.taskId)}
+                              className="px-2 py-0.5 rounded bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 border border-brand-200 dark:border-brand-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
+                              title="Editar título, descrição ou prazo desta demanda"
+                            >
+                              <Edit2 size={10} />
+                              <span>Editar</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveScheduleId(activeScheduleId === m.taskId ? null : m.taskId);
+                                setActiveDelegateId(null);
+                              }}
+                              className="px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 border border-purple-200 dark:border-purple-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
+                              title="Agendar prazo para esta demanda"
+                            >
+                              <Calendar size={10} />
+                              <span>Agendar</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveDelegateId(activeDelegateId === m.taskId ? null : m.taskId);
+                                setActiveScheduleId(null);
+                              }}
+                              className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
+                              title="Delegar para outro responsável caso direcionado errado"
+                            >
+                              <UserPlus size={10} />
+                              <span>Delegar</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => onDeleteTaskFromMessage && onDeleteTaskFromMessage(m.taskId, m.id)}
+                              className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 border border-rose-200 dark:border-rose-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
+                              title="Excluir este card do Kanban caso não seja necessário"
+                            >
+                              <Trash2 size={10} />
+                              <span>Excluir</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Popover Inline para Agendar Prazo (Item 3) */}
+                        {activeScheduleId === m.taskId && (
+                          <div className="p-2 bg-white/95 dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs space-y-1.5 animate-in fade-in">
+                            <span className="text-[10px] font-bold text-purple-900 dark:text-purple-200 block">
+                              📅 Escolha um Prazo de Agendamento:
+                            </span>
+                            <div className="grid grid-cols-2 gap-1 text-[10px]">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Hoje às 17h');
+                                  setActiveScheduleId(null);
+                                }}
+                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
+                              >
+                                ⚡ Hoje às 17h
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Amanhã às 09h');
+                                  setActiveScheduleId(null);
+                                }}
+                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
+                              >
+                                🌅 Amanhã 09h
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Sexta-feira 18h');
+                                  setActiveScheduleId(null);
+                                }}
+                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
+                              >
+                                🗓️ Sexta 18h
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Em 48 horas');
+                                  setActiveScheduleId(null);
+                                }}
+                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
+                              >
+                                ⏳ Em 48 horas
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Popover Inline para Delegar Responsável (Item 5) */}
+                        {activeDelegateId === m.taskId && (
+                          <div className="p-2 bg-white/95 dark:bg-chatPanel rounded-lg border border-blue-300 dark:border-blue-500/40 shadow-xs space-y-1.5 animate-in fade-in">
+                            <span className="text-[10px] font-bold text-blue-900 dark:text-blue-200 block">
+                              👥 Redirecionar / Delegar para:
+                            </span>
+                            <select
+                              onChange={(e) => {
+                                if (e.target.value && onDelegateTask) {
+                                  onDelegateTask(m.taskId, e.target.value);
+                                  setActiveDelegateId(null);
+                                }
+                              }}
+                              defaultValue=""
+                              className="w-full text-xs bg-white dark:bg-chatCard text-chatTextTitle border border-slate-300 dark:border-chatBorder rounded p-1.5 font-semibold cursor-pointer"
+                            >
+                              <option value="" disabled>Selecione o novo colaborador...</option>
+                              {collaborators.filter(c => !c.isBot).map(c => (
+                                <option key={c.id} value={c.name}>
+                                  {c.avatar} {c.name} ({c.department})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                       </div>
                     )}
 

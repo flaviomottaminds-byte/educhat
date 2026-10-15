@@ -247,7 +247,11 @@ export default function KanbanBoard({
                       <div className="flex items-center justify-between">
                         {getPriorityBadge(t.priority, t.isVip)}
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-brand-600 dark:text-brand-500 font-semibold">
+                          <span className={`text-[10px] font-semibold ${
+                            t.channel?.includes('Privado')
+                              ? 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30'
+                              : 'text-brand-600 dark:text-brand-500'
+                          }`}>
                             {t.channel}
                           </span>
                           <Maximize2 size={12} className="text-chatTextMuted group-hover:text-brand-600 transition" />

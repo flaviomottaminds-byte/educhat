@@ -175,9 +175,21 @@ export default function App() {
     stopTaskbarBlink();
   };
 
-  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 2)
+  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 1 e 2)
   const handleIncomingNotification = (msg, cKey) => {
     if (msg.senderId === currentUser.id) return;
+
+    // Trava de Privacidade: Se for conversa privada 1 a 1 (DM), só notifica os dois participantes
+    if (cKey.startsWith('dm-')) {
+      const parts = cKey.split('-');
+      if (parts.length >= 3) {
+        const id1 = parts[1];
+        const id2 = parts[2];
+        if (currentUser.id !== id1 && currentUser.id !== id2) {
+          return; // Ignora 100%! Conversa privada entre outros dois colaboradores.
+        }
+      }
+    }
 
     const currentKey = getChatKey(activeChat, currentUser.id);
     const isCurrentActive = cKey === currentKey && !document.hidden;
@@ -218,6 +230,19 @@ export default function App() {
                       rawKey === 'dm-u3' ? 'dm-u1-u3' :
                       rawKey === 'dm-u4' ? 'dm-u1-u4' :
                       rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
+
+          // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros
+          if (key.startsWith('dm-')) {
+            const parts = key.split('-');
+            if (parts.length >= 3) {
+              const id1 = parts[1];
+              const id2 = parts[2];
+              if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
+                return;
+              }
+            }
+          }
+
           if (!grouped[key]) grouped[key] = [];
 
           let cleanText = m.text || '';
@@ -333,6 +358,18 @@ export default function App() {
                        rawKey === 'dm-u3' ? 'dm-u1-u3' :
                        rawKey === 'dm-u4' ? 'dm-u1-u4' :
                        rawKey === 'dm-u5' ? 'dm-u1-u5' : rawKey;
+
+          // Trava de Privacidade Realtime: Se for DM, só processa se o usuário for participante
+          if (cKey.startsWith('dm-')) {
+            const parts = cKey.split('-');
+            if (parts.length >= 3) {
+              const id1 = parts[1];
+              const id2 = parts[2];
+              if (currentUser.id !== id1 && currentUser.id !== id2) {
+                return; // Ignora 100%! Conversa privada confidencial de terceiros.
+              }
+            }
+          }
 
           let cleanText = row.text || '';
           let parsedAttachment = null;
@@ -557,18 +594,34 @@ export default function App() {
     const aiAnalysis = analyzeTaskPriorityAI(rawTitle, fullText, vipClients, learnedDocuments);
 
     // 2. Define o responsável
-    let targetAssignee = activeChat.type === 'dm' ? chatMeta.data.name : collaborators[1]?.name || 'Tatiane Salatinos';
-    const foundUser = collaborators.find(c =>
-      !c.isBot && fullText.toLowerCase().includes(c.name.split(' ')[0].toLowerCase())
-    );
-    if (foundUser) targetAssignee = foundUser.name;
+    let targetAssignee;
+    let targetDept;
+    let assigneeAvatar;
 
-    const assigneeObj = collaborators.find(c => c.name === targetAssignee);
-    const targetDept = assigneeObj?.department || (activeChat.type === 'channel' ? chatMeta.data.department : 'Comercial');
+    const isDM = activeChat.type === 'dm';
+    const otherParticipant = isDM
+      ? collaborators.find((c) => c.id === activeChat.id)
+      : null;
 
-    const channelTag = activeChat.type === 'channel'
-      ? `#${chatMeta.data.name}`
-      : `Privado (${chatMeta.data.name.split(' ')[0]})`;
+    if (isDM && otherParticipant) {
+      // REGRA DE NEGÓCIO UNILATERAL (Item 6): Em conversa privada 1 a 1, o responsável é OBRIGATORIAMENTE o outro interlocutor!
+      targetAssignee = otherParticipant.name;
+      targetDept = otherParticipant.department;
+      assigneeAvatar = otherParticipant.avatar || '👤';
+    } else {
+      // Em canais gerais, busca menção de colaborador no texto
+      const foundUser = collaborators.find((c) =>
+        !c.isBot && fullText.toLowerCase().includes(c.name.split(' ')[0].toLowerCase())
+      );
+      targetAssignee = foundUser ? foundUser.name : (collaborators[1]?.name || 'Tatiane Salatinos');
+      const assigneeObj = collaborators.find((c) => c.name === targetAssignee);
+      targetDept = assigneeObj?.department || (activeChat.type === 'channel' ? chatMeta.data.department : 'Comercial');
+      assigneeAvatar = assigneeObj?.avatar || '👤';
+    }
+
+    const channelTag = isDM
+      ? `🔒 Privado (${otherParticipant?.name?.split(' ')[0] || '1 a 1'})`
+      : `#${chatMeta.data.name}`;
 
     const taskRequester = currentUser.name;
     const taskRequesterDept = currentUser.department;
@@ -689,6 +742,56 @@ export default function App() {
       .then(({ error }) => {
         if (error) console.warn('Erro ao atualizar mensagem de cancelamento no Supabase:', error);
       });
+  };
+
+  // Delegar Tarefa para outro colaborador (Item 5)
+  const handleDelegateTask = (taskId, newAssigneeName) => {
+    const newCollab = collaborators.find((c) => c.name === newAssigneeName);
+    if (!newCollab) return;
+
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const commentObj = {
+      id: 'c_' + Date.now(),
+      author: currentUser.name,
+      avatar: currentUser.avatar,
+      dept: currentUser.department,
+      text: `🔄 Demanda delegada para ${newCollab.name} (${newCollab.department}) por ${currentUser.name}.`,
+      timestamp: `${timeStr} - ${now.toLocaleDateString('pt-BR')}`
+    };
+
+    handleUpdateTaskDetails(taskId, {
+      assignee: newCollab.name,
+      assigneeAvatar: newCollab.avatar || '👤',
+      department: newCollab.department,
+      comments: [
+        ...((tasks.find((t) => t.id === taskId)?.comments) || []),
+        commentObj
+      ]
+    });
+  };
+
+  // Agendar Prazo para a Demanda (Item 3)
+  const handleScheduleTask = (taskId, newDueDate) => {
+    if (!newDueDate) return;
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const commentObj = {
+      id: 'c_' + Date.now(),
+      author: currentUser.name,
+      avatar: currentUser.avatar,
+      dept: currentUser.department,
+      text: `📅 Prazo reagendado para: "${newDueDate}" por ${currentUser.name}.`,
+      timestamp: `${timeStr} - ${now.toLocaleDateString('pt-BR')}`
+    };
+
+    handleUpdateTaskDetails(taskId, {
+      dueDate: newDueDate,
+      comments: [
+        ...((tasks.find((t) => t.id === taskId)?.comments) || []),
+        commentObj
+      ]
+    });
   };
 
   const handleCreateTaskFromMessage = (message) => {
@@ -901,6 +1004,12 @@ export default function App() {
           onSendMessage={handleSendMessage}
           onCreateTaskFromMessage={handleCreateTaskFromMessage}
           onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
+          onOpenTaskDetail={(taskId) => {
+            const found = tasks.find((t) => t.id === taskId);
+            if (found) setSelectedTaskDetail(found);
+          }}
+          onScheduleTask={handleScheduleTask}
+          onDelegateTask={handleDelegateTask}
           onSummarizeChat={handleSummarizeChat}
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
           currentUser={currentUser}
@@ -967,6 +1076,7 @@ export default function App() {
         mode={aiModal.mode}
         sourceMessage={aiModal.sourceMessage}
         channel={activeChat.type === 'channel' ? chatMeta.data : null}
+        activeChat={activeChat}
         onConfirmTaskCreation={handleConfirmTaskCreation}
         collaborators={collaborators}
         vipClients={vipClients}
@@ -1017,7 +1127,7 @@ export default function App() {
         currentUserId={currentUser?.id}
       />
 
-      {/* Modal Ampliado de Detalhes da Demanda com Exclusão (Item 1, 7 e 8) */}
+      {/* Modal Ampliado de Detalhes da Demanda com Exclusão e Delegação (Item 1, 5, 7 e 8) */}
       <TaskDetailModal
         isOpen={!!selectedTaskDetail}
         onClose={() => setSelectedTaskDetail(null)}
@@ -1032,6 +1142,7 @@ export default function App() {
         }}
         onDeleteTask={handleDeleteTask}
         currentUser={currentUser}
+        collaborators={collaborators}
       />
     </div>
   );

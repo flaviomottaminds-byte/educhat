@@ -8,6 +8,7 @@ export default function AICopilotModal({
   mode, // 'extract_task' | 'summary' | 'bottlenecks'
   sourceMessage,
   channel,
+  activeChat,
   onConfirmTaskCreation,
   collaborators = [],
   vipClients = []
@@ -19,20 +20,32 @@ export default function AICopilotModal({
     return collaborators.filter((c) => !c.isBot);
   }, [collaborators]);
 
-  // Inicializar o formulário inteligente
+  // Inicializar o formulário inteligente (Se for conversa unilateral DM, responsável é o interlocutor)
   const initialAssignee = useMemo(() => {
+    if (activeChat?.type === 'dm') {
+      const dmCollab = realCollaborators.find((c) => c.id === activeChat.id);
+      if (dmCollab) return dmCollab.name;
+    }
     if (sourceMessage?.senderName) {
       const match = realCollaborators.find((c) => c.name === sourceMessage.senderName);
       if (match) return match.name;
     }
     return realCollaborators[1]?.name || realCollaborators[0]?.name || 'Tatiane Salatinos';
-  }, [sourceMessage, realCollaborators]);
+  }, [sourceMessage, realCollaborators, activeChat]);
+
+  const initialChannelTag = useMemo(() => {
+    if (activeChat?.type === 'dm') {
+      const dmCollab = collaborators.find((c) => c.id === activeChat.id);
+      return `🔒 Privado (${dmCollab?.name?.split(' ')[0] || '1 a 1'})`;
+    }
+    return channel ? `#${channel.name}` : '#geral';
+  }, [activeChat, channel, collaborators]);
 
   const [taskForm, setTaskForm] = useState({
     title: sourceMessage ? `Tratar: ${sourceMessage.text.slice(0, 50)}...` : 'Nova Demanda',
     desc: sourceMessage ? sourceMessage.text : '',
     assignee: initialAssignee,
-    channel: channel ? `#${channel.name}` : '#geral'
+    channel: initialChannelTag
   });
 
   // Cálculo de Prioridade 100% Automático via IA (Item 5 da solicitação)
