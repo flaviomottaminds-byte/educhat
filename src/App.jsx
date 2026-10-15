@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import KanbanBoard from './components/KanbanBoard';
@@ -8,6 +8,7 @@ import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
 import WhatsAppDossierModal from './components/WhatsAppDossierModal';
 import { Shield } from 'lucide-react';
+import { supabase } from './lib/supabase';
 import {
   INITIAL_CHANNELS,
   INITIAL_COLLABORATORS,
@@ -97,6 +98,176 @@ export default function App() {
   const currentChatKey = activeChat.type === 'channel' ? activeChat.id : `dm-${activeChat.id}`;
   const currentMessages = messages[currentChatKey] || [];
 
+  // =========================================================================
+  // SUPABASE REALTIME: CARREGAR DADOS DA NUVEM & OUVIR ATUALIZAÇÕES INSTANTÂNEAS
+  // =========================================================================
+  useEffect(() => {
+    const initSupabase = async () => {
+      try {
+        // 1. Carregar Mensagens existentes da nuvem
+        const { data: dbMessages, error: msgError } = await supabase
+          .from('messages')
+          .select('*')
+          .order('created_at', { ascending: true });
+
+        if (dbMessages && dbMessages.length > 0) {
+          const grouped = {};
+          dbMessages.forEach((m) => {
+            const key = m.chat_id;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push({
+              id: m.id,
+              senderId: m.sender_id,
+              senderName: m.sender_name,
+              text: m.text,
+              timestamp: m.timestamp,
+              actionExtracted: false
+            });
+          });
+          setMessages((prev) => ({ ...prev, ...grouped }));
+        } else if (!msgError) {
+          // Inicializar tabela vazia com dados iniciais
+          const seedMsgs = [];
+          Object.entries(INITIAL_MESSAGES).forEach(([cId, mList]) => {
+            mList.forEach((msg) => {
+              seedMsgs.push({
+                id: msg.id,
+                chat_id: cId,
+                sender_id: msg.senderId,
+                sender_name: msg.senderName,
+                text: msg.text,
+                timestamp: msg.timestamp
+              });
+            });
+          });
+          if (seedMsgs.length > 0) {
+            await supabase.from('messages').insert(seedMsgs);
+          }
+        }
+
+        // 2. Carregar Tarefas do Kanban existentes da nuvem
+        const { data: dbTasks, error: taskError } = await supabase
+          .from('tasks')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (dbTasks && dbTasks.length > 0) {
+          setTasks(dbTasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            desc: t.description || '',
+            status: t.status,
+            priority: t.priority,
+            isVip: t.is_vip,
+            assignee: t.assignee,
+            assigneeAvatar: t.assignee_avatar || '👤',
+            department: t.department || 'Geral',
+            dueDate: t.due_date,
+            channel: t.channel,
+            sourceMessage: t.source_message
+          })));
+        } else if (!taskError) {
+          // Inicializar tabela de tarefas
+          const seedTasks = INITIAL_TASKS.map((t) => ({
+            id: t.id,
+            title: t.title,
+            description: t.desc || '',
+            status: t.status,
+            priority: t.priority,
+            is_vip: t.isVip || false,
+            assignee: t.assignee,
+            assignee_avatar: t.assigneeAvatar || '👤',
+            department: t.department || 'Geral',
+            due_date: t.dueDate,
+            channel: t.channel,
+            source_message: t.sourceMessage
+          }));
+          await supabase.from('tasks').insert(seedTasks);
+        }
+      } catch (err) {
+        console.warn('Conexão Supabase inicial:', err);
+      }
+    };
+
+    initSupabase();
+
+    // 3. Ouvir Mensagens em Tempo Real via WebSockets
+    const channelListener = supabase
+      .channel('educhat_realtime_channel')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const row = payload.new;
+          const cKey = row.chat_id;
+          const incoming = {
+            id: row.id,
+            senderId: row.sender_id,
+            senderName: row.sender_name,
+            text: row.text,
+            timestamp: row.timestamp,
+            actionExtracted: false
+          };
+          setMessages((prev) => {
+            const list = prev[cKey] || [];
+            if (list.some((m) => m.id === incoming.id)) return prev;
+            return {
+              ...prev,
+              [cKey]: [...list, incoming]
+            };
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const row = payload.new;
+            const newTask = {
+              id: row.id,
+              title: row.title,
+              desc: row.description || '',
+              status: row.status,
+              priority: row.priority,
+              isVip: row.is_vip,
+              assignee: row.assignee,
+              assigneeAvatar: row.assignee_avatar || '👤',
+              department: row.department || 'Geral',
+              dueDate: row.due_date,
+              channel: row.channel,
+              sourceMessage: row.source_message
+            };
+            setTasks((prev) => {
+              if (prev.some((t) => t.id === newTask.id)) return prev;
+              return [newTask, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const row = payload.new;
+            setTasks((prev) =>
+              prev.map((t) =>
+                t.id === row.id
+                  ? {
+                      ...t,
+                      status: row.status,
+                      title: row.title,
+                      priority: row.priority,
+                      assignee: row.assignee,
+                      dueDate: row.due_date
+                    }
+                  : t
+              )
+            );
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channelListener);
+    };
+  }, []);
+
   // Enviar nova mensagem no chat ativo
   const handleSendMessage = (text) => {
     const now = new Date();
@@ -115,6 +286,16 @@ export default function App() {
       ...prev,
       [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
     }));
+
+    // Sincronizar Mensagem em Tempo Real com o Supabase
+    supabase.from('messages').insert([{
+      id: newMsg.id,
+      chat_id: currentChatKey,
+      sender_id: newMsg.senderId,
+      sender_name: newMsg.senderName,
+      text: newMsg.text,
+      timestamp: newMsg.timestamp
+    }]).catch((err) => console.warn('Erro ao salvar msg no Supabase:', err));
 
     // GATILHO 1: Comando manual explícito /tarefa
     if (text.startsWith('/tarefa')) {
@@ -179,6 +360,22 @@ export default function App() {
 
     setTasks((prev) => [autoTask, ...prev]);
 
+    // Persistir Tarefa Automática no Supabase
+    supabase.from('tasks').insert([{
+      id: autoTask.id,
+      title: autoTask.title,
+      description: autoTask.desc || '',
+      status: autoTask.status,
+      priority: autoTask.priority,
+      is_vip: autoTask.isVip || false,
+      assignee: autoTask.assignee,
+      assignee_avatar: autoTask.assigneeAvatar || '👤',
+      department: targetAssignee.includes('Fernanda') ? 'Financeiro' : targetAssignee.includes('Juliana') ? 'Secretaria' : 'Atendimento',
+      due_date: autoTask.dueDate,
+      channel: autoTask.channel,
+      source_message: autoTask.sourceMessage
+    }]).catch((err) => console.warn('Erro ao salvar autoTask no Supabase:', err));
+
     // O Bot dá o feedback inteligente no chat destacando o status VIP
     const botReply = {
       id: 'bot_' + Date.now(),
@@ -197,6 +394,16 @@ export default function App() {
       ...prev,
       [currentChatKey]: [...(prev[currentChatKey] || []), botReply],
     }));
+
+    // Sincronizar Resposta do Bot com o Supabase
+    supabase.from('messages').insert([{
+      id: botReply.id,
+      chat_id: currentChatKey,
+      sender_id: botReply.senderId,
+      sender_name: botReply.senderName,
+      text: botReply.text,
+      timestamp: botReply.timestamp
+    }]).catch((err) => console.warn('Erro ao salvar botReply no Supabase:', err));
   };
 
   // Abrir modal de IA para extrair tarefa de mensagem específica
@@ -222,11 +429,32 @@ export default function App() {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
     );
+    // Sincronizar com Supabase em Tempo Real
+    supabase
+      .from('tasks')
+      .update({ status: newStatus })
+      .eq('id', taskId)
+      .catch((err) => console.warn('Erro ao atualizar status da tarefa no Supabase:', err));
   };
 
   // Adicionar tarefa confirmada pelo modal de IA ou manualmente
   const handleConfirmTaskCreation = (newTask) => {
     setTasks((prev) => [newTask, ...prev]);
+    // Sincronizar criação no Supabase
+    supabase.from('tasks').insert([{
+      id: newTask.id,
+      title: newTask.title,
+      description: newTask.desc || '',
+      status: newTask.status || 'backlog',
+      priority: newTask.priority || 'media',
+      is_vip: newTask.isVip || false,
+      assignee: newTask.assignee,
+      assignee_avatar: newTask.assigneeAvatar || '👤',
+      department: newTask.department || 'Geral',
+      due_date: newTask.dueDate,
+      channel: newTask.channel,
+      source_message: newTask.sourceMessage
+    }]).catch((err) => console.warn('Erro ao salvar nova tarefa no Supabase:', err));
   };
 
   // Salvar novo canal
