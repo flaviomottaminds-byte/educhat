@@ -23,14 +23,18 @@ import {
   UserCheck,
   Headphones,
   PhoneCall,
-  Reply
+  Reply,
+  ChevronDown,
+  Check
 } from 'lucide-react';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
   if (!text) return null;
+  // Remove comentários de controle interno como <!-- ASSIGNMENT:... --> e <!-- STATUS:... -->
+  const cleanText = text.replace(/<!--[\s\S]*?-->/g, '').trim();
   const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
-  const parts = text.split(urlRegex);
+  const parts = cleanText.split(urlRegex);
 
   return (
     <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">
@@ -186,6 +190,7 @@ export default function ChatArea({
   onSummarizeChat,
   onOpenWhatsAppDossier,
   onToggleWhatsAppAI,
+  onUpdateChatAssignment,
   currentUser,
   realtimeStatus = 'connected',
   collaborators = []
@@ -195,6 +200,10 @@ export default function ChatArea({
   const [activeScheduleId, setActiveScheduleId] = useState(null);
   const [activeDelegateId, setActiveDelegateId] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null); // Estado para Resposta / Quote (Item 5)
+
+  // Estado do Seletor Interativo de Fila & Responsável (Item 1)
+  const [isAssignmentOpen, setIsAssignmentOpen] = useState(false);
+  const assignmentPopoverRef = useRef(null);
   
   // Estado para Gravação de Áudio Nativo com MediaRecorder (Item 2)
   const [isRecording, setIsRecording] = useState(false);
@@ -210,6 +219,56 @@ export default function ChatArea({
   const isDM = chatMeta?.type === 'dm';
   const target = chatMeta?.data || {};
   const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
+
+  const [selectedDept, setSelectedDept] = useState(target.department || 'Comercial');
+  const [selectedAssignee, setSelectedAssignee] = useState(target.assignee || '');
+  const [selectedStatus, setSelectedStatus] = useState(target.status || 'carteira_ativa');
+
+  useEffect(() => {
+    if (target) {
+      setSelectedDept(target.department || 'Comercial');
+      setSelectedAssignee(target.assignee || '');
+      setSelectedStatus(target.status || 'carteira_ativa');
+    }
+  }, [target.id, target.department, target.assignee, target.status]);
+
+  // Fechar popover de atribuição ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (assignmentPopoverRef.current && !assignmentPopoverRef.current.contains(e.target)) {
+        setIsAssignmentOpen(false);
+      }
+    };
+    if (isAssignmentOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isAssignmentOpen]);
+
+  const handleSaveAssignment = () => {
+    if (onUpdateChatAssignment && target.id) {
+      let statusLabel = 'Carteira Ativa';
+      if (selectedStatus === 'lead_instagram') {
+        statusLabel = 'Lead Instagram - Expansão';
+      } else if (selectedStatus === 'veterano_retencao') {
+        statusLabel = 'Aluno Veterano';
+      } else if (selectedStatus === 'ura_inedito') {
+        statusLabel = 'Triagem Inicial';
+      } else if (selectedDept) {
+        statusLabel = `Carteira • ${selectedDept}`;
+      }
+
+      onUpdateChatAssignment(target.id, {
+        department: selectedDept,
+        assignee: selectedAssignee,
+        status: selectedStatus || 'carteira_ativa',
+        statusLabel
+      });
+    }
+    setIsAssignmentOpen(false);
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -422,34 +481,203 @@ export default function ChatArea({
                 </span>
               ) : null}
             </h2>
-            <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2 truncate">
-              <span className="truncate max-w-[280px] md:max-w-md">
-                {isWhatsApp
-                  ? `📱 ${target.phone} • Fila: ${target.department} • Responsável: ${target.assignee || 'Aguardando'}`
-                  : isBotChat
-                  ? 'Base normativa MEC, Asaas, POPs e fluxos operacionais'
-                  : isDM
-                  ? target.online ? 'online' : 'visto por último recentemente'
-                  : channelMembersText || target.desc || 'Canal de comunicação'}
-              </span>
-              <span className="text-gray-300 dark:text-gray-600">•</span>
-              {realtimeStatus === 'connected' ? (
-                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  Tempo Real Ativo
+            {isWhatsApp ? (
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-[#667781] dark:text-chatTextMuted mt-0.5">
+                <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold shrink-0">
+                  📱 {target.phone}
                 </span>
-              ) : realtimeStatus === 'connecting' ? (
-                <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                  Conectando...
+                <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
+
+                {/* Seletor Interativo de Fila & Responsável (Item 1) */}
+                <div className="relative inline-block" ref={assignmentPopoverRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsAssignmentOpen(!isAssignmentOpen)}
+                    className="group inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-white/90 dark:bg-chatCard hover:bg-white dark:hover:bg-chatPanel border border-slate-300/80 dark:border-chatBorder shadow-2xs hover:shadow-xs transition text-chatTextTitle cursor-pointer"
+                    title="Clique para reatribuir a fila de atendimento e o consultor deste chat"
+                  >
+                    <span className="text-[10.5px]">
+                      Fila: <strong className="text-brand-700 dark:text-brand-400 font-bold">{target.department || 'Geral'}</strong>
+                    </span>
+                    <span className="text-slate-300 dark:text-slate-600">•</span>
+                    <span className="text-[10.5px]">
+                      Resp: <strong className="font-bold text-chatTextTitle">{target.assignee || 'Aguardando'}</strong>
+                    </span>
+                    <ChevronDown size={11} className={`text-chatTextMuted group-hover:text-brand-600 transition-transform duration-200 ${isAssignmentOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {/* Popover Dropdown de Reatribuição */}
+                  {isAssignmentOpen && (
+                    <div className="absolute left-0 top-full mt-1.5 w-84 bg-white dark:bg-chatCard rounded-2xl shadow-2xl border border-slate-200 dark:border-chatBorder p-4 z-50 animate-in fade-in zoom-in-95 duration-150">
+                      <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-100 dark:border-chatBorder">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-brand-50 dark:bg-brand-950/40 text-brand-600 dark:text-brand-400 flex items-center justify-center">
+                            <UserCheck size={15} />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-chatTextTitle leading-tight">
+                              Reatribuir Fila & Consultor
+                            </h4>
+                            <p className="text-[10px] text-chatTextMuted">
+                              Defina o setor e o atendente responsável
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsAssignmentOpen(false)}
+                          className="p-1 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-100 dark:hover:bg-chatPanel transition cursor-pointer"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        {/* Fila / Departamento */}
+                        <div>
+                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
+                            Fila de Atendimento (Setor)
+                          </label>
+                          <select
+                            value={selectedDept}
+                            onChange={(e) => {
+                              const newDept = e.target.value;
+                              setSelectedDept(newDept);
+                              const deptCollab = (collaborators || []).find((c) => !c.isBot && c.department === newDept);
+                              if (deptCollab) setSelectedAssignee(deptCollab.name);
+                            }}
+                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
+                          >
+                            <option value="Comercial">🎯 Comercial (Matrículas & Vendas)</option>
+                            <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
+                            <option value="Secretaria">📋 Secretaria Acadêmica</option>
+                            <option value="Tutoria">🎓 Tutoria & Apoio Pedagógico</option>
+                            <option value="Financeiro">💰 Financeiro & Splits Asaas</option>
+                            <option value="Suporte a Polos">🛠️ Suporte a Polos & eAula</option>
+                            <option value="Pedagógico">👨‍🏫 Coordenação Pedagógica</option>
+                            <option value="Marketing">👩‍🎨 Marketing & Captação</option>
+                            <option value="Diretoria">👑 Diretoria Executiva</option>
+                          </select>
+                        </div>
+
+                        {/* Consultor Responsável */}
+                        <div>
+                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
+                            Consultor Responsável
+                          </label>
+                          <select
+                            value={selectedAssignee}
+                            onChange={(e) => setSelectedAssignee(e.target.value)}
+                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
+                          >
+                            <option value="">-- Aguardando Atribuição (Fila Geral) --</option>
+                            {(collaborators || [])
+                              .filter((c) => !c.isBot)
+                              .map((collab) => (
+                                <option key={collab.id} value={collab.name}>
+                                  {collab.name} ({collab.department || collab.role})
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+
+                        {/* Tipo de Carteira */}
+                        <div>
+                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
+                            Regra de Carteira
+                          </label>
+                          <select
+                            value={selectedStatus}
+                            onChange={(e) => setSelectedStatus(e.target.value)}
+                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
+                          >
+                            <option value="carteira_ativa">💼 Carteira Ativa (Permanência Contínua)</option>
+                            <option value="lead_instagram">🎯 Lead Instagram - Expansão</option>
+                            <option value="veterano_retencao">🎓 Aluno Veterano (Retenção)</option>
+                            <option value="ura_inedito">🤖 Triagem URA (Autoatendimento)</option>
+                          </select>
+                        </div>
+
+                        {/* Banner de Permanência de Carteira */}
+                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/20 text-[10.5px] text-emerald-900 dark:text-emerald-200 space-y-0.5">
+                          <p className="font-bold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Regra de Permanência (Sticky Assignment):
+                          </p>
+                          <p className="text-[10px] text-emerald-800 dark:text-emerald-300 leading-tight">
+                            As próximas mensagens e rechamadas deste contato serão mantidas diretamente com o consultor selecionado.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Ações */}
+                      <div className="mt-4 pt-2.5 border-t border-slate-100 dark:border-chatBorder flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setIsAssignmentOpen(false)}
+                          className="px-3 py-1.5 text-xs text-chatTextMuted hover:text-chatTextTitle font-medium transition cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSaveAssignment}
+                          className="px-3.5 py-1.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Check size={13} />
+                          Salvar Atribuição
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
+                {realtimeStatus === 'connected' ? (
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Tempo Real Ativo
+                  </span>
+                ) : realtimeStatus === 'connecting' ? (
+                  <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                    Conectando...
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-red-500 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    Reconectando
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="text-[11px] text-[#667781] dark:text-chatTextMuted flex items-center gap-2 truncate">
+                <span className="truncate max-w-[280px] md:max-w-md">
+                  {isBotChat
+                    ? 'Base normativa MEC, Asaas, POPs e fluxos operacionais'
+                    : isDM
+                    ? target.online ? 'online' : 'visto por último recentemente'
+                    : channelMembersText || target.desc || 'Canal de comunicação'}
                 </span>
-              ) : (
-                <span className="text-[10px] text-red-500 font-medium flex items-center gap-1 shrink-0">
-                  <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
-                  Reconectando
-                </span>
-              )}
-            </p>
+                <span className="text-gray-300 dark:text-gray-600">•</span>
+                {realtimeStatus === 'connected' ? (
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                    Tempo Real Ativo
+                  </span>
+                ) : realtimeStatus === 'connecting' ? (
+                  <span className="text-[10px] text-amber-500 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
+                    Conectando...
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-red-500 font-medium flex items-center gap-1 shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                    Reconectando
+                  </span>
+                )}
+              </p>
+            )}
           </div>
         </div>
 
@@ -581,6 +809,17 @@ export default function ChatArea({
           </div>
         ) : (
           messages.map((m) => {
+            if (m.senderId === 'system') {
+              return (
+                <div key={m.id} className="flex justify-center my-2 animate-in fade-in">
+                  <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
+                    <span className="leading-tight">{m.text?.replace(/<!--[\s\S]*?-->/g, '').trim()}</span>
+                    <span className="text-[9.5px] opacity-75 font-mono shrink-0">{m.timestamp}</span>
+                  </div>
+                </div>
+              );
+            }
+
             const isMe = m.senderId === currentUser?.id;
             const isBot = m.senderId === 'bot' || m.senderId === 'u_ia_copilot';
 

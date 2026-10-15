@@ -116,9 +116,48 @@ export function routeIncomingWhatsAppWebhook({
   audioUrl = null,
   audioTranscription = null,
   tasks = [],
-  collaborators = []
+  collaborators = [],
+  contacts = []
 }) {
   const cleanPhone = (fromPhone || '').replace(/\D/g, '');
+
+  // =========================================================================
+  // REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT - ITEM 2)
+  // Se o lead ou aluno já possui consultor previamente atribuído neste contato/chat,
+  // NÃO sobrescreve para fila genérica ou URA: direciona estritamente para ele.
+  // =========================================================================
+  const existingContact = (contacts || []).find((c) => {
+    if (!c) return false;
+    const cPhone = (c.phone || '').replace(/\D/g, '');
+    const cIdDigits = (c.id || '').replace(/\D/g, '');
+    return (cPhone && cPhone === cleanPhone) || (cIdDigits && cIdDigits === cleanPhone);
+  });
+
+  if (
+    existingContact &&
+    existingContact.assignee &&
+    existingContact.assignee !== 'Bot de Triagem URA' &&
+    existingContact.assignee !== 'Assistente IA' &&
+    existingContact.assignee !== 'Aguardando'
+  ) {
+    const consultant = collaborators.find((c) => c.name === existingContact.assignee);
+    return {
+      routeType: 'STICKY_PORTFOLIO',
+      door: 1,
+      doorName: 'Porta 1: Permanência de Carteira (Sticky Assignment)',
+      isDirectToConsultant: true,
+      targetAssignee: existingContact.assignee,
+      targetDepartment: existingContact.department || 'Comercial',
+      consultantId: consultant?.id || null,
+      taskId: null,
+      taskTitle: `Atendimento Contínuo: ${senderName}`,
+      notificationText: `📌 Mensagem de rechamada do seu lead ${senderName} (${existingContact.assignee})`,
+      badgeNotificationUserIds: consultant ? [consultant.id] : [],
+      kanbanBadgeUpdate: '🔥 Mensagem de Rechamada',
+      systemMessage: `Permanência de Carteira: Rechamada de ${senderName} mantida diretamente com ${existingContact.assignee} (${existingContact.department || 'Comercial'}).`,
+      autoReply: null // Sem URA genérica: continuidade da relação comercial garantida
+    };
+  }
 
   // 1. Procura cards no Kanban atrelados a este telefone
   const matchingTasks = tasks.filter((t) => {

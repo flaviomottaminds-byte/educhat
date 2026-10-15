@@ -443,33 +443,78 @@ export default function App() {
 
         setMessages((prev) => ({ ...prev, ...grouped }));
 
-        // Descoberta dinâmica de contatos WhatsApp a partir do histórico de mensagens no Supabase
+        // Descoberta dinâmica e restauração de atribuições (Sticky Assignment) a partir do Supabase
         const waKeys = Object.keys(grouped).filter((k) => k.startsWith('wa-'));
         if (waKeys.length > 0) {
+          // Extrai atribuições salvas em mensagens de histórico e cache local
+          const storedAssignments = {};
+          try {
+            const cached = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+            Object.assign(storedAssignments, cached);
+          } catch {}
+
+          for (const waKey of waKeys) {
+            const list = grouped[waKey] || [];
+            for (let i = list.length - 1; i >= 0; i--) {
+              const match = list[i].text?.match(/<!-- ASSIGNMENT:(.*?) -->/);
+              if (match) {
+                try {
+                  storedAssignments[waKey] = JSON.parse(match[1]);
+                  break;
+                } catch {}
+              }
+            }
+          }
+
           setWhatsAppContacts((prev) => {
             const existingIds = new Set(prev.map((c) => c.id));
             const newContacts = [];
+
+            // 1. Atualiza contatos existentes com as atribuições persistidas do Supabase
+            const updatedExisting = prev.map((c) => {
+              const asgn = storedAssignments[c.id];
+              if (asgn) {
+                return {
+                  ...c,
+                  department: asgn.department || c.department,
+                  assignee: asgn.assignee || c.assignee,
+                  status: asgn.status || c.status,
+                  statusLabel: asgn.statusLabel || c.statusLabel,
+                  triageContext: asgn.updatedBy
+                    ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy}`
+                    : c.triageContext
+                };
+              }
+              return c;
+            });
+
+            // 2. Adiciona novos contatos descobertos via Supabase aplicando atribuições salvas
             for (const waKey of waKeys) {
               if (!existingIds.has(waKey)) {
                 const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
                 const rawDigits = waKey.replace('wa-', '');
                 const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+                const asgn = storedAssignments[waKey];
+
                 newContacts.push({
                   id: waKey,
                   name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
                   phone: formattedPhone,
                   avatar: '👤',
-                  department: 'Comercial',
-                  assignee: 'Gabriel Carvalho',
-                  status: 'ura_inedito',
-                  statusLabel: 'Lead WhatsApp',
+                  department: asgn?.department || 'Comercial',
+                  assignee: asgn?.assignee || 'Gabriel Carvalho',
+                  status: asgn?.status || 'ura_inedito',
+                  statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
                   aiActive: false,
                   lastInteraction: latestMsg?.timestamp || 'Recente',
-                  triageContext: 'Histórico sincronizado do WhatsApp.'
+                  triageContext: asgn
+                    ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}`
+                    : 'Histórico sincronizado do WhatsApp.'
                 });
               }
             }
-            return newContacts.length > 0 ? [...prev, ...newContacts] : prev;
+
+            return newContacts.length > 0 ? [...updatedExisting, ...newContacts] : updatedExisting;
           });
         }
       }
@@ -671,13 +716,52 @@ export default function App() {
 
           // Se for mensagem de contato WhatsApp (wa-), adiciona ou atualiza o contato na lista lateral
           if (cKey.startsWith('wa-')) {
+            // Verifica se a mensagem contém tag de atribuição manual em tempo real
+            const asgnMatch = incoming.text?.match(/<!-- ASSIGNMENT:(.*?) -->/);
+            let asgnData = null;
+            if (asgnMatch) {
+              try {
+                asgnData = JSON.parse(asgnMatch[1]);
+              } catch {}
+            }
+
             setWhatsAppContacts((prev) => {
               const existing = prev.find((c) => c.id === cKey);
               if (existing) {
-                return prev.map((c) => (c.id === cKey ? { ...c, lastInteraction: incoming.timestamp || 'Agora' } : c));
+                // REGRA DE PERMANÊNCIA (STICKY ASSIGNMENT):
+                // Mantém estritamente o consultor e departamento existentes a não ser que tenha chegado um novo comando de ASSIGNMENT
+                return prev.map((c) => {
+                  if (c.id !== cKey) return c;
+                  return {
+                    ...c,
+                    department: asgnData?.department || c.department,
+                    assignee: asgnData?.assignee || c.assignee,
+                    status: asgnData?.status || c.status,
+                    statusLabel: asgnData?.statusLabel || c.statusLabel,
+                    triageContext: asgnData?.updatedBy
+                      ? `Atribuído a ${asgnData.assignee} (${asgnData.department}) por ${asgnData.updatedBy}`
+                      : c.triageContext,
+                    lastInteraction: incoming.timestamp || 'Agora'
+                  };
+                });
               }
+
+              // Novo contato descoberto via Realtime
               const rawDigits = cKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
+
+              // Checa cache de atribuições em localStorage
+              let cachedAsgn = null;
+              try {
+                const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+                cachedAsgn = stored[cKey];
+              } catch {}
+
+              const finalDept = asgnData?.department || cachedAsgn?.department || 'Comercial';
+              const finalAssignee = asgnData?.assignee || cachedAsgn?.assignee || 'Gabriel Carvalho';
+              const finalStatus = asgnData?.status || cachedAsgn?.status || 'ura_inedito';
+              const finalStatusLabel = asgnData?.statusLabel || cachedAsgn?.statusLabel || 'Lead WhatsApp';
+
               return [
                 ...prev,
                 {
@@ -685,13 +769,15 @@ export default function App() {
                   name: incoming.senderName || `WhatsApp (${formattedPhone})`,
                   phone: formattedPhone,
                   avatar: '👤',
-                  department: 'Comercial',
-                  assignee: 'Gabriel Carvalho',
-                  status: 'ura_inedito',
-                  statusLabel: 'Lead WhatsApp',
+                  department: finalDept,
+                  assignee: finalAssignee,
+                  status: finalStatus,
+                  statusLabel: finalStatusLabel,
                   aiActive: false,
                   lastInteraction: incoming.timestamp || 'Agora',
-                  triageContext: 'Mensagem recebida via WhatsApp.'
+                  triageContext: (asgnData || cachedAsgn)
+                    ? `Permanência de Carteira ativa (${finalAssignee} • ${finalDept})`
+                    : 'Mensagem recebida via WhatsApp.'
                 }
               ];
             });
@@ -1353,7 +1439,8 @@ export default function App() {
       senderName,
       messageText,
       tasks,
-      collaborators
+      collaborators,
+      contacts: whatsAppContacts
     });
 
     const targetChatId = contactId || (whatsAppContacts.find(c => c.phone.replace(/\D/g, '') === fromPhone.replace(/\D/g, ''))?.id) || 'wa-carlos-eduardo';
@@ -1755,6 +1842,103 @@ export default function App() {
     }
   };
 
+  // Reatribuição Manual de Fila e Consultor Responsável com Persistência no Supabase e Realtime (Item 1 e 3)
+  const handleUpdateChatAssignment = async (chatId, { department, assignee, status, statusLabel }) => {
+    if (!chatId) return;
+    const timeStr = getSaoPauloTime();
+
+    // 1. Atualizar contatos locais imediatamente (Optimistic Update)
+    setWhatsAppContacts((prev) =>
+      prev.map((c) => {
+        if (c.id !== chatId) return c;
+        return {
+          ...c,
+          department: department || c.department,
+          assignee: assignee || c.assignee,
+          status: status || c.status || 'carteira_ativa',
+          statusLabel: statusLabel || (department ? `Carteira • ${department}` : c.statusLabel),
+          triageContext: `Atribuído a ${assignee || 'Fila'} (${department}) por ${currentUser?.name || 'Gestão'}.`
+        };
+      })
+    );
+
+    // 2. Persistir no localStorage para retenção offline e recarregamento instantâneo
+    try {
+      const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+      stored[chatId] = {
+        department,
+        assignee,
+        status: status || 'carteira_ativa',
+        statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+        updatedBy: currentUser?.name || 'Gestão',
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
+    } catch (e) {
+      console.warn('Erro ao salvar no localStorage:', e);
+    }
+
+    // 3. Montar payload de auditoria e evento de sistema no Supabase
+    const assignmentPayload = {
+      department,
+      assignee,
+      status: status || 'carteira_ativa',
+      statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+      updatedBy: currentUser?.name || 'Gestão',
+      timestamp: timeStr
+    };
+
+    const auditNotice = `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${assignee || 'Aguardando'}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
+
+    const systemMsg = {
+      id: 'asgn_' + Date.now(),
+      senderId: 'system',
+      senderName: 'EduChat (Sistema)',
+      text: auditNotice,
+      timestamp: timeStr,
+      actionExtracted: false
+    };
+
+    // Atualiza estado de mensagens local instantaneamente
+    setMessages((prev) => ({
+      ...prev,
+      [chatId]: [...(prev[chatId] || []), systemMsg]
+    }));
+
+    // Grava no Supabase (dispara broadcast Realtime para todas as outras telas conectadas)
+    try {
+      const { error } = await supabase.from('messages').insert([{
+        id: systemMsg.id,
+        chat_id: chatId,
+        sender_id: systemMsg.senderId,
+        sender_name: systemMsg.senderName,
+        text: systemMsg.text,
+        timestamp: systemMsg.timestamp
+      }]);
+      if (error) {
+        console.warn('Aviso ao gravar reatribuição no Supabase:', error);
+      }
+    } catch (err) {
+      console.warn('Erro ao inserir reatribuição no Supabase:', err);
+    }
+
+    // 4. Se houver um card no Kanban associado a este chat, atualiza o responsável e departamento no Kanban também
+    const contactObj = whatsAppContacts.find((c) => c.id === chatId);
+    const cleanPhone = (contactObj?.phone || '').replace(/\D/g, '');
+    const linkedTask = tasks.find((t) => {
+      const tPhone = (t.clientPhone || '').replace(/\D/g, '');
+      const inDesc = (t.desc || '').includes(cleanPhone) || (t.sourceMessage || '').includes(cleanPhone);
+      return (tPhone && tPhone === cleanPhone) || inDesc;
+    });
+
+    if (linkedTask) {
+      handleUpdateTaskDetails(linkedTask.id, {
+        department,
+        assignee
+      });
+    }
+  };
+
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
@@ -1821,6 +2005,7 @@ export default function App() {
           onSummarizeChat={handleSummarizeChat}
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
           onToggleWhatsAppAI={handleToggleWhatsAppAI}
+          onUpdateChatAssignment={handleUpdateChatAssignment}
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
           collaborators={collaborators}
