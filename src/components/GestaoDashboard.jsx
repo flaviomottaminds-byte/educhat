@@ -1,7 +1,7 @@
 import React from 'react';
-import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck, Sparkles, MessageCircle, Upload } from 'lucide-react';
+import { BarChart3, TrendingUp, CheckCircle, Clock, AlertTriangle, ShieldCheck, Sparkles, MessageCircle, Upload, GraduationCap } from 'lucide-react';
 
-export default function GestaoDashboard({ tasks, channels, collaborators, onOpenInstagramImport }) {
+export default function GestaoDashboard({ tasks, channels, collaborators, onOpenInstagramImport, onOpenEduControlSync }) {
   const totalTasks = tasks.length;
   const doneTasks = tasks.filter((t) => t.status === 'done').length;
   const inProgressTasks = tasks.filter((t) => t.status === 'in_progress').length;
@@ -19,16 +19,29 @@ export default function GestaoDashboard({ tasks, channels, collaborators, onOpen
             Métricas de SLA por departamento, mineração de conversas recorrentes e oportunidades de melhoria contínua
           </p>
         </div>
-        {onOpenInstagramImport && (
-          <button
-            type="button"
-            onClick={onOpenInstagramImport}
-            className="self-start md:self-auto px-4 py-2.5 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
-          >
-            <Upload size={16} />
-            <span>Importar Leads (Instagram Ads)</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+          {onOpenEduControlSync && (
+            <button
+              type="button"
+              onClick={onOpenEduControlSync}
+              className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
+              title="Sincronizar base de alunos do EduControl (.csv / .txt)"
+            >
+              <GraduationCap size={16} />
+              <span>Base EduControl</span>
+            </button>
+          )}
+          {onOpenInstagramImport && (
+            <button
+              type="button"
+              onClick={onOpenInstagramImport}
+              className="px-4 py-2.5 bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
+            >
+              <Upload size={16} />
+              <span>Importar Leads (Instagram Ads)</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Cards de Métricas Principais */}

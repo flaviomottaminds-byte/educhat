@@ -22,9 +22,12 @@ import {
   QrCode,
   PhoneCall,
   Upload,
-  Trash2
+  Trash2,
+  Database,
+  GraduationCap
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
+import { matchStudentByPhone } from '../lib/eduControl';
 
 export default function Sidebar({
   activeView = 'chat',
@@ -43,6 +46,8 @@ export default function Sidebar({
   onOpenNewCollaborator,
   onOpenWhatsAppConnection,
   onOpenInstagramImport,
+  onOpenEduControlSync,
+  eduControlStudents = [],
   aiAutonomous = true,
   setAiAutonomous,
   theme = 'light',
@@ -113,6 +118,13 @@ export default function Sidebar({
 
   const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;
+    const student = matchStudentByPhone(c.id || c.phone, eduControlStudents);
+    const studentName = (student?.name || '').toLowerCase();
+    const studentCourse = (student?.course || '').toLowerCase();
+    const studentPolo = (student?.polo || '').toLowerCase();
+    const studentStatus = (student?.academicStatus || '').toLowerCase();
+    const studentMatricula = (student?.matricula || '').toLowerCase();
+
     const name = (c.name || '').toLowerCase();
     const phone = (c.phone || '').replace(/\D/g, '');
     const department = (c.department || '').toLowerCase();
@@ -120,6 +132,11 @@ export default function Sidebar({
     const cleanSearchPhone = cleanSearch.replace(/\D/g, '');
     return (
       name.includes(cleanSearch) ||
+      studentName.includes(cleanSearch) ||
+      studentCourse.includes(cleanSearch) ||
+      studentPolo.includes(cleanSearch) ||
+      studentStatus.includes(cleanSearch) ||
+      studentMatricula.includes(cleanSearch) ||
       (cleanSearchPhone && phone.includes(cleanSearchPhone)) ||
       department.includes(cleanSearch) ||
       statusLabel.includes(cleanSearch)
@@ -374,11 +391,19 @@ export default function Sidebar({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
+                  onClick={onOpenEduControlSync}
+                  className="text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold cursor-pointer"
+                  title="Sincronizar base de alunos do EduControl (.csv / .txt)"
+                >
+                  <Database size={12} /> EduControl
+                </button>
+                <button
+                  type="button"
                   onClick={onOpenInstagramImport}
                   className="text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold cursor-pointer"
                   title="Importar leads em CSV do Instagram Ads diretamente para a Expansão"
                 >
-                  <Upload size={12} /> Importar Leads
+                  <Upload size={12} /> Leads Ads
                 </button>
                 <button
                   type="button"
@@ -422,6 +447,9 @@ export default function Sidebar({
               filteredWhatsAppContacts.map((contact) => {
                 const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
                 const contactUnread = unreadCounts[contact.id] || 0;
+                const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
+                const displayName = student?.name || contact.name;
+
                 return (
                   <button
                     key={contact.id}
@@ -434,33 +462,49 @@ export default function Sidebar({
                   >
                     <div className="flex items-center gap-2.5 truncate">
                       <div className="relative text-2xl shrink-0 p-1 bg-white dark:bg-chatPanel rounded-lg border border-slate-200 dark:border-chatBorder shadow-2xs">
-                        <span>{contact.avatar}</span>
+                        <span>{student ? '🎓' : contact.avatar}</span>
                         <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel" />
                       </div>
                       <div className="truncate">
                         <div className="flex items-center gap-1.5">
                           <p className={`text-xs leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'font-semibold text-chatTextTitle'}`}>
-                            {contact.name}
+                            {displayName}
                           </p>
-                          <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
-                            contact.status === 'carteira_ativa'
-                              ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
-                              : contact.status === 'veterano_retencao'
-                              ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
-                              : contact.status === 'lead_instagram'
-                              ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800/40'
-                              : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
-                          }`}>
-                            {contact.statusLabel}
-                          </span>
+                          {student ? (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                              student.academicStatus === 'Ativo'
+                                ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                                : student.academicStatus === 'Certificado'
+                                ? 'bg-cyan-100 dark:bg-cyan-950/50 text-cyan-800 dark:text-cyan-300'
+                                : student.academicStatus === 'Veterano'
+                                ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+                                : 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+                            }`}>
+                              {student.academicStatus}
+                            </span>
+                          ) : (
+                            <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                              contact.status === 'carteira_ativa'
+                                ? 'bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300'
+                                : contact.status === 'veterano_retencao'
+                                ? 'bg-purple-100 dark:bg-purple-950/50 text-purple-800 dark:text-purple-300'
+                                : contact.status === 'lead_instagram'
+                                ? 'bg-gradient-to-r from-pink-100 to-rose-100 dark:from-pink-950/60 dark:to-rose-950/60 text-pink-800 dark:text-pink-300 border border-pink-200 dark:border-pink-800/40'
+                                : 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300'
+                            }`}>
+                              {contact.statusLabel}
+                            </span>
+                          )}
                         </div>
                         <p className="text-[10px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
                           <span>{contact.phone}</span>
                           <span>•</span>
-                          <span className="font-semibold text-brand-700 dark:text-brand-400">{contact.department}</span>
+                          <span className="font-semibold text-brand-700 dark:text-brand-400">
+                            {student ? student.course : contact.department}
+                          </span>
                         </p>
                         <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
-                          {contact.triageContext}
+                          {student ? `📍 ${student.polo} • Matrícula ${student.matricula}` : contact.triageContext}
                         </p>
                       </div>
                     </div>

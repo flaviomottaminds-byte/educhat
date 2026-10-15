@@ -25,10 +25,15 @@ import {
   PhoneCall,
   Reply,
   ChevronDown,
-  Check
+  Check,
+  GraduationCap,
+  Award,
+  BookOpen
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
+import { matchStudentByPhone } from '../lib/eduControl';
+import StudentDossierModal from './StudentDossierModal';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -196,13 +201,15 @@ export default function ChatArea({
   onUpdateChatAssignment,
   currentUser,
   realtimeStatus = 'connected',
-  collaborators = []
+  collaborators = [],
+  eduControlStudents = []
 }) {
   const [inputText, setInputText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState(null);
   const [activeScheduleId, setActiveScheduleId] = useState(null);
   const [activeDelegateId, setActiveDelegateId] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null); // Estado para Resposta / Quote (Item 5)
+  const [isStudentDossierOpen, setIsStudentDossierOpen] = useState(false); // Dossiê Acadêmico EduControl
 
   // Estado do Seletor Interativo de Fila & Responsável (Item 1)
   const [isAssignmentOpen, setIsAssignmentOpen] = useState(false);
@@ -222,6 +229,11 @@ export default function ChatArea({
   const isDM = chatMeta?.type === 'dm';
   const target = chatMeta?.data || {};
   const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
+
+  // Reconhecimento inteligente do aluno na base EduControl
+  const matchedStudent = isWhatsApp
+    ? matchStudentByPhone(target?.id || target?.phone, eduControlStudents)
+    : null;
 
   const [selectedDept, setSelectedDept] = useState(target.department || 'Comercial');
   const [selectedAssignee, setSelectedAssignee] = useState(target.assignee || '');
@@ -492,11 +504,25 @@ export default function ChatArea({
 
           <div className="truncate">
             <h2 className="text-chatTextTitle font-semibold text-sm leading-tight flex items-center gap-2 truncate">
-              <span className="truncate">{target.name}</span>
+              <span className="truncate">{matchedStudent?.name || target.name}</span>
               {isWhatsApp ? (
-                <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-300 dark:border-emerald-500/30 shrink-0">
-                  <Smartphone size={10} /> WhatsApp Aluno
-                </span>
+                matchedStudent ? (
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0 ${
+                    matchedStudent.academicStatus === 'Ativo'
+                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                      : matchedStudent.academicStatus === 'Certificado'
+                      ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-950/70 dark:text-cyan-300 border border-cyan-300 dark:border-cyan-800'
+                      : matchedStudent.academicStatus === 'Veterano'
+                      ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/70 dark:text-purple-300 border border-purple-300 dark:border-purple-800'
+                      : 'bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                  }`}>
+                    <GraduationCap size={11} /> {matchedStudent.academicStatus} • {matchedStudent.course}
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-300 dark:border-emerald-500/30 shrink-0">
+                    <Smartphone size={10} /> WhatsApp Aluno
+                  </span>
+                )
               ) : isBotChat ? (
                 <span className="text-[10px] bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full flex items-center gap-1 border border-purple-300 dark:border-purple-500/30 shrink-0">
                   <Bot size={11} /> IA 24h
@@ -512,6 +538,14 @@ export default function ChatArea({
                 <span className="font-mono text-emerald-700 dark:text-emerald-400 font-semibold shrink-0">
                   📱 {target.phone}
                 </span>
+                {matchedStudent && (
+                  <>
+                    <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
+                    <span className="text-purple-700 dark:text-purple-300 font-medium shrink-0">
+                      📍 {matchedStudent.polo} ({matchedStudent.matricula})
+                    </span>
+                  </>
+                )}
                 <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
 
                 {/* Seletor Interativo de Fila & Responsável (Item 1) */}
@@ -754,6 +788,18 @@ export default function ChatArea({
             <span className="hidden sm:inline">{isDM ? 'Resumir' : 'Resumo'}</span>
           </button>
 
+          {matchedStudent && (
+            <button
+              onClick={() => setIsStudentDossierOpen(true)}
+              title="Abrir Dossiê Acadêmico e Histórico do Aluno no EduControl"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/40 dark:to-indigo-950/40 text-purple-700 dark:text-purple-300 hover:from-purple-100 hover:to-indigo-100 border border-purple-200 dark:border-purple-500/30 text-xs font-bold shadow-xs transition cursor-pointer"
+            >
+              <GraduationCap size={14} className="text-purple-600 dark:text-purple-400" />
+              <span className="hidden sm:inline">Dossiê EduControl</span>
+              <span className="sm:hidden">Dossiê</span>
+            </button>
+          )}
+
           {onDeleteChat && (
             <button
               onClick={() => onDeleteChat(target?.id || chatMeta?.data?.id || chatMeta?.id)}
@@ -766,6 +812,44 @@ export default function ChatArea({
           )}
         </div>
       </div>
+
+      {/* Banner Sticky de Reconhecimento Automático do Aluno EduControl */}
+      {isWhatsApp && matchedStudent && (
+        <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 dark:from-purple-950/40 dark:via-indigo-950/30 dark:to-blue-950/40 border-b border-purple-200 dark:border-purple-500/20 px-4 py-2 flex items-center justify-between text-xs text-purple-950 dark:text-purple-200 shrink-0">
+          <div className="flex items-center gap-2 truncate">
+            <span className="font-bold flex items-center gap-1.5 shrink-0 text-purple-700 dark:text-purple-300">
+              <GraduationCap size={15} />
+              Aluno Reconhecido EduControl:
+            </span>
+            <span className="font-semibold truncate">
+              {matchedStudent.name} ({matchedStudent.matricula}) • <strong>{matchedStudent.course}</strong> • {matchedStudent.polo}
+            </span>
+            <span className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
+              matchedStudent.academicStatus === 'Ativo'
+                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-200'
+                : matchedStudent.academicStatus === 'Certificado'
+                ? 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/60 dark:text-cyan-200'
+                : matchedStudent.academicStatus === 'Veterano'
+                ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-200'
+                : 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200'
+            }`}>
+              {matchedStudent.academicStatus}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-[10.5px] text-purple-700 dark:text-purple-300 font-medium hidden md:inline">
+              Resp: {matchedStudent.assignee} ({matchedStudent.department})
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsStudentDossierOpen(true)}
+              className="px-2 py-0.5 rounded bg-purple-600 hover:bg-purple-500 text-white text-[10.5px] font-bold transition cursor-pointer shadow-2xs"
+            >
+              Ver Ficha 360º
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Banner Sticky de Contexto de Triagem para WhatsApp */}
       {isWhatsApp && (
@@ -1374,6 +1458,13 @@ export default function ChatArea({
           </form>
         )}
       </div>
+
+      {/* Modal de Dossiê Acadêmico 360º do Aluno EduControl */}
+      <StudentDossierModal
+        isOpen={isStudentDossierOpen}
+        onClose={() => setIsStudentDossierOpen(false)}
+        student={matchedStudent}
+      />
     </section>
   );
 }

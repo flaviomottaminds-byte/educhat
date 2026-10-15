@@ -9,10 +9,12 @@ import AIMemoryModal from './components/AIMemoryModal';
 import WhatsAppDossierModal from './components/WhatsAppDossierModal';
 import WhatsAppConnectionModal from './components/WhatsAppConnectionModal';
 import InstagramLeadImportModal from './components/InstagramLeadImportModal';
+import EduControlSyncModal from './components/EduControlSyncModal';
 import UserSelectionModal from './components/UserSelectionModal';
 import TaskDetailModal from './components/TaskDetailModal';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
+import { INITIAL_EDUCONTROL_STUDENTS, matchStudentByPhone } from './lib/eduControl';
 import { playMessageSound } from './lib/audioNotification';
 import {
   requestDesktopNotificationPermission,
@@ -149,6 +151,16 @@ export default function App() {
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
   const [isDossierOpen, setIsDossierOpen] = useState(false);
 
+  // Base de Alunos e Clientes do EduControl (Reconhecimento Inteligente e Sincronização)
+  const [eduControlStudents, setEduControlStudents] = useState(() => {
+    try {
+      const stored = localStorage.getItem('educhat_educontrol_students');
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return INITIAL_EDUCONTROL_STUDENTS;
+  });
+  const [isEduControlModalOpen, setIsEduControlModalOpen] = useState(false);
+
   // Chat ativo: canal, dm ou whatsapp (padrão canal #geral)
   const [activeChat, setActiveChat] = useState({
     type: 'channel', // 'channel' | 'dm' | 'whatsapp'
@@ -177,8 +189,46 @@ export default function App() {
     : activeChat?.type === 'whatsapp'
     ? {
         type: 'whatsapp',
-        data: (whatsAppContacts || []).find((w) => w?.id === activeChat?.id) ||
-          INITIAL_WHATSAPP_CONTACTS.find((w) => w?.id === activeChat?.id) || {
+        data: (() => {
+          const matched = matchStudentByPhone(activeChat?.id, eduControlStudents);
+          const found = (whatsAppContacts || []).find((w) => w?.id === activeChat?.id) ||
+            INITIAL_WHATSAPP_CONTACTS.find((w) => w?.id === activeChat?.id);
+
+          if (found) {
+            return matched
+              ? {
+                  ...found,
+                  name: matched.name,
+                  course: matched.course,
+                  polo: matched.polo,
+                  matricula: matched.matricula,
+                  academicStatus: matched.academicStatus,
+                  statusLabel: `${matched.academicStatus} • ${matched.course}`,
+                  assignee: matched.assignee || found.assignee,
+                  department: matched.department || found.department
+                }
+              : found;
+          }
+
+          if (matched) {
+            return {
+              id: activeChat?.id || matched.waId,
+              name: matched.name,
+              phone: matched.phone,
+              avatar: '🎓',
+              department: matched.department || 'Secretaria Acadêmica',
+              assignee: matched.assignee || 'Gabriel Carvalho',
+              status: 'carteira_ativa',
+              statusLabel: `${matched.academicStatus} • ${matched.course}`,
+              course: matched.course,
+              polo: matched.polo,
+              matricula: matched.matricula,
+              academicStatus: matched.academicStatus,
+              triageContext: `Aluno ${matched.academicStatus} (${matched.course} • ${matched.polo}) • Matrícula ${matched.matricula}`
+            };
+          }
+
+          return {
             id: activeChat?.id || 'wa-lead',
             name: activeChat?.id ? `WhatsApp (${activeChat.id.replace('wa-', '')})` : 'Lead WhatsApp',
             phone: activeChat?.id ? `+${activeChat.id.replace('wa-', '')}` : '',
@@ -187,7 +237,8 @@ export default function App() {
             assignee: 'Gabriel Carvalho',
             status: 'carteira_ativa',
             statusLabel: 'Carteira Ativa'
-          },
+          };
+        })(),
       }
     : {
         type: 'dm',
@@ -390,8 +441,36 @@ export default function App() {
           }
         });
 
+        // Pré-extrai registros de alunos sincronizados do EduControl
+        const dbStudents = [];
+        dbMessages.forEach((m) => {
+          if (m.chat_id === 'sys_educontrol_students' && m.text?.includes('<!-- STUDENT_RECORD:')) {
+            const match = m.text.match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                dbStudents.push(JSON.parse(match[1]));
+              } catch {}
+            }
+          }
+        });
+        if (dbStudents.length > 0) {
+          setEduControlStudents((prev) => {
+            const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
+            dbStudents.forEach((s) => {
+              const k = s.cleanDigits || s.id;
+              map.set(k, { ...(map.get(k) || {}), ...s });
+            });
+            const merged = Array.from(map.values());
+            try {
+              localStorage.setItem('educhat_educontrol_students', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+
         const grouped = {};
         dbMessages.forEach((m) => {
+          if (m.chat_id === 'sys_educontrol_students') return;
           const key = normalizeChatKey(m.chat_id, currentUser.id);
 
           // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros (Item 4)
@@ -679,6 +758,27 @@ export default function App() {
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
+
+          // Sincronização em Tempo Real da Base de Alunos do EduControl
+          if (row.chat_id === 'sys_educontrol_students') {
+            const match = (row.text || '').match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                const sRecord = JSON.parse(match[1]);
+                setEduControlStudents((prev) => {
+                  const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
+                  map.set(sRecord.cleanDigits || sRecord.id, { ...(map.get(sRecord.cleanDigits || sRecord.id) || {}), ...sRecord });
+                  const updated = Array.from(map.values());
+                  try {
+                    localStorage.setItem('educhat_educontrol_students', JSON.stringify(updated));
+                  } catch {}
+                  return updated;
+                });
+              } catch {}
+            }
+            return;
+          }
+
           const cKey = normalizeChatKey(row.chat_id, currentUser.id);
 
           // Trava de Privacidade Realtime: Se for DM, só processa se o usuário for participante (Item 4)
@@ -847,27 +947,38 @@ export default function App() {
                 cachedAsgn = stored[cKey];
               } catch {}
 
-              const finalDept = asgnData?.department || cachedAsgn?.department || 'Comercial';
-              const finalAssignee = asgnData?.assignee || cachedAsgn?.assignee || 'Gabriel Carvalho';
-              const finalStatus = asgnData?.status || cachedAsgn?.status || 'ura_inedito';
-              const finalStatusLabel = asgnData?.statusLabel || cachedAsgn?.statusLabel || 'Lead WhatsApp';
+              const matchedStudent = matchStudentByPhone(cKey, eduControlStudents);
+
+              const finalName = matchedStudent?.name || incoming.senderName || `WhatsApp (${formattedPhone})`;
+              const finalAvatar = matchedStudent ? '🎓' : '👤';
+              const finalDept = matchedStudent?.department || asgnData?.department || cachedAsgn?.department || 'Comercial';
+              const finalAssignee = matchedStudent?.assignee || asgnData?.assignee || cachedAsgn?.assignee || 'Gabriel Carvalho';
+              const finalStatus = matchedStudent
+                ? (matchedStudent.academicStatus === 'Certificado' || matchedStudent.academicStatus === 'Veterano' ? 'veterano_retencao' : 'carteira_ativa')
+                : (asgnData?.status || cachedAsgn?.status || 'ura_inedito');
+              const finalStatusLabel = matchedStudent
+                ? `${matchedStudent.academicStatus} • ${matchedStudent.course}`
+                : (asgnData?.statusLabel || cachedAsgn?.statusLabel || 'Lead WhatsApp');
+              const finalContext = matchedStudent
+                ? `Aluno ${matchedStudent.academicStatus} (${matchedStudent.course} • ${matchedStudent.polo}) • Matrícula ${matchedStudent.matricula}`
+                : (asgnData || cachedAsgn)
+                ? `Permanência de Carteira ativa (${finalAssignee} • ${finalDept})`
+                : 'Mensagem recebida via WhatsApp.';
 
               return [
                 ...prev,
                 {
                   id: cKey,
-                  name: incoming.senderName || `WhatsApp (${formattedPhone})`,
+                  name: finalName,
                   phone: formattedPhone,
-                  avatar: '👤',
+                  avatar: finalAvatar,
                   department: finalDept,
                   assignee: finalAssignee,
                   status: finalStatus,
                   statusLabel: finalStatusLabel,
                   aiActive: false,
                   lastInteraction: incoming.timestamp || 'Agora',
-                  triageContext: (asgnData || cachedAsgn)
-                    ? `Permanência de Carteira ativa (${finalAssignee} • ${finalDept})`
-                    : 'Mensagem recebida via WhatsApp.'
+                  triageContext: finalContext
                 }
               ];
             });
@@ -1987,6 +2098,84 @@ export default function App() {
     }
   };
 
+  // Sincronização em Massa de Alunos e Clientes da Base EduControl (.CSV / .TXT)
+  const handleSyncEduControlStudents = async (newStudents) => {
+    if (!newStudents || newStudents.length === 0) return;
+    const timeStr = getSaoPauloTime();
+
+    // 1. Atualizar base de alunos local (mesclando por cleanDigits/waId)
+    setEduControlStudents((prev) => {
+      const map = new Map(prev.map((s) => [s.cleanDigits || s.id, s]));
+      newStudents.forEach((s) => {
+        const key = s.cleanDigits || s.id;
+        map.set(key, { ...(map.get(key) || {}), ...s, lastSync: timeStr });
+      });
+      const updated = Array.from(map.values());
+      try {
+        localStorage.setItem('educhat_educontrol_students', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // 2. Atualizar ou incluir contatos correspondentes no WhatsApp
+    setWhatsAppContacts((prev) => {
+      const contactMap = new Map(prev.map((c) => [c.id, c]));
+      newStudents.forEach((s) => {
+        const contactId = s.waId || `wa-${s.cleanDigits}`;
+        const existing = contactMap.get(contactId);
+        contactMap.set(contactId, {
+          id: contactId,
+          name: s.name,
+          phone: s.phone,
+          avatar: '🎓',
+          department: s.department || existing?.department || 'Secretaria Acadêmica',
+          assignee: s.assignee || existing?.assignee || 'Gabriel Carvalho',
+          status: s.academicStatus === 'Certificado' || s.academicStatus === 'Veterano'
+            ? 'veterano_retencao'
+            : 'carteira_ativa',
+          statusLabel: `${s.academicStatus} • ${s.course}`,
+          aiActive: existing ? existing.aiActive : false,
+          lastInteraction: existing?.lastInteraction || 'Sincronizado EduControl',
+          triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • Matrícula ${s.matricula}`
+        });
+      });
+      return Array.from(contactMap.values());
+    });
+
+    // 3. Persistência no Supabase para sincronização em tempo real entre todos os consultores
+    try {
+      const rowsToInsert = newStudents.map((s, idx) => ({
+        id: `ec_rec_${s.cleanDigits || Date.now() + '_' + idx}`,
+        chat_id: 'sys_educontrol_students',
+        sender_id: 'educontrol_sync',
+        sender_name: 'EduControl Database',
+        text: `<!-- STUDENT_RECORD:${JSON.stringify(s)} -->`,
+        timestamp: timeStr
+      }));
+
+      const chunkSize = 20;
+      for (let i = 0; i < rowsToInsert.length; i += chunkSize) {
+        const chunk = rowsToInsert.slice(i, i + chunkSize);
+        await supabase.from('messages').upsert(chunk, { onConflict: 'id' });
+      }
+
+      // Notificação de sistema no canal #geral
+      const noticeText = `🎓 **Base de Alunos EduControl Sincronizada!**\n\nForam sincronizados **${newStudents.length} alunos** da Faculdade Olavo Bilac / Grupo EstudeMais.\nO reconhecimento inteligente em tempo real e os crachás acadêmicos já estão ativos no atendimento WhatsApp.`;
+      await supabase.from('messages').insert([{
+        id: `ec_sync_notif_${Date.now()}`,
+        chat_id: 'c-geral',
+        sender_id: 'system',
+        sender_name: 'EduControl (Sistema)',
+        text: noticeText,
+        timestamp: timeStr
+      }]);
+    } catch (err) {
+      console.warn('Aviso ao sincronizar alunos no Supabase:', err);
+    }
+
+    playMessageSound();
+  };
+
   // Reatribuição Manual de Fila e Consultor Responsável com Persistência no Supabase e Realtime (Item 1 e 3)
   const handleUpdateChatAssignment = async (chatId, { department, assignee, status, statusLabel }) => {
     if (!chatId) return;
@@ -2133,6 +2322,8 @@ export default function App() {
         onDeleteChat={handleDeleteChat}
         onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
         onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
+        onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
+        eduControlStudents={eduControlStudents}
         aiAutonomous={aiAutonomous}
         setAiAutonomous={setAiAutonomous}
         onOpenAICopilot={() =>
@@ -2177,6 +2368,7 @@ export default function App() {
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
           collaborators={collaborators}
+          eduControlStudents={eduControlStudents}
         />
       )}
 
@@ -2200,6 +2392,7 @@ export default function App() {
             channels={channels}
             collaborators={collaborators}
             onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
+            onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
           />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] dark:bg-chatBg p-8 text-center transition-colors">
@@ -2332,6 +2525,15 @@ export default function App() {
           setActiveView('chat');
           clearUnread(contactId);
         }}
+      />
+
+      {/* Modal de Sincronização e Reconhecimento da Base EduControl (Item 1 & 2) */}
+      <EduControlSyncModal
+        isOpen={isEduControlModalOpen}
+        onClose={() => setIsEduControlModalOpen(false)}
+        onSyncStudents={handleSyncEduControlStudents}
+        currentStudents={eduControlStudents}
+        collaborators={collaborators}
       />
     </div>
   );
