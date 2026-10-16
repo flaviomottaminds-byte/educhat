@@ -13,20 +13,26 @@ const WEBHOOK_EVENTS = [
 ];
 
 export function getEvolutionConfig() {
-  let url = DEFAULT_URL;
-  let key = DEFAULT_KEY;
-  let instance = DEFAULT_INSTANCE;
+  const prodUrl = (import.meta.env?.VITE_EVOLUTION_API_URL || DEFAULT_URL).replace(/\/+$/, '');
+  const prodKey = import.meta.env?.VITE_EVOLUTION_API_KEY || DEFAULT_KEY;
+  const prodInstance = import.meta.env?.VITE_EVOLUTION_INSTANCE || DEFAULT_INSTANCE;
+
+  let url = prodUrl;
+  let key = prodKey;
+  let instance = prodInstance;
   try {
     const u = localStorage.getItem('educhat_evo_url');
     const k = localStorage.getItem('educhat_evo_key');
     const i = localStorage.getItem('educhat_evo_instance');
-    if (u && !u.includes('suaempresa.com')) url = u;
-    if (k && k.length >= 10) key = k;
-    if (i && i !== 'nome-da-instancia') instance = i;
+    if (u && !u.includes('suaempresa.com') && u.startsWith('http')) url = u.replace(/\/+$/, '');
+    if (k && k.length >= 30) key = k;
+    if (i && i !== 'nome-da-instancia' && i.length >= 3) instance = i;
   } catch {}
-  url = (import.meta.env?.VITE_EVOLUTION_API_URL || url).replace(/\/+$/, '');
-  key = import.meta.env?.VITE_EVOLUTION_API_KEY || key;
-  instance = import.meta.env?.VITE_EVOLUTION_INSTANCE || instance;
+
+  if (!key || key.length < 30) key = prodKey;
+  if (!instance) instance = prodInstance;
+  if (!url) url = prodUrl;
+
   return { url, key, instance };
 }
 
@@ -40,8 +46,6 @@ async function evoFetch(path, options = {}, timeoutMs = 12000) {
       headers: {
         'Content-Type': 'application/json',
         'apikey': key,
-        'apiKey': key,
-        'Authorization': `Bearer ${key}`,
         ...(options.headers || {})
       },
       signal: controller.signal
@@ -271,6 +275,7 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
           remoteJidAlt: rawJidAlt || null,
           preferredTarget: preferredTarget,
           name: contactName,
+          hasRealName: Boolean(m.pushName && m.pushName !== 'Você'),
           phone: displayPhone,
           avatar: '👤',
           department: 'Atendimento',
@@ -281,6 +286,17 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
           lastInteraction: time,
           lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString()
         });
+      } else {
+        const existing = contactsMap.get(chatKey);
+        if (!existing.hasRealName && m.pushName && m.pushName !== 'Você') {
+          existing.name = m.pushName;
+          existing.hasRealName = true;
+        }
+        if (rawJidAlt && !existing.remoteJidAlt) {
+          existing.remoteJidAlt = rawJidAlt;
+          if (phoneDigits) existing.phone = formatDisplayPhone(phoneDigits);
+          existing.preferredTarget = rawJidAlt;
+        }
       }
 
       if (!messagesByChat[chatKey]) messagesByChat[chatKey] = [];
