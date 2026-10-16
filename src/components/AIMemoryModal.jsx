@@ -441,8 +441,8 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
                 : 'border-transparent text-chatTextMuted hover:text-slate-800 dark:hover:text-chatTextTitle'
             }`}
           >
-            <Sparkles size={14} className="text-yellow-600 dark:text-yellow-400" />
-            <span>Diretrizes IA</span>
+            <Key size={14} className="text-yellow-600 dark:text-yellow-400" />
+            <span>Chave API Gemini & Diretrizes</span>
           </button>
         </div>
 
@@ -461,7 +461,42 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
 
         {/* Corpo Principal */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 text-xs">
-          
+          {/* Barra Rápida de Chave da API Gemini (Sempre visível no topo se ainda não configurada ou na aba geral) */}
+          {activeTab !== 'prompt' && (
+            <div className="p-3 rounded-xl bg-gradient-to-r from-purple-900/15 via-indigo-900/10 to-emerald-900/15 border border-purple-500/30 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-purple-600 text-white flex items-center justify-center shrink-0">
+                  <Key size={14} />
+                </div>
+                <div>
+                  <span className="font-bold text-chatTextTitle text-xs block">
+                    Chave da API Google Gemini (gemini-2.5-flash)
+                  </span>
+                  <span className="text-[10px] text-chatTextMuted">
+                    Salva no localStorage e sincronizada no Supabase para Assistente IA, Atas do Meet e Briefing Executivo
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={geminiKey}
+                  onChange={(e) => setGeminiKey(e.target.value)}
+                  placeholder="AIzaSy... (Cole sua Chave Gemini)"
+                  className="bg-white dark:bg-chatInputBg text-slate-800 dark:text-chatTextTitle px-3 py-1.5 rounded-lg border border-slate-200 dark:border-chatBorder focus:outline-none focus:border-purple-500 font-mono text-xs w-full sm:w-64"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveGeminiKey}
+                  className="bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg shadow-xs transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                >
+                  {geminiKeySaved ? <Check size={13} className="text-emerald-300" /> : <Sparkles size={13} />}
+                  <span>{geminiKeySaved ? 'Salva!' : 'Salvar Chave'}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Banner de Feedback Visual de Processamento */}
           {feedback && (
             <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-700/60 text-emerald-900 dark:text-emerald-200 rounded-xl shadow-xs flex items-start justify-between gap-3 animate-in fade-in slide-in-from-top-2">

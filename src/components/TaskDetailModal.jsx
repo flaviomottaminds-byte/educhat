@@ -56,7 +56,46 @@ export default function TaskDetailModal({
     setIsEditingTitle(false);
   };
 
-  // Delegar Demanda para outro Colaborador (Item 5)
+  const availableDepartments = [
+    'Marketing',
+    'Comercial',
+    'Expansão',
+    'Secretaria',
+    'Pedagógico',
+    'Tutoria',
+    'Financeiro',
+    'Diretoria',
+    'Geral'
+  ];
+
+  // Transferência Cruzada de Departamento (ex: Tutoria <-> Secretaria)
+  const handleTransferDepartment = (newDepartment) => {
+    if (!newDepartment || newDepartment === task.department) return;
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const deptSpecialist = realCollaborators.find(
+      (c) => (c.department || '').toLowerCase() === newDepartment.toLowerCase()
+    );
+    const commentObj = {
+      id: 'c_' + Date.now(),
+      author: currentUser.name,
+      avatar: currentUser.avatar,
+      dept: currentUser.department,
+      text: `🔀 Demanda transferida do setor ${task.department || 'Geral'} para ${newDepartment}${deptSpecialist ? ` (Responsável sugerido: ${deptSpecialist.name})` : ''} por ${currentUser.name}.`,
+      timestamp: `${timeStr} - ${now.toLocaleDateString('pt-BR')}`
+    };
+
+    onUpdateTask(task.id, {
+      department: newDepartment,
+      ...(deptSpecialist
+        ? {
+            assignee: deptSpecialist.name,
+            assigneeAvatar: deptSpecialist.avatar || '👤'
+          }
+        : {}),
+      comments: [...(task.comments || []), commentObj]
+    });
+  };
   const handleDelegate = (newAssigneeName) => {
     if (newAssigneeName === task.assignee) return;
     const targetCollab = realCollaborators.find((c) => c.name === newAssigneeName);
@@ -275,26 +314,45 @@ export default function TaskDetailModal({
               </span>
             </div>
 
-            {/* DELEGAR: Seletor Interativo de Responsável (Item 5) */}
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-chatSidebar border border-chatBorder">
-              <span className="text-[11px] text-chatTextMuted block font-medium mb-1">
-                Responsável (Delegar):
-              </span>
-              <select
-                value={task.assignee}
-                onChange={(e) => handleDelegate(e.target.value)}
-                className="w-full bg-white dark:bg-chatCard text-xs font-bold text-chatTextTitle border border-slate-300 dark:border-chatBorder rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
-                title="Trocar ou delegar o responsável por esta demanda"
-              >
-                {realCollaborators.map((c) => (
-                  <option key={c.id} value={c.name}>
-                    {c.avatar} {c.name} ({c.department})
-                  </option>
-                ))}
-              </select>
-              <span className="text-[10px] text-chatTextMuted font-medium block mt-1">
-                Setor: {task.department}
-              </span>
+            {/* DELEGAR E TRANSFERIR SETOR CRUZADO */}
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-chatSidebar border border-chatBorder space-y-1.5">
+              <div>
+                <span className="text-[11px] text-chatTextMuted block font-medium mb-1">
+                  Responsável (Delegar):
+                </span>
+                <select
+                  value={task.assignee}
+                  onChange={(e) => handleDelegate(e.target.value)}
+                  className="w-full bg-white dark:bg-chatCard text-xs font-bold text-chatTextTitle border border-slate-300 dark:border-chatBorder rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
+                  title="Trocar ou delegar o responsável por esta demanda"
+                >
+                  {!realCollaborators.some((c) => c.name === task.assignee) && (
+                    <option value={task.assignee}>{task.assignee}</option>
+                  )}
+                  {realCollaborators.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.avatar} {c.name} ({c.department})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <span className="text-[10px] text-chatTextMuted block font-medium mb-0.5">
+                  Transferir Setor / Fila:
+                </span>
+                <select
+                  value={task.department || 'Geral'}
+                  onChange={(e) => handleTransferDepartment(e.target.value)}
+                  className="w-full bg-white dark:bg-chatCard text-[11px] font-semibold text-brand-700 dark:text-brand-300 border border-slate-300 dark:border-chatBorder rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
+                  title="Transferir demanda entre departamentos (ex: Tutoria ↔ Secretaria)"
+                >
+                  {availableDepartments.map((dept) => (
+                    <option key={dept} value={dept}>
+                      🏢 Setor: {dept}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             {/* AGENDAR: Seletor de Prazo Interativo (Item 3) */}

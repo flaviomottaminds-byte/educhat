@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
-import { X, Sparkles, Check, Clock, User, AlertTriangle, ArrowRight, ShieldCheck } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { X, Sparkles, Check, Clock, AlertTriangle, ShieldCheck, Loader2 } from 'lucide-react';
 import { analyzeTaskPriorityAI } from '../lib/aiKnowledge';
+import { generateGeminiChatReply } from '../lib/gemini';
 
 export default function AICopilotModal({
   isOpen,
@@ -11,9 +12,16 @@ export default function AICopilotModal({
   activeChat,
   onConfirmTaskCreation,
   collaborators = [],
-  vipClients = []
+  vipClients = [],
+  learnedDocuments = [],
+  pops = [],
+  slas = [],
+  recentMessages = []
 }) {
   if (!isOpen) return null;
+
+  const [geminiInsight, setGeminiInsight] = useState('');
+  const [loadingInsight, setLoadingInsight] = useState(false);
 
   // Filtrar apenas colaboradores reais (excluir o próprio bot)
   const realCollaborators = useMemo(() => {
@@ -48,10 +56,45 @@ export default function AICopilotModal({
     channel: initialChannelTag
   });
 
+  useEffect(() => {
+    if (mode !== 'summary' && mode !== 'bottlenecks') return;
+    let cancelled = false;
+    setLoadingInsight(true);
+    setGeminiInsight('');
+
+    const prompt =
+      mode === 'summary'
+        ? `Gere um resumo executivo em tópicos das últimas interações deste canal (#${channel?.name || 'geral'}) e identifique os encaminhamentos práticos.`
+        : `Realize um diagnóstico rápido de gargalos operacionais, prazos MEC e SLAs da equipe com base nos POPs e diretrizes institucionais.`;
+
+    generateGeminiChatReply({
+      message: prompt,
+      history: recentMessages.slice(-10),
+      vipClients,
+      learnedDocuments,
+      pops,
+      slas,
+      department: channel?.department || 'Geral'
+    })
+      .then((res) => {
+        if (!cancelled) setGeminiInsight(res);
+      })
+      .catch((err) => {
+        if (!cancelled) setGeminiInsight(`⚠️ ${err.message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingInsight(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, channel]);
+
   // Cálculo de Prioridade 100% Automático via IA (Item 5 da solicitação)
   const aiAnalysis = useMemo(() => {
-    return analyzeTaskPriorityAI(taskForm.title, taskForm.desc, vipClients);
-  }, [taskForm.title, taskForm.desc, vipClients]);
+    return analyzeTaskPriorityAI(taskForm.title, taskForm.desc, vipClients, learnedDocuments);
+  }, [taskForm.title, taskForm.desc, vipClients, learnedDocuments]);
 
   const handleCreate = () => {
     const assigneeObj = realCollaborators.find((c) => c.name === taskForm.assignee);
@@ -80,11 +123,11 @@ export default function AICopilotModal({
               <Sparkles size={20} className="text-yellow-600 dark:text-yellow-300 animate-pulse" />
             </div>
             <div>
-              <h3 className="font-bold text-chatTextTitle text-base">Copiloto Inteligente EduChat</h3>
+              <h3 className="font-bold text-chatTextTitle text-base">Copiloto Inteligente EduChat (Gemini 2.5)</h3>
               <p className="text-xs text-purple-700 dark:text-purple-300">
                 {mode === 'extract_task' && 'Criação de Demanda no Kanban'}
-                {mode === 'summary' && `Resumo do Canal #${channel?.name}`}
-                {mode === 'bottlenecks' && 'Diagnóstico de Processos da Equipe'}
+                {mode === 'summary' && `Resumo em Tempo Real — #${channel?.name || 'geral'}`}
+                {mode === 'bottlenecks' && 'Diagnóstico de Processos da Equipe (Gemini)'}
               </p>
             </div>
           </div>
@@ -133,7 +176,7 @@ export default function AICopilotModal({
                   />
                 </div>
 
-                {/* Seleção do Responsável com Barra de Rolagem Perfeita (Item 1) */}
+                {/* Seleção do Responsável com Barra de Rolagem Perfeita */}
                 <div>
                   <label className="block text-xs font-semibold text-chatTextMuted mb-1 flex items-center justify-between">
                     <span>Responsável Designado:</span>
@@ -173,7 +216,7 @@ export default function AICopilotModal({
                   </div>
                 </div>
 
-                {/* Avaliação de Prioridade 100% Automática pela IA (Item 5) */}
+                {/* Avaliação de Prioridade 100% Automática pela IA */}
                 <div className="bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-500/30 rounded-xl p-3.5 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
@@ -228,29 +271,25 @@ export default function AICopilotModal({
             </>
           )}
 
-          {mode === 'summary' && (
+          {(mode === 'summary' || mode === 'bottlenecks') && (
             <div className="space-y-4 text-xs">
-              <div className="p-3 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-500/30 rounded-xl space-y-2">
-                <p className="font-semibold text-purple-900 dark:text-purple-200">
-                  Resumo das últimas conversas no canal #{channel?.name}:
-                </p>
-                <ul className="list-disc list-inside space-y-1.5 text-chatTextBody">
-                  <li>
-                    <strong>Alinhamento de Faturamento:</strong> Tatiane identificou demanda urgente de regularização no Asaas.
-                  </li>
-                  <li>
-                    <strong>Decisão Tomada:</strong> Flávio solicitou emissão de 2ª via e alinhamento com a secretaria.
-                  </li>
-                  <li>
-                    <strong>Status:</strong> Demanda em andamento com acompanhamento intersetorial.
-                  </li>
-                </ul>
+              <div className="p-4 bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-500/30 rounded-xl space-y-2 max-h-72 overflow-y-auto">
+                {loadingInsight ? (
+                  <div className="flex items-center gap-2 text-purple-700 dark:text-purple-300 py-4 justify-center">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Consultando API oficial do Google Gemini (gemini-2.5-flash)...</span>
+                  </div>
+                ) : (
+                  <div className="whitespace-pre-wrap text-chatTextBody leading-relaxed">
+                    {geminiInsight}
+                  </div>
+                )}
               </div>
 
               <div className="p-3 bg-slate-50 dark:bg-[#111b21] rounded-lg border border-chatBorder flex items-center justify-between">
                 <div>
-                  <p className="font-medium text-chatTextTitle">1 Ação Crítica Identificada</p>
-                  <p className="text-chatTextMuted">Processo acadêmico pendente de validação</p>
+                  <p className="font-medium text-chatTextTitle">Encaminhar para o Kanban</p>
+                  <p className="text-chatTextMuted">Transformar análise do Gemini em card acionável</p>
                 </div>
                 <button
                   onClick={handleCreate}
@@ -261,29 +300,9 @@ export default function AICopilotModal({
               </div>
             </div>
           )}
-
-          {mode === 'bottlenecks' && (
-            <div className="space-y-3 text-xs">
-              <div className="p-3 bg-amber-50 dark:bg-yellow-500/10 border border-amber-200 dark:border-yellow-500/30 rounded-lg flex items-start gap-2.5">
-                <AlertTriangle size={18} className="text-amber-600 dark:text-yellow-400 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold text-amber-900 dark:text-yellow-300">Diagnóstico de Fluxo Acadêmico</p>
-                  <p className="text-amber-800/80 dark:text-[#d1d7db] mt-0.5">
-                    Processos de certificação e validação de documentos da Secretaria Acadêmica seguem dentro do SLA de 48h estipulado pelas diretrizes MEC.
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/30 rounded-lg">
-                <p className="font-bold text-blue-900 dark:text-blue-300">Carga da Equipe:</p>
-                <p className="text-blue-800/80 dark:text-[#d1d7db] mt-1">
-                  Distribuição de demandas equilibrada entre Comercial, Secretaria e Tutoria.
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>
   );
 }
+

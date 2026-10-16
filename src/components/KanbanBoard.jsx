@@ -1,83 +1,155 @@
-import React, { useState } from 'react';
-import { Plus, Clock, User, ArrowRight, ArrowLeft, CheckCircle2, AlertCircle, Sparkles, Shield, UserCheck, Building2, Lock, Maximize2, Paperclip } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import {
+  Plus,
+  Clock,
+  ArrowRight,
+  ArrowLeft,
+  Sparkles,
+  Shield,
+  UserCheck,
+  Building2,
+  Lock,
+  Maximize2,
+  Paperclip
+} from 'lucide-react';
 import confetti from 'canvas-confetti';
+import ExecutiveBriefingBanner from './ExecutiveBriefingBanner';
+import MeetNotesImportModal from './MeetNotesImportModal';
+import { normalizeText } from '../lib/gemini';
 
 const COLUMNS = [
-  { id: 'backlog', title: 'A Fazer', color: 'border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-500/10' },
+  { id: 'backlog', title: 'Pendente / A Fazer', color: 'border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-500/10' },
   { id: 'in_progress', title: 'Em Andamento', color: 'border-yellow-500/40 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10' },
   { id: 'waiting', title: 'Aguardando Retorno', color: 'border-purple-500/40 text-purple-600 dark:text-purple-400 bg-purple-500/10' },
   { id: 'done', title: 'Concluído', color: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10' },
 ];
 
+const KANBAN_DEPARTMENTS = [
+  'Todos',
+  'Marketing',
+  'Comercial',
+  'Expansão',
+  'Secretaria',
+  'Pedagógico',
+  'Tutoria',
+  'Financeiro',
+  'Diretoria'
+];
+
 export default function KanbanBoard({
-  tasks,
+  tasks = [],
   onUpdateTaskStatus,
   onAddTask,
+  onCreateTasksBatch,
   onCardClick,
   currentUser,
-  collaborators = []
+  collaborators = [],
+  vipClients = [],
+  slas = [],
+  onOpenAIMemory
 }) {
-  const isDirector = currentUser?.roleType === 'diretor';
+  const isDirector =
+    currentUser?.roleType === 'diretor' ||
+    currentUser?.role === 'admin' ||
+    currentUser?.id === 'u1';
 
-  // Estados de filtro para o Diretor
+  // Filtros rápidos da Visão do Admin (Por Setor e Por Colaborador)
+  const [filterDepartment, setFilterDepartment] = useState('Todos');
   const [filterAssignee, setFilterAssignee] = useState('todos');
 
-  // Estado de aba para o Colaborador ('my_tasks' | 'dept_tasks' | 'my_requests')
-  const [collabTab, setCollabTab] = useState('my_tasks');
+  // Abas de isolamento do Usuário Comum ('my_and_dept' | 'my_tasks' | 'dept_tasks' | 'my_requests')
+  const [collabTab, setCollabTab] = useState('my_and_dept');
 
-  // Normalização para comparações seguras de nomes
-  const normalize = (val) => (val || '').trim().toLowerCase();
-  const currentUserName = normalize(currentUser?.name);
+  // Modal de Importação de Atas do Google Meet (Gemini)
+  const [isMeetModalOpen, setIsMeetModalOpen] = useState(false);
+
+  const currentUserName = normalizeText(currentUser?.name);
   const currentUserFirst = currentUserName.split(' ')[0];
+  const currentUserEmail = normalizeText(currentUser?.email);
+  const currentUserId = currentUser?.id;
 
-  // 1. Minhas Demandas: Tarefas que EU tenho que fazer (responsável sou eu)
+  // 1. Verifica se o cartão está vinculado ao user_id, email ou nome do colaborador logado
   const isAssignedToMe = (t) => {
-    const a = normalize(t.assignee);
-    return a === currentUserName || a.startsWith(currentUserFirst);
+    if (currentUserId && t.assigneeId && t.assigneeId === currentUserId) return true;
+    if (currentUserEmail && t.assigneeEmail && normalizeText(t.assigneeEmail) === currentUserEmail) return true;
+    const a = normalizeText(t.assignee);
+    if (!a || !currentUserName) return false;
+    return a === currentUserName || (currentUserFirst.length >= 3 && a.startsWith(currentUserFirst));
   };
 
-  // 2. Minhas Solicitações: Demandas que EU abri para OUTROS colaboradores/setores
+  // 2. Verifica se foi solicitado por mim para outro setor (Transferência Cruzada)
   const isRequestedByMe = (t) => {
-    const r = normalize(t.requester);
-    return r === currentUserName || r.startsWith(currentUserFirst);
+    const r = normalizeText(t.requester);
+    if (!r || !currentUserName) return false;
+    return r === currentUserName || (currentUserFirst.length >= 3 && r.startsWith(currentUserFirst));
   };
 
-  // 3. Demandas do meu departamento
+  // 3. Verifica se pertence ao meu departamento
   const isMyDepartment = (t) => {
-    const d = normalize(t.department);
-    const userDept = normalize(currentUser?.department);
-    return d === userDept;
+    const d = normalizeText(t.department);
+    const userDept = normalizeText(currentUser?.department);
+    return Boolean(d && userDept && d === userDept);
   };
 
-  // Filtragem estrita com base no Perfil (Opção 1 com Rastreamento Intersetorial e correção de filtros)
-  const filteredTasks = tasks.filter((t) => {
-    if (isDirector) {
-      if (filterAssignee !== 'todos') {
-        return normalize(t.assignee) === normalize(filterAssignee);
+  // Isolamento Estrito de Visão por Usuário no Kanban (Requisito 3)
+  const filteredTasks = useMemo(() => {
+    return (tasks || []).filter((t) => {
+      if (isDirector) {
+        if (filterDepartment !== 'Todos') {
+          if (normalizeText(t.department) !== normalizeText(filterDepartment)) {
+            return false;
+          }
+        }
+        if (filterAssignee !== 'todos') {
+          const normFilter = normalizeText(filterAssignee);
+          const normAssignee = normalizeText(t.assignee);
+          if (normAssignee !== normFilter && !normAssignee.includes(normFilter.split(' ')[0])) {
+            return false;
+          }
+        }
+        return true;
+      } else {
+        // Usuário Comum: vê estritamente os cartões atribuídos ao seu user_id/nome ou ao seu departamento
+        if (collabTab === 'my_and_dept') {
+          return isAssignedToMe(t) || isMyDepartment(t);
+        }
+        if (collabTab === 'my_tasks') {
+          return isAssignedToMe(t);
+        }
+        if (collabTab === 'dept_tasks') {
+          return isMyDepartment(t);
+        }
+        if (collabTab === 'my_requests') {
+          return isRequestedByMe(t) && !isAssignedToMe(t);
+        }
+        return false;
       }
-      return true;
-    } else {
-      if (collabTab === 'my_tasks') {
-        return isAssignedToMe(t);
-      }
-      if (collabTab === 'dept_tasks') {
-        return isMyDepartment(t);
-      }
-      if (collabTab === 'my_requests') {
-        // Solicitações abertas por mim para outros
-        return isRequestedByMe(t) && !isAssignedToMe(t);
-      }
-      return false;
-    }
-  });
+    });
+  }, [tasks, isDirector, filterDepartment, filterAssignee, collabTab, currentUser]);
 
-  // Métricas para os botões do colaborador
   const myTasksCount = tasks.filter(isAssignedToMe).length;
   const deptTasksCount = tasks.filter(isMyDepartment).length;
+  const myAndDeptCount = tasks.filter((t) => isAssignedToMe(t) || isMyDepartment(t)).length;
   const myRequestsCount = tasks.filter((t) => isRequestedByMe(t) && !isAssignedToMe(t)).length;
 
+  const handleSelectAgendaBlock = (block) => {
+    if (!isDirector) return;
+    if (block.id === 'ALL') {
+      setFilterDepartment('Todos');
+      setFilterAssignee('todos');
+      return;
+    }
+    if (block.id === 'DEMANDA_PAULO' || block.id === 'LINDOMAR') {
+      setFilterDepartment('Pedagógico');
+      setFilterAssignee(block.assigneeMatch);
+      return;
+    }
+    setFilterDepartment(block.department || 'Todos');
+    setFilterAssignee('todos');
+  };
+
   const handleMove = (e, taskId, currentStatus, direction) => {
-    e.stopPropagation(); // Evita abrir o modal de detalhes ao clicar na seta
+    e.stopPropagation();
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
     const currentIndex = statusOrder.indexOf(currentStatus);
     const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
@@ -115,92 +187,133 @@ export default function KanbanBoard({
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#f0f2f5] dark:bg-chatBg p-6 overflow-hidden transition-colors">
-      {/* Header do Kanban com Badge de Nível de Acesso */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-5 shrink-0">
+    <div className="flex-1 flex flex-col h-full bg-[#f0f2f5] dark:bg-chatBg p-4 sm:p-6 overflow-y-auto transition-colors">
+      {/* Header do Kanban com Nível de Acesso e Botão de Importar Ata do Meet */}
+      <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4 shrink-0">
         <div>
-          <div className="flex items-center gap-2 mb-1">
-            <h2 className="text-2xl font-bold text-chatTextTitle flex items-center gap-2">
-              📋 Quadro de Demandas
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            <h2 className="text-xl sm:text-2xl font-bold text-chatTextTitle flex items-center gap-2">
+              📋 Quadro de Demandas & Automação Executiva
             </h2>
             {isDirector ? (
               <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
-                <Shield size={12} /> Visão Geral da Diretoria (Todos os Setores)
+                <Shield size={12} /> Visão Global Admin (Todos os Setores)
               </span>
             ) : (
               <span className="text-[11px] font-semibold bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-purple-200 dark:border-purple-500/30">
-                <Lock size={12} /> Acesso Restrito: {currentUser.name} ({currentUser.department})
+                <Lock size={12} /> Visão Isolada: {currentUser?.name} ({currentUser?.department})
               </span>
             )}
           </div>
           <p className="text-xs text-chatTextMuted">
             {isDirector
-              ? 'Acompanhamento executivo de todos os processos e colaboradores da empresa'
-              : 'Demandas atribuídas a você, do seu setor e solicitações abertas por você (clique no card para ampliar)'}
+              ? 'Controle executivo integrado com Atas do Google Meet (gemini-notes@google.com) e Briefing da Agenda.'
+              : 'Exibindo cartões atribuídos a você ou ao seu setor. Você pode transferir tarefas entre departamentos ao clicar em qualquer card.'}
           </p>
         </div>
 
-        {/* Controles de Visibilidade e Filtro baseados no Perfil */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        {/* Controles de Filtro por Perfil + Botões de Ação */}
+        <div className="flex items-center gap-2 flex-wrap">
           {isDirector ? (
-            /* Filtros do Diretor: pode filtrar por quem quiser dinamicamente */
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-chatTextMuted font-medium">Filtrar por:</span>
-              <select
-                value={filterAssignee}
-                onChange={(e) => setFilterAssignee(e.target.value)}
-                className="bg-white dark:bg-chatCard text-chatTextTitle text-xs border border-slate-300 dark:border-chatBorder rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
-              >
-                <option value="todos">🌐 Toda a Equipe ({tasks.length})</option>
-                {collaborators.filter(c => !c.isBot).map((c) => (
-                  <option key={c.id} value={c.name}>
-                    {c.name} ({c.department})
-                  </option>
-                ))}
-              </select>
-            </div>
+            <>
+              {/* Filtro Rápido por Setor / Departamento */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-chatTextMuted font-medium">Setor:</span>
+                <select
+                  value={filterDepartment}
+                  onChange={(e) => setFilterDepartment(e.target.value)}
+                  className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
+                >
+                  {KANBAN_DEPARTMENTS.map((dept) => (
+                    <option key={dept} value={dept}>
+                      {dept === 'Todos' ? '🏢 Todos os Setores' : `🏢 ${dept}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Filtro Rápido por Colaborador */}
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
+                <select
+                  value={filterAssignee}
+                  onChange={(e) => setFilterAssignee(e.target.value)}
+                  className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
+                >
+                  <option value="todos">🌐 Toda a Equipe ({tasks.length})</option>
+                  {collaborators
+                    .filter((c) => !c.isBot)
+                    .map((c) => (
+                      <option key={c.id} value={c.name}>
+                        {c.name} ({c.department})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            </>
           ) : (
-            /* Abas de visualização restrita do Colaborador (Corrigidas no Item 3) */
-            <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs">
+            /* Abas de Isolamento do Usuário Comum */
+            <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs flex-wrap">
+              <button
+                onClick={() => setCollabTab('my_and_dept')}
+                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
+                  collabTab === 'my_and_dept'
+                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle'
+                }`}
+              >
+                <span>📋 Meu Painel ({myAndDeptCount})</span>
+              </button>
               <button
                 onClick={() => setCollabTab('my_tasks')}
-                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
                   collabTab === 'my_tasks'
                     ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
                     : 'text-chatTextMuted hover:text-chatTextTitle'
                 }`}
               >
-                <UserCheck size={14} />
-                <span>Minhas Demandas ({myTasksCount})</span>
+                <UserCheck size={13} />
+                <span>Minhas ({myTasksCount})</span>
               </button>
               <button
                 onClick={() => setCollabTab('dept_tasks')}
-                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
                   collabTab === 'dept_tasks'
                     ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
                     : 'text-chatTextMuted hover:text-chatTextTitle'
                 }`}
               >
-                <Building2 size={14} />
-                <span>Meu Setor ({deptTasksCount})</span>
+                <Building2 size={13} />
+                <span>Setor {currentUser?.department} ({deptTasksCount})</span>
               </button>
               <button
                 onClick={() => setCollabTab('my_requests')}
-                title="Demandas que você abriu para outros setores acompanharem"
-                className={`px-3 py-1.5 rounded-md font-semibold flex items-center gap-1.5 transition ${
+                title="Demandas que você transferiu ou abriu para outros setores"
+                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
                   collabTab === 'my_requests'
                     ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
                     : 'text-chatTextMuted hover:text-chatTextTitle'
                 }`}
               >
-                <span>📤 Minhas Solicitações ({myRequestsCount})</span>
+                <span>📤 Solicitações ({myRequestsCount})</span>
               </button>
             </div>
           )}
 
+          {/* Botão: Importar Ata do Meet (Gemini) */}
           <button
+            type="button"
+            onClick={() => setIsMeetModalOpen(true)}
+            className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+          >
+            <Sparkles size={15} className="text-yellow-300" />
+            <span>✨ Importar Ata do Meet (Gemini)</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onAddTask}
-            className="bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition"
+            className="bg-brand-600 hover:bg-brand-500 text-white font-semibold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer"
           >
             <Plus size={15} />
             <span>Nova Demanda</span>
@@ -208,8 +321,18 @@ export default function KanbanBoard({
         </div>
       </div>
 
-      {/* As 4 Colunas do Kanban */}
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 overflow-x-auto pb-4">
+      {/* REQUISITO 4: Briefing Executivo Automático Sincronizado com a Agenda (Topo do Kanban) */}
+      <ExecutiveBriefingBanner
+        tasks={isDirector ? tasks : filteredTasks}
+        activeDepartment={isDirector ? filterDepartment : currentUser?.department || 'Todos'}
+        activeCollaborator={filterAssignee}
+        onSelectAgendaBlock={handleSelectAgendaBlock}
+        vipClients={vipClients}
+        slas={slas}
+      />
+
+      {/* As 4 Colunas do Kanban (Pendente / A Fazer, Em Andamento, Aguardando Retorno, Concluído) */}
+      <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 min-h-[420px] pb-4">
         {COLUMNS.map((col) => {
           const colTasks = filteredTasks.filter((t) => t.status === col.id);
           return (
@@ -241,17 +364,26 @@ export default function KanbanBoard({
                       key={t.id}
                       onClick={() => onCardClick && onCardClick(t)}
                       className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder hover:border-brand-500 hover:shadow-md rounded-lg p-3.5 shadow-xs space-y-2.5 transition group cursor-pointer"
-                      title="Clique para ampliar e ver detalhes, anexos e comentários"
+                      title="Clique para ampliar, delegar ou transferir entre departamentos"
                     >
-                      {/* Topo do Card: Prioridade e Canal + Ícone de Ampliar */}
-                      <div className="flex items-center justify-between">
-                        {getPriorityBadge(t.priority, t.isVip)}
+                      {/* Topo do Card: Prioridade, Setor e Canal */}
+                      <div className="flex items-center justify-between gap-1 flex-wrap">
                         <div className="flex items-center gap-1.5">
-                          <span className={`text-[10px] font-semibold ${
-                            t.channel?.includes('Privado')
-                              ? 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30'
-                              : 'text-brand-600 dark:text-brand-500'
-                          }`}>
+                          {getPriorityBadge(t.priority, t.isVip)}
+                          {t.department && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-chatSidebar text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-chatBorder">
+                              🏢 {t.department}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-[10px] font-semibold ${
+                              t.channel?.includes('Privado')
+                                ? 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30'
+                                : 'text-brand-600 dark:text-brand-500'
+                            }`}
+                          >
                             {t.channel}
                           </span>
                           <Maximize2 size={12} className="text-chatTextMuted group-hover:text-brand-600 transition" />
@@ -270,7 +402,7 @@ export default function KanbanBoard({
                         )}
                       </div>
 
-                      {/* Anexos e Comentários (badges se houver) */}
+                      {/* Anexos e Comentários */}
                       {((t.attachments && t.attachments.length > 0) || (t.comments && t.comments.length > 0)) && (
                         <div className="flex items-center gap-2 text-[10px] text-chatTextMuted">
                           {t.attachments && t.attachments.length > 0 && (
@@ -290,7 +422,7 @@ export default function KanbanBoard({
                       {t.requester && (
                         <div className="bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-500/30 px-2 py-1 rounded text-[11px] text-brand-800 dark:text-brand-300 flex items-center justify-between">
                           <span className="truncate">
-                            📌 Solicitado por: <strong>{t.requester === currentUser.name ? 'Você' : t.requester}</strong>
+                            📌 Solicitado por: <strong>{t.requester === currentUser?.name ? 'Você' : t.requester}</strong>
                           </span>
                           {t.requesterDept && (
                             <span className="text-[10px] bg-brand-100 dark:bg-brand-900/60 px-1.5 py-0.2 rounded font-semibold text-brand-700 dark:text-brand-300">
@@ -304,7 +436,7 @@ export default function KanbanBoard({
                       {t.sourceMessage && (
                         <div className="bg-slate-50 dark:bg-[#111b21] border-l-2 border-purple-500 p-2 rounded text-[11px] text-chatTextBody italic">
                           <span className="text-[9px] text-purple-600 dark:text-purple-400 font-bold block not-italic">
-                            ORIGEM NO CHAT:
+                            ORIGEM:
                           </span>
                           "{t.sourceMessage}"
                         </div>
@@ -314,8 +446,8 @@ export default function KanbanBoard({
                       <div className="pt-2 border-t border-slate-100 dark:border-chatBorder flex items-center justify-between text-xs">
                         <div className="flex items-center gap-1.5" title={`Responsável: ${t.assignee}`}>
                           <span className="text-sm">{t.assigneeAvatar || '👤'}</span>
-                          <span className="text-[11px] font-medium text-chatTextBody truncate w-24">
-                            {t.assignee === currentUser.name ? '👉 Você' : t.assignee}
+                          <span className="text-[11px] font-medium text-chatTextBody truncate w-28">
+                            {t.assignee === currentUser?.name ? '👉 Você' : t.assignee}
                           </span>
                         </div>
 
@@ -325,7 +457,7 @@ export default function KanbanBoard({
                         </div>
                       </div>
 
-                      {/* Botões para mover coluna (com stopPropagation para não abrir modal) */}
+                      {/* Botões para mover coluna */}
                       <div className="pt-1 flex justify-between items-center text-xs text-chatTextMuted">
                         <button
                           onClick={(e) => handleMove(e, t.id, t.status, 'prev')}
@@ -336,7 +468,7 @@ export default function KanbanBoard({
                           <ArrowLeft size={14} />
                         </button>
                         <span className="text-[10px] text-chatTextMuted group-hover:text-brand-600 font-medium transition">
-                          Ampliar Detalhes
+                          Ampliar / Transferir Setor
                         </span>
                         <button
                           onClick={(e) => handleMove(e, t.id, t.status, 'next')}
@@ -355,6 +487,15 @@ export default function KanbanBoard({
           );
         })}
       </div>
+
+      {/* Modal de Importação de Atas do Google Meet via Gemini */}
+      <MeetNotesImportModal
+        isOpen={isMeetModalOpen}
+        onClose={() => setIsMeetModalOpen(false)}
+        collaborators={collaborators}
+        onCreateTasksBatch={onCreateTasksBatch}
+        onOpenAIMemory={onOpenAIMemory}
+      />
     </div>
   );
 }

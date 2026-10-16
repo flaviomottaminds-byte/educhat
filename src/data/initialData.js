@@ -10,9 +10,10 @@ export const INITIAL_COLLABORATORS = [
   { id: 'u9', name: 'Gislaine Santos', email: 'giih.5569@gmail.com', role: 'Secretaria & Diplomas', roleType: 'colaborador', avatar: '👩‍💼', online: false, lastSeen: null, department: 'Secretaria' },
   { id: 'u10', name: 'Ana Livia', email: 'analiviamarquesribeiro@gmail.com', role: 'Marketing & Comunicação', roleType: 'colaborador', avatar: '👩‍🎨', online: false, lastSeen: null, department: 'Marketing' },
   { id: 'u11', name: 'Paulo do Vale', email: 'paulos.dovale@gmail.com', role: 'Coordenação Pedagógica', roleType: 'colaborador', avatar: '👨‍🏫', online: false, lastSeen: null, department: 'Pedagógico' },
-  { id: 'u12', name: 'Luiz Augusto', email: 'luizdomingues08844@gmail.com', role: 'Expansão & Parcerias de Polos', roleType: 'colaborador', avatar: '👨‍💼', online: false, lastSeen: null, department: 'Expansão' },
+  { id: 'u12', name: 'Luiz Augusto', email: 'luizdomingues08844@gmail.com', role: 'Terapia Educacional & Expansão', roleType: 'colaborador', avatar: '👨‍💼', online: false, lastSeen: null, department: 'Expansão' },
   { id: 'u13', name: 'Wagner', email: 'wagner@educhat.com', role: 'Comercial & Vendas', roleType: 'colaborador', avatar: '👨‍💼', online: false, lastSeen: null, department: 'Comercial' },
   { id: 'u14', name: 'Yasmin', email: 'yasmin@educhat.com', role: 'Marketing & Comunicação', roleType: 'colaborador', avatar: '👩‍🎨', online: false, lastSeen: null, department: 'Marketing' },
+  { id: 'u15', name: 'Lindomar', email: 'lindomar@educhat.com', role: 'Coordenação Pedagógica & Projetos', roleType: 'colaborador', avatar: '👨‍🏫', online: false, lastSeen: null, department: 'Pedagógico' },
   { id: 'u_ia_copilot', name: 'Assistente IA (MEC & Processos)', email: 'ia@educhat.internal', role: 'Inteligência Artificial Institucional', roleType: 'bot', avatar: '🤖', online: true, lastSeen: new Date().toISOString(), department: 'Inteligência Artificial', isBot: true },
 ];
 
@@ -23,7 +24,7 @@ export const INITIAL_CHANNELS = [
   { id: 'c-secretaria', name: 'secretaria', desc: 'Processos, documentação, históricos e certidões', unread: 0, department: 'Secretaria' },
   { id: 'c-marketing', name: 'marketing', desc: 'Campanhas, captação de leads, mídias e comunicação', unread: 0, department: 'Marketing' },
   { id: 'c-pedagogico', name: 'pedagogico', desc: 'Conteúdos, matrizes curriculares e professores', unread: 0, department: 'Pedagógico' },
-  { id: 'c-expansao', name: 'expansao', desc: 'Novos polos, parceiros e crescimento institucional', unread: 0, department: 'Expansão' },
+  { id: 'c-expansao', name: 'expansao', desc: 'Terapia Educacional, novos polos, parceiros e expansão', unread: 0, department: 'Expansão' },
   { id: 'c-diretoria', name: 'diretoria', desc: 'Alinhamentos executivos e decisões estratégicas', unread: 0, department: 'Diretoria' },
 ];
 

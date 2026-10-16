@@ -44,7 +44,12 @@ import {
   getAvailableURADepartments,
   generateDynamicURAMenu
 } from './lib/whatsappRouting';
-import { generateGeminiChatReply } from './lib/gemini';
+import {
+  generateGeminiChatReply,
+  extractTasksFromMeetNotes,
+  syncGeminiApiKeyFromCloud
+} from './lib/gemini';
+import ExecutiveBriefingBanner from './components/ExecutiveBriefingBanner';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
@@ -950,6 +955,8 @@ export default function App() {
             let cleanDesc = t.description || '';
             let comments = [];
             let attachments = [];
+            let assigneeId = null;
+            let assigneeEmail = '';
             if (cleanDesc.includes('<!-- TASK_META:')) {
               const match = cleanDesc.match(/<!-- TASK_META:([\s\S]+?) -->/);
               if (match) {
@@ -957,6 +964,8 @@ export default function App() {
                   const meta = JSON.parse(match[1]);
                   comments = meta.comments || [];
                   attachments = meta.attachments || [];
+                  assigneeId = meta.assigneeId || null;
+                  assigneeEmail = meta.assigneeEmail || '';
                   cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]+? -->/, '').trim();
                 } catch {}
               }
@@ -970,6 +979,8 @@ export default function App() {
               priority: t.priority,
               isVip: t.is_vip,
               assignee: t.assignee,
+              assigneeId,
+              assigneeEmail,
               assigneeAvatar: t.assignee_avatar || '👤',
               department: t.department || 'Geral',
               dueDate: t.due_date,
@@ -983,6 +994,8 @@ export default function App() {
           })
         );
       }
+
+      syncGeminiApiKeyFromCloud().catch(() => {});
 
       // 3. Colaboradores / Perfis
       try {
@@ -1834,25 +1847,25 @@ export default function App() {
           // =========================================================================
           // 2. FLUXO REGULAR: Resposta do Copiloto via Google Gemini (RAG, MEC e POPs)
           // =========================================================================
-          console.log('💬 [AI Chat] Acionando Google Gemini com RAG de documentos e processos...');
+          console.log('💬 [AI Chat] Acionando API Oficial do Google Gemini (gemini-2.5-flash) com RAG completo...');
           try {
             replyText = await generateGeminiChatReply({
               message: queryText,
               history: (messages[currentChatKey] || []).slice(-10),
               student: null,
+              vipClients,
               learnedDocuments,
-              pops: [],
-              slas: INITIAL_SLAS,
+              pops,
+              slas,
               customPrompt: customAIPrompt,
               department: currentUser?.department || 'Geral',
               userName: currentUser?.name || 'Consultor'
             });
           } catch (geminiErr) {
-            console.warn('Fallback para copiloto local:', geminiErr);
-            const aiResult = answerCopilotQuery(queryText, currentUser, vipClients, customAIPrompt, learnedDocuments);
-            replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
+            console.warn('Erro na chamada oficial do Gemini:', geminiErr);
+            replyText = `⚠️ **Conexão com Google Gemini API:** ${geminiErr.message}`;
           }
-          console.log('🤖 [AI Chat] Resposta gerada pela IA:', replyText.slice(0, 100) + '...');
+          console.log('🤖 [AI Chat] Resposta gerada pelo Gemini:', replyText.slice(0, 100) + '...');
         }
         console.groupEnd();
 
@@ -2323,9 +2336,10 @@ export default function App() {
               message: cleanMessageText,
               history: chatHistory,
               student: matchedStudent,
+              vipClients,
               learnedDocuments,
-              pops: [],
-              slas: INITIAL_SLAS,
+              pops,
+              slas,
               customPrompt: customAIPrompt,
               department: targetContact.department || 'Geral',
               userName: senderName || targetContact.name
@@ -2414,6 +2428,8 @@ export default function App() {
 
     handleUpdateTaskDetails(taskId, {
       assignee: newCollab.name,
+      assigneeId: newCollab.id,
+      assigneeEmail: newCollab.email || '',
       assigneeAvatar: newCollab.avatar || '👤',
       department: newCollab.department,
       comments: [
@@ -2474,7 +2490,7 @@ export default function App() {
       });
   };
 
-  // Atualizar dados completos da tarefa (comentários, anexos, etc.)
+  // Atualizar dados completos da tarefa (comentários, anexos, transferência de departamento, etc.)
   const handleUpdateTaskDetails = (taskId, partial) => {
     setTasks((prev) =>
       prev.map((t) => {
@@ -2482,7 +2498,9 @@ export default function App() {
         const updated = { ...t, ...partial };
         const metaPayload = JSON.stringify({
           comments: updated.comments || [],
-          attachments: updated.attachments || []
+          attachments: updated.attachments || [],
+          assigneeId: updated.assigneeId || null,
+          assigneeEmail: updated.assigneeEmail || ''
         });
         const serializedDesc = `${updated.desc || ''}\n<!-- TASK_META:${metaPayload} -->`;
         supabase
@@ -2493,6 +2511,8 @@ export default function App() {
             description: serializedDesc,
             priority: updated.priority,
             assignee: updated.assignee,
+            assignee_avatar: updated.assigneeAvatar || '👤',
+            department: updated.department || 'Geral',
             due_date: updated.dueDate
           })
           .eq('id', taskId)
@@ -2520,10 +2540,18 @@ export default function App() {
 
     setTasks((prev) => [completeTask, ...prev]);
 
+    const metaPayload = JSON.stringify({
+      comments: [],
+      attachments: [],
+      assigneeId: completeTask.assigneeId || null,
+      assigneeEmail: completeTask.assigneeEmail || ''
+    });
+    const serializedDesc = `${completeTask.desc || ''}\n<!-- TASK_META:${metaPayload} -->`;
+
     supabase.from('tasks').insert([{
       id: completeTask.id,
       title: completeTask.title,
-      description: completeTask.desc || '',
+      description: serializedDesc,
       status: completeTask.status || 'backlog',
       priority: completeTask.priority || 'media',
       is_vip: completeTask.isVip || false,
@@ -2536,6 +2564,62 @@ export default function App() {
     }]).then(({ error }) => {
       if (error) console.warn('Erro ao salvar nova tarefa no Supabase:', error);
     });
+  };
+
+  // Criação em Lote de Tarefas Extraídas de Atas do Google Meet (gemini-notes@google.com)
+  const handleCreateMeetTasksBatch = async (cardsToCreate = []) => {
+    if (!cardsToCreate || cardsToCreate.length === 0) return;
+    const taskRequester = currentUser?.name || 'Diretoria (Google Meet)';
+    const taskRequesterDept = currentUser?.department || 'Diretoria';
+
+    const completeCards = cardsToCreate.map((card) => {
+      const fullSourceMessage = `Solicitado por: ${taskRequester} (${taskRequesterDept}) • ${card.sourceMessage || 'Ata Google Meet'}`;
+      return {
+        ...card,
+        status: 'backlog',
+        requester: taskRequester,
+        requesterDept: taskRequesterDept,
+        sourceMessage: fullSourceMessage,
+        comments: [],
+        attachments: []
+      };
+    });
+
+    setTasks((prev) => [...completeCards, ...prev]);
+
+    const dbRows = completeCards.map((c) => {
+      const metaPayload = JSON.stringify({
+        comments: [],
+        attachments: [],
+        assigneeId: c.assigneeId || null,
+        assigneeEmail: c.assigneeEmail || ''
+      });
+      return {
+        id: c.id,
+        title: c.title,
+        description: `${c.desc || ''}\n<!-- TASK_META:${metaPayload} -->`,
+        status: 'backlog',
+        priority: c.priority || 'alta',
+        is_vip: c.isVip || false,
+        assignee: c.assignee,
+        assignee_avatar: c.assigneeAvatar || '👤',
+        department: c.department || 'Geral',
+        due_date: c.dueDate || 'Próxima Reunião',
+        channel: c.channel || '📅 Ata Google Meet',
+        source_message: c.sourceMessage
+      };
+    });
+
+    try {
+      const { error } = await supabase.from('tasks').insert(dbRows);
+      if (error) {
+        console.warn('Erro ao salvar lote de tarefas do Meet no Supabase:', error);
+      }
+    } catch (err) {
+      console.warn('Falha ao gravar tarefas do Meet no banco:', err);
+    }
+
+    playMessageSound();
   };
 
   const handleSaveChannel = (newChannel) => {
@@ -3237,30 +3321,43 @@ export default function App() {
 
       {/* Área Central Baseada na Visualização Ativa */}
       {activeView === 'chat' && (
-        <ChatArea
-          chatMeta={chatMeta}
-          messages={currentMessages}
-          onSendMessage={handleSendMessage}
-          onCreateTaskFromMessage={handleCreateTaskFromMessage}
-          onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onDeleteChat={handleDeleteChat}
-          onOpenTaskDetail={(taskId) => {
-            const found = tasks.find((t) => t.id === taskId);
-            if (found) setSelectedTaskDetail(found);
-          }}
-          onScheduleTask={handleScheduleTask}
-          onDelegateTask={handleDelegateTask}
-          onSummarizeChat={handleSummarizeChat}
-          onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
-          onToggleWhatsAppAI={handleToggleWhatsAppAI}
-          onUpdateChatAssignment={handleUpdateChatAssignment}
-          onRemoveCoAssignee={handleRemoveCoAssignee}
-          currentUser={currentUser}
-          realtimeStatus={realtimeStatus}
-          collaborators={resolvedCollaborators}
-          eduControlStudents={eduControlStudents}
-        />
+        <div className="flex-1 flex flex-col h-full overflow-hidden">
+          {activeChat?.type === 'channel' && (
+            <div className="px-3 pt-2 bg-[#f0f2f5] dark:bg-chatBg shrink-0">
+              <ExecutiveBriefingBanner
+                tasks={tasks}
+                activeDepartment={chatMeta?.data?.department || 'Todos'}
+                vipClients={vipClients}
+                slas={slas}
+                compact={true}
+              />
+            </div>
+          )}
+          <ChatArea
+            chatMeta={chatMeta}
+            messages={currentMessages}
+            onSendMessage={handleSendMessage}
+            onCreateTaskFromMessage={handleCreateTaskFromMessage}
+            onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
+            onDeleteMessage={handleDeleteMessage}
+            onDeleteChat={handleDeleteChat}
+            onOpenTaskDetail={(taskId) => {
+              const found = tasks.find((t) => t.id === taskId);
+              if (found) setSelectedTaskDetail(found);
+            }}
+            onScheduleTask={handleScheduleTask}
+            onDelegateTask={handleDelegateTask}
+            onSummarizeChat={handleSummarizeChat}
+            onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
+            onToggleWhatsAppAI={handleToggleWhatsAppAI}
+            onUpdateChatAssignment={handleUpdateChatAssignment}
+            onRemoveCoAssignee={handleRemoveCoAssignee}
+            currentUser={currentUser}
+            realtimeStatus={realtimeStatus}
+            collaborators={resolvedCollaborators}
+            eduControlStudents={eduControlStudents}
+          />
+        </div>
       )}
 
       {activeView === 'kanban' && (
@@ -3269,6 +3366,10 @@ export default function App() {
           currentUser={currentUser}
           collaborators={resolvedCollaborators}
           onUpdateTaskStatus={handleUpdateTaskStatus}
+          onCreateTasksBatch={handleCreateMeetTasksBatch}
+          vipClients={vipClients}
+          slas={slas}
+          onOpenAIMemory={() => setIsAIMemoryOpen(true)}
           onAddTask={() =>
             setAiModal({ isOpen: true, mode: 'extract_task', sourceMessage: null })
           }
@@ -3327,6 +3428,10 @@ export default function App() {
         onConfirmTaskCreation={handleConfirmTaskCreation}
         collaborators={resolvedCollaborators}
         vipClients={vipClients}
+        learnedDocuments={learnedDocuments}
+        pops={pops}
+        slas={slas}
+        recentMessages={currentMessages}
       />
 
       {/* Modal para Criar Canal ou Colaborador */}
