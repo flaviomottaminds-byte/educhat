@@ -215,9 +215,9 @@ export default function KanbanBoard({
       setFilterAssignee('todos');
       return;
     }
-    if (block.assigneeFilter) {
+    if (block.assigneeQuery || block.assigneeFilter) {
       setFilterDepartment(block.department || 'Todos');
-      setFilterAssignee(block.assigneeFilter);
+      setFilterAssignee(block.assigneeMatch || block.assigneeFilter || block.assigneeQuery);
       return;
     }
     setFilterDepartment(block.department || 'Todos');
