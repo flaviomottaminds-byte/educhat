@@ -566,11 +566,11 @@ export default function App() {
           let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
+            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
             if (match) {
               try {
                 parsedAttachment = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
+                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
               } catch {}
             }
           }
@@ -603,7 +603,12 @@ export default function App() {
           }
 
           if (parsedAttachment) {
-            if (parsedAttachment.type?.startsWith('audio/') || parsedAttachment.isAudio || parsedAttachment.name?.includes('audio')) {
+            if (
+              parsedAttachment.type?.startsWith('audio/') ||
+              parsedAttachment.isAudio ||
+              parsedAttachment.name?.toLowerCase().includes('audio') ||
+              /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
+            ) {
               isAudio = true;
               if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
               if (parsedAttachment.duration) duration = parsedAttachment.duration;
@@ -961,11 +966,11 @@ export default function App() {
           let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
+            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
             if (match) {
               try {
                 parsedAttachment = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
+                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
               } catch {}
             }
           }
@@ -998,7 +1003,12 @@ export default function App() {
           }
 
           if (parsedAttachment) {
-            if (parsedAttachment.type?.startsWith('audio/') || parsedAttachment.isAudio || parsedAttachment.name?.includes('audio')) {
+            if (
+              parsedAttachment.type?.startsWith('audio/') ||
+              parsedAttachment.isAudio ||
+              parsedAttachment.name?.toLowerCase().includes('audio') ||
+              /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
+            ) {
               isAudio = true;
               if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
               if (parsedAttachment.duration) duration = parsedAttachment.duration;
@@ -1323,7 +1333,9 @@ export default function App() {
       timestamp: timeStr,
       attachment: attachment || null,
       replyTo: options.replyTo || null,
-      isAudio: !!options.isAudio,
+      isAudio: !!options.isAudio || !!attachment?.isAudio || !!attachment?.type?.startsWith('audio/') || /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || ''),
+      audioUrl: attachment?.dataUrl || attachment?.url || null,
+      duration: options.duration || attachment?.duration || '0:14',
       status: initialStatus,
       actionExtracted: false,
     };
@@ -1841,18 +1853,38 @@ export default function App() {
 
     let finalAudioUrl = audioUrl || null;
     let finalDuration = duration || '0:14';
-    if (!finalAudioUrl && messageText) {
-      const match = messageText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+    let cleanMessageText = messageText || '';
+    let parsedAttachment = null;
+
+    if (cleanMessageText.includes('[ARQUIVO_ANEXO:')) {
+      const match = cleanMessageText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
+      if (match) {
+        try {
+          parsedAttachment = JSON.parse(match[1]);
+          if (!finalAudioUrl && (parsedAttachment.dataUrl || parsedAttachment.url)) {
+            finalAudioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+          }
+          if (parsedAttachment.duration) {
+            finalDuration = parsedAttachment.duration;
+          }
+          cleanMessageText = cleanMessageText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
+        } catch {}
+      }
+    }
+
+    if (!finalAudioUrl && cleanMessageText) {
+      const match = cleanMessageText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
       if (match) finalAudioUrl = match[1].trim();
     }
-    const isAudioMsg = !!isAudio || messageText.includes('🎙️') || !!finalAudioUrl;
+    const isAudioMsg = !!isAudio || cleanMessageText.includes('🎙️') || !!finalAudioUrl || !!parsedAttachment?.isAudio || !!parsedAttachment?.type?.startsWith('audio/');
 
     const incomingMsg = {
       id: 'wa_in_' + Date.now(),
       senderId: targetChatId,
       senderName: senderName || 'Lead WhatsApp',
-      text: messageText,
+      text: cleanMessageText,
       timestamp: timeStr,
+      attachment: parsedAttachment,
       isWhatsApp: true,
       fromStudent: true,
       isAudio: isAudioMsg,
