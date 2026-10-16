@@ -391,11 +391,244 @@ export function matchCollaboratorToTask(responsavelNome = '', departamentoRaw = 
   };
 }
 
+// Limites rígidos de segurança para nunca atingir a cota de 250.000 tokens/min do Free Tier
+const MAX_SYSTEM_INSTRUCTION_CHARS = 11000; // ~2.750 tokens
+const MAX_USER_MESSAGE_CHARS = 6500; // ~1.600 tokens
+const MAX_HISTORY_TURN_CHARS = 700;
+const MAX_HISTORY_TURNS = 6;
+
+export const FRIENDLY_RATE_LIMIT_MESSAGE =
+  '⏳ Muitas consultas simultâneas ou arquivo muito extenso. Por favor, aguarde alguns segundos e tente novamente.';
+
+const PT_STOPWORDS = new Set([
+  'de', 'da', 'do', 'das', 'dos', 'em', 'na', 'no', 'nas', 'nos', 'para', 'por', 'com', 'sem',
+  'que', 'qual', 'quais', 'como', 'onde', 'quando', 'quem', 'um', 'uma', 'uns', 'umas',
+  'os', 'as', 'ao', 'aos', 'se', 'ou', 'mas', 'mais', 'menos', 'muito', 'muita', 'sobre',
+  'este', 'esta', 'esse', 'essa', 'isso', 'isto', 'aquele', 'aquela', 'entre', 'ate',
+  'ser', 'estar', 'ter', 'haver', 'fazer', 'pode', 'podem', 'deve', 'devem', 'foi', 'sao',
+  'ola', 'bom', 'dia', 'boa', 'tarde', 'noite', 'por', 'favor', 'preciso', 'quero', 'saber',
+  'me', 'te', 'ele', 'ela', 'nos', 'eles', 'elas', 'meu', 'minha', 'seu', 'sua'
+]);
+
 /**
- * Constrói o System Instruction completo injetando 100% da Memória Organizacional:
- * Clientes VIP, Prazos MEC/SLAs, POPs, Documentos Aprendidos e Diretrizes da Diretoria.
+ * Detecta se um erro retornado pela API ou rede refere-se a Rate Limit / Cota Excedida (HTTP 429)
+ */
+export function isRateLimitError(status = 0, errorText = '') {
+  if (status === 429) return true;
+  const norm = String(errorText || '').toLowerCase();
+  return (
+    norm.includes('429') ||
+    norm.includes('resource_exhausted') ||
+    norm.includes('free_tier_input_token_count') ||
+    norm.includes('quota exceeded') ||
+    norm.includes('rate limit') ||
+    norm.includes('ratelimitexceeded') ||
+    norm.includes('too many requests') ||
+    norm.includes('muitas consultas simultâneas')
+  );
+}
+
+/**
+ * Decodifica com segurança um dataUrl base64 de texto/CSV caso seja um arquivo textual legível.
+ * Caso seja binário (PDF, imagem, áudio, zip), descarta o base64 bruto para nunca estourar tokens.
+ */
+function extractReadableTextFromAttachmentJson(rawJsonStr = '') {
+  try {
+    const parsed = JSON.parse(rawJsonStr);
+    const name = parsed?.name || 'arquivo';
+    const dataUrl = String(parsed?.dataUrl || parsed?.url || '');
+    const isTextual =
+      /\.(csv|txt|tsv|json|md)$/i.test(name) ||
+      dataUrl.startsWith('data:text/') ||
+      dataUrl.startsWith('data:application/json');
+
+    if (isTextual && dataUrl.includes(';base64,')) {
+      const b64 = dataUrl.split(';base64,')[1] || '';
+      // Decodifica apenas os primeiros ~48KB de base64 para evitar travamento de memória
+      const safeB64 = b64.slice(0, 64000);
+      const binaryStr = atob(safeB64);
+      const bytes = Uint8Array.from(binaryStr, (c) => c.charCodeAt(0));
+      const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+      return `[Arquivo Anexado: ${name}]\n${decoded}`;
+    }
+    return `[Arquivo Anexado: ${name} (${parsed?.size || 'documento'})]`;
+  } catch {
+    return '[Arquivo Anexado]';
+  }
+}
+
+/**
+ * Higieniza qualquer string antes de enviá-la ao Gemini:
+ * - Remove payloads brutos [ARQUIVO_ANEXO:{...}] e strings base64 gigantescas
+ * - Remove metadados HTML <!-- ... -->
+ */
+export function sanitizeTextForPrompt(rawText = '') {
+  if (!rawText || typeof rawText !== 'string') return '';
+  let text = rawText;
+
+  // 1. Intercepta tags [ARQUIVO_ANEXO:{...}] para jamais enviar PDFs/imagens em base64 para o LLM
+  if (text.includes('[ARQUIVO_ANEXO:')) {
+    text = text.replace(/\[ARQUIVO_ANEXO:(\{[\s\S]*?\})\]/g, (_, jsonPart) =>
+      extractReadableTextFromAttachmentJson(jsonPart)
+    );
+    // Caso haja alguma tag truncada sem fechamento
+    text = text.replace(/\[ARQUIVO_ANEXO:[\s\S]*$/g, '[Arquivo Anexado]');
+  }
+
+  // 2. Remove qualquer data URL em base64 remanescente no texto
+  text = text.replace(/data:[a-zA-Z0-9/+.-]+;base64,[A-Za-z0-9+/=]+/g, '[conteúdo-binário-omitido]');
+
+  // 3. Remove comentários de controle do sistema (STATUS, REPLY_TO, COLLABORATOR_RECORD, etc.)
+  text = text.replace(/<!--[\s\S]*?-->/g, '');
+
+  return text.trim();
+}
+
+/**
+ * Extrai palavras-chave relevantes da pergunta atual do usuário para o filtro RAG
+ */
+export function extractQueryKeywords(query = '', extraContext = '') {
+  const combined = normalizeText(`${query} ${extraContext}`);
+  const tokens = combined
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !PT_STOPWORDS.has(w));
+  return Array.from(new Set(tokens)).slice(0, 25);
+}
+
+/**
+ * Calcula a relevância de um trecho/linha/objeto em relação às palavras-chave da pergunta
+ */
+function scoreTextRelevance(text = '', keywords = [], department = '') {
+  if (!text) return 0;
+  const norm = normalizeText(text);
+  let score = 0;
+
+  for (const kw of keywords) {
+    if (!kw) continue;
+    if (norm.includes(kw)) {
+      score += kw.length >= 5 ? 3 : 2;
+      // Bônus para match de palavra inteira
+      const wordRegex = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (wordRegex.test(norm)) score += 2;
+    }
+  }
+
+  if (department && department !== 'Geral') {
+    const normDept = normalizeText(department);
+    if (normDept && norm.includes(normDept)) {
+      score += 1.5;
+    }
+  }
+
+  return score;
+}
+
+/**
+ * Motor RAG Inteligente para Planilhas (CSV/TSV) e Documentos Extensos:
+ * Em vez de injetar o documento ou planilha inteira bruta, filtra e retorna apenas
+ * o cabeçalho, estatísticas e as linhas/trechos relevantes para a pergunta atual.
+ */
+export function extractRelevantContextFromText(
+  rawContent = '',
+  keywords = [],
+  { maxChars = 1400, maxRows = 18, department = '' } = {}
+) {
+  const clean = sanitizeTextForPrompt(rawContent);
+  if (!clean) return '';
+  if (clean.length <= maxChars) return clean;
+
+  const lines = clean
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // Detecta se é uma planilha / tabela estruturada (CSV, TSV ou separada por ; , |)
+  const sampleLines = lines.slice(0, Math.min(10, lines.length));
+  const tabularCount = sampleLines.filter(
+    (l) => (l.match(/[;,\t|]/g) || []).length >= 2
+  ).length;
+  const isSpreadsheet = lines.length >= 5 && tabularCount >= Math.min(3, sampleLines.length);
+
+  if (isSpreadsheet) {
+    const header = lines[0].slice(0, 350);
+    const dataRows = lines.slice(1);
+
+    const scoredRows = dataRows.map((row, idx) => ({
+      row,
+      idx: idx + 2,
+      score: scoreTextRelevance(row, keywords, department)
+    }));
+
+    const matchedRows = scoredRows
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxRows);
+
+    // Se nenhuma linha específica deu match com a pergunta, envia apenas uma amostra enxuta das primeiras linhas
+    const selectedRows =
+      matchedRows.length > 0
+        ? matchedRows.sort((a, b) => a.idx - b.idx)
+        : scoredRows.slice(0, Math.min(8, scoredRows.length));
+
+    let result = `[Resumo RAG da Planilha: ${dataRows.length} registros totais | Exibindo cabeçalho + ${selectedRows.length} linhas relevantes]\n`;
+    result += `Cabeçalho: ${header}\n`;
+
+    for (const item of selectedRows) {
+      const formattedLine = `Linha ${item.idx}: ${item.row.slice(0, 280)}\n`;
+      if (result.length + formattedLine.length > maxChars) break;
+      result += formattedLine;
+    }
+
+    return result.trim();
+  }
+
+  // Documento textual extenso: divide em blocos/parágrafos e seleciona apenas os mais relevantes para a pergunta
+  const chunks = [];
+  let currentChunk = '';
+  for (const line of lines) {
+    if ((currentChunk + '\n' + line).length > 380 && currentChunk) {
+      chunks.push(currentChunk.trim());
+      currentChunk = line;
+    } else {
+      currentChunk = currentChunk ? `${currentChunk}\n${line}` : line;
+    }
+  }
+  if (currentChunk.trim()) chunks.push(currentChunk.trim());
+
+  if (chunks.length <= 1) {
+    return clean.slice(0, maxChars) + (clean.length > maxChars ? '...' : '');
+  }
+
+  const introChunk = chunks[0].slice(0, 380);
+  const remainingChunks = chunks.slice(1).map((chunk, idx) => ({
+    chunk,
+    idx: idx + 1,
+    score: scoreTextRelevance(chunk, keywords, department)
+  }));
+
+  const topChunks = remainingChunks
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .sort((a, b) => a.idx - b.idx);
+
+  let output = `${introChunk}\n`;
+  for (const c of topChunks) {
+    const snippet = `[Trecho Relevante]: ${c.chunk}\n`;
+    if (output.length + snippet.length > maxChars) break;
+    output += snippet;
+  }
+
+  return output.trim().slice(0, maxChars);
+}
+
+/**
+ * Constrói o System Instruction com RAG Inteligente e Controle Estrito de Tokens:
+ * Em vez de despejar todas as planilhas/documentos/VIPs/POPs/SLAs brutos em cada mensagem,
+ * filtra e injeta apenas os registros e trechos relevantes para a pergunta atual (`query`).
  */
 export function buildSystemInstruction({
+  query = '',
   student = null,
   vipClients = [],
   learnedDocuments = [],
@@ -405,6 +638,15 @@ export function buildSystemInstruction({
   department = 'Geral',
   userName = 'Colaborador'
 }) {
+  const extraContext = [
+    department,
+    student?.name || '',
+    student?.course || '',
+    student?.polo || '',
+    userName
+  ].join(' ');
+  const keywords = extractQueryKeywords(query, extraContext);
+
   let prompt = `Você é o Assistente IA Oficial (MEC & Processos) do EduChat — Faculdade Olavo Bilac • Grupo EstudeMais.\n`;
   prompt += `Sua missão é atuar como Copiloto Executivo, Acadêmico e Operacional em tempo real, fornecendo respostas precisas, fundamentadas nas normas do MEC e nos POPs internos da instituição.\n\n`;
 
@@ -418,38 +660,112 @@ export function buildSystemInstruction({
     if (student.cpf) prompt += `• CPF: ${student.cpf}\n\n`;
   }
 
+  // 1. RAG Inteligente para Clientes VIP (evita enviar centenas de linhas de planilha VIP de uma vez)
   if (vipClients && vipClients.length > 0) {
-    prompt += `=== CLIENTES VIP & PARCEIROS ESTRATÉGICOS (PRIORIDADE MÁXIMA) ===\n`;
-    vipClients.forEach((vip) => {
-      prompt += `• ${vip.name} (${vip.role || 'Parceiro VIP'}) — Tel: ${vip.phone || '-'} | Prioridade: ${vip.priority || 'Crítica / SLA 15min'}\n`;
+    const scoredVips = vipClients.map((vip) => ({
+      vip,
+      score: scoreTextRelevance(
+        `${vip.name || ''} ${vip.plan || ''} ${vip.role || ''} ${vip.phone || ''}`,
+        keywords,
+        department
+      )
+    }));
+    const relevantVips = scoredVips
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12)
+      .map((item) => item.vip);
+
+    prompt += `=== CLIENTES VIP & PARCEIROS ESTRATÉGICOS (Total na base: ${vipClients.length} | Exibindo ${relevantVips.length} mais relevantes) ===\n`;
+    relevantVips.forEach((vip) => {
+      prompt += `• ${vip.name} (${vip.plan || vip.role || 'Parceiro VIP'}) — Prioridade: ${vip.priority || 'Crítica / SLA 15min'}\n`;
     });
     prompt += `\n`;
   }
 
+  // 2. RAG Inteligente para Prazos MEC & SLAs
   if (slas && slas.length > 0) {
-    prompt += `=== PRAZOS MEC & SLAS OPERACIONAIS POR SETOR ===\n`;
-    slas.forEach((s) => {
-      prompt += `• Setor ${s.department || s.setor}: SLA ${s.sla || s.prazo || '24h'} — Regra MEC/Interna: ${s.mecDeadline || s.regra || '-'}\n`;
+    const scoredSlas = slas.map((s) => ({
+      s,
+      score: scoreTextRelevance(
+        `${s.department || s.setor || ''} ${s.demand || s.regra || ''} ${s.slaTime || s.sla || s.prazo || ''}`,
+        keywords,
+        department
+      )
+    }));
+    const relevantSlas = scoredSlas
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12)
+      .map((item) => item.s);
+
+    prompt += `=== PRAZOS MEC & SLAS OPERACIONAIS (Total: ${slas.length} | Relevantes: ${relevantSlas.length}) ===\n`;
+    relevantSlas.forEach((s) => {
+      prompt += `• Setor ${s.department || s.setor || 'Geral'}: ${s.demand || s.mecDeadline || s.regra || 'Demanda'} -> Prazo/SLA: ${s.slaTime || s.sla || s.prazo || '48h'}\n`;
     });
     prompt += `\n`;
   }
 
+  // 3. RAG Inteligente para POPs
   if (pops && pops.length > 0) {
-    prompt += `=== PROCEDIMENTOS OPERACIONAIS PADRÃO (POPs DA INSTITUIÇÃO) ===\n`;
-    pops.forEach((p) => {
-      prompt += `• [${p.department || 'Geral'}] ${p.title || p.name}: ${p.content || p.desc || p.description || p.steps || ''}\n`;
+    const scoredPops = pops.map((p) => ({
+      p,
+      score: scoreTextRelevance(
+        `${p.department || ''} ${p.title || p.name || ''} ${p.steps || p.content || p.desc || ''}`,
+        keywords,
+        department
+      )
+    }));
+    const relevantPops = scoredPops
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map((item) => item.p);
+
+    prompt += `=== PROCEDIMENTOS OPERACIONAIS PADRÃO - POPs (Total: ${pops.length} | Relevantes: ${relevantPops.length}) ===\n`;
+    relevantPops.forEach((p) => {
+      const rawSteps = String(p.content || p.desc || p.description || p.steps || '');
+      const conciseSteps = extractRelevantContextFromText(rawSteps, keywords, {
+        maxChars: 380,
+        maxRows: 6,
+        department
+      });
+      prompt += `• [${p.department || 'Geral'}] ${p.title || p.name}: ${conciseSteps}\n`;
     });
     prompt += `\n`;
   }
 
+  // 4. RAG Inteligente para Documentos e Planilhas do Centro de Aprendizado
   if (learnedDocuments && learnedDocuments.length > 0) {
-    prompt += `=== DOCUMENTOS INTERNOS E MEMORANDOS CARREGADOS NO CENTRO DE APRENDIZADO ===\n`;
-    learnedDocuments.forEach((doc, idx) => {
-      prompt += `[DOCUMENTO ${idx + 1}: ${doc.title} | Setor: ${doc.department || 'Geral'}]\n`;
-      if (doc.summary) prompt += `Resumo: ${doc.summary}\n`;
-      if (doc.rules && doc.rules.length > 0) prompt += `Regras Extraídas: ${doc.rules.join(' | ')}\n`;
-      if (doc.deadlines && doc.deadlines.length > 0) prompt += `Prazos Extraídos: ${doc.deadlines.join(' | ')}\n`;
-      if (doc.textContent) prompt += `Conteúdo Integral/Trecho:\n${doc.textContent.slice(0, 2500)}\n`;
+    const scoredDocs = learnedDocuments.map((doc) => ({
+      doc,
+      score: scoreTextRelevance(
+        `${doc.title || ''} ${doc.department || ''} ${doc.summary || ''} ${(doc.keywords || []).join(' ')} ${(doc.textContent || '').slice(0, 4000)}`,
+        keywords,
+        department
+      )
+    }));
+
+    const relevantDocs = scoredDocs
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4)
+      .map((item) => item.doc);
+
+    prompt += `=== DOCUMENTOS E PLANILHAS DO CENTRO DE APRENDIZADO (Total: ${learnedDocuments.length} | Selecionados via RAG: ${relevantDocs.length}) ===\n`;
+    relevantDocs.forEach((doc, idx) => {
+      prompt += `[DOC ${idx + 1}: ${doc.title} | Setor: ${doc.department || 'Geral'}]\n`;
+      if (doc.summary) prompt += `Resumo: ${String(doc.summary).slice(0, 260)}\n`;
+      if (doc.rules && doc.rules.length > 0) {
+        prompt += `Regras: ${doc.rules.slice(0, 5).join(' | ').slice(0, 300)}\n`;
+      }
+      if (doc.deadlines && doc.deadlines.length > 0) {
+        prompt += `Prazos: ${doc.deadlines.slice(0, 5).join(' | ').slice(0, 250)}\n`;
+      }
+      if (doc.textContent) {
+        const relevantExcerpt = extractRelevantContextFromText(doc.textContent, keywords, {
+          maxChars: 1200,
+          maxRows: 15,
+          department
+        });
+        prompt += `Trechos Relevantes:\n${relevantExcerpt}\n`;
+      }
       prompt += `\n`;
     });
   }
@@ -460,27 +776,41 @@ export function buildSystemInstruction({
   prompt += `• Aproveitamento de Estudos e Convalidação: Exige análise de equivalência mínima de 75% de carga horária e conteúdo programático no Histórico Oficial e Ementas.\n\n`;
 
   if (customPrompt) {
-    prompt += `=== DIRETRIZES ESPECÍFICAS DA DIRETORIA ===\n${customPrompt}\n\n`;
+    const filteredCustomPrompt = extractRelevantContextFromText(customPrompt, keywords, {
+      maxChars: 1400,
+      maxRows: 15,
+      department
+    });
+    prompt += `=== DIRETRIZES ESPECÍFICAS DA DIRETORIA ===\n${filteredCustomPrompt}\n\n`;
   }
 
   prompt += `=== INSTRUÇÕES DE RESPOSTA ===\n`;
   prompt += `1. Responda sempre em português claro, objetivo, estruturado e profissional.\n`;
-  prompt += `2. Utilize prioritariamente os POPs, Prazos MEC, Clientes VIP e Documentos carregados acima no systemInstruction.\n`;
+  prompt += `2. Utilize prioritariamente os POPs, Prazos MEC, Clientes VIP e trechos de Documentos/Planilhas recuperados acima.\n`;
   prompt += `3. Quando pertinente, indique qual setor (${department}) ou responsável interno deve conduzir a etapa operacional.\n`;
+
+  if (prompt.length > MAX_SYSTEM_INSTRUCTION_CHARS) {
+    prompt = prompt.slice(0, MAX_SYSTEM_INSTRUCTION_CHARS) + '\n[...contexto truncado para otimização de tokens]';
+  }
 
   return prompt;
 }
 
 /**
  * Chamada direta e oficial ao endpoint REST do Google Gemini (gemini-2.5-flash)
+ * com fallback automático de modelo e tratamento elegante de Rate Limit (Erro 429).
  */
 async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generationConfig = {} }) {
-  const body = {
-    contents,
-    ...(systemInstruction
+  const safeSystemInstruction = systemInstruction
+    ? String(systemInstruction).slice(0, MAX_SYSTEM_INSTRUCTION_CHARS)
+    : '';
+
+  const buildRequestBody = (sysText, contentsList) => ({
+    contents: contentsList,
+    ...(sysText
       ? {
           systemInstruction: {
-            parts: [{ text: systemInstruction }]
+            parts: [{ text: sysText }]
           }
         }
       : {}),
@@ -489,24 +819,40 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
       maxOutputTokens: 2048,
       ...generationConfig
     }
-  };
+  });
+
+  const primaryBody = buildRequestBody(safeSystemInstruction, contents);
 
   let response = await fetch(
     `${GEMINI_ENDPOINT_BASE}/${PRIMARY_GEMINI_MODEL}:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify(primaryBody)
     }
   );
 
-  if (!response.ok && response.status === 404) {
+  // Se ocorrer 404 (modelo indisponível) ou 429/503 (limite de taxa momentâneo no modelo primário),
+  // aguarda brevemente e tenta no modelo fallback com payload ainda mais compacto.
+  if (!response.ok && (response.status === 404 || response.status === 429 || response.status === 503)) {
+    if (response.status === 429 || response.status === 503) {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    }
+
+    const compactSys = safeSystemInstruction.slice(0, 5000);
+    const compactContents = (contents || []).slice(-3).map((c) => ({
+      role: c.role,
+      parts: (c.parts || []).map((p) => ({
+        text: String(p.text || '').slice(0, 3500)
+      }))
+    }));
+
     response = await fetch(
       `${GEMINI_ENDPOINT_BASE}/${FALLBACK_GEMINI_MODEL}:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: JSON.stringify(buildRequestBody(compactSys, compactContents))
       }
     );
   }
@@ -519,22 +865,33 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
     } catch {
       errorDetail = await response.text();
     }
-    throw new Error(`Erro na API Gemini (${response.status}): ${errorDetail}`);
+
+    // Tratamento Elegante de Rate Limit (Erro 429 / Quota Exceeded / 250k tokens)
+    if (isRateLimitError(response.status, errorDetail)) {
+      const rateErr = new Error(FRIENDLY_RATE_LIMIT_MESSAGE);
+      rateErr.isRateLimit = true;
+      rateErr.status = 429;
+      throw rateErr;
+    }
+
+    throw new Error(`Não foi possível concluir a consulta no momento (${response.status}). Tente novamente em instantes.`);
   }
 
   const data = await response.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    throw new Error('A API do Gemini retornou uma resposta vazia.');
+    throw new Error('A IA processou a solicitação, mas retornou uma resposta vazia. Por favor, reformule sua pergunta.');
   }
   return text.trim();
 }
 
 /**
- * 1. Chat e Assistente IA (MEC & Processos) — 100% conectado à API oficial do Gemini (sem mocks de palavras-chave)
+ * 1. Chat e Assistente IA (MEC & Processos) — Conectado à API oficial do Gemini com RAG Inteligente
+ * e proteção total contra Erro 429 (free_tier_input_token_count).
  */
 export async function generateGeminiChatReply({
   message,
+  attachment = null,
   history = [],
   student = null,
   vipClients = [],
@@ -556,7 +913,25 @@ export async function generateGeminiChatReply({
     );
   }
 
+  // Higieniza a mensagem atual e extrai apenas trechos/linhas relevantes caso o usuário tenha colado uma planilha/documento extenso
+  let rawUserMessage = sanitizeTextForPrompt(message || '');
+  if (attachment) {
+    const attachmentContext = extractReadableTextFromAttachmentJson(JSON.stringify(attachment));
+    rawUserMessage = `${rawUserMessage}\n${attachmentContext}`.trim();
+  }
+
+  const keywords = extractQueryKeywords(rawUserMessage, `${department} ${student?.name || ''}`);
+  const optimizedUserMessage =
+    rawUserMessage.length > MAX_USER_MESSAGE_CHARS
+      ? extractRelevantContextFromText(rawUserMessage, keywords, {
+          maxChars: MAX_USER_MESSAGE_CHARS,
+          maxRows: 35,
+          department
+        })
+      : rawUserMessage || 'Analise o contexto e oriente o próximo passo.';
+
   const systemInstruction = buildSystemInstruction({
+    query: optimizedUserMessage,
     student,
     vipClients,
     learnedDocuments,
@@ -568,34 +943,67 @@ export async function generateGeminiChatReply({
   });
 
   const contents = [];
-  const recentHistory = (history || []).slice(-10);
+  const recentHistory = (history || [])
+    .filter((h) => {
+      if (!h?.text) return false;
+      // Não reenvia mensagens de erro técnico anteriores para o contexto
+      if (
+        h.text.includes('Erro na API Gemini') ||
+        h.text.includes('free_tier_input_token_count') ||
+        h.text.includes('Muitas consultas simultâneas')
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .slice(-MAX_HISTORY_TURNS);
+
   recentHistory.forEach((h) => {
-    if (!h.text) return;
+    const cleanHistText = sanitizeTextForPrompt(String(h.text || ''));
+    if (!cleanHistText) return;
+
     const isModel =
       h.senderId === 'u_ia_copilot' ||
       h.sender === 'ai' ||
       h.isAiAutoReply ||
       (student && !h.fromStudent && !h.senderId?.startsWith('wa-'));
+
+    const compactHistText =
+      cleanHistText.length > MAX_HISTORY_TURN_CHARS
+        ? extractRelevantContextFromText(cleanHistText, keywords, {
+            maxChars: MAX_HISTORY_TURN_CHARS,
+            maxRows: 8,
+            department
+          })
+        : cleanHistText;
+
     contents.push({
       role: isModel ? 'model' : 'user',
-      parts: [{ text: String(h.text).slice(0, 3000) }]
+      parts: [{ text: compactHistText }]
     });
   });
 
   contents.push({
     role: 'user',
-    parts: [{ text: message }]
+    parts: [{ text: optimizedUserMessage }]
   });
 
-  return await callGeminiEndpoint({
-    apiKey,
-    contents,
-    systemInstruction,
-    generationConfig: {
-      temperature: 0.5,
-      maxOutputTokens: 1500
+  try {
+    return await callGeminiEndpoint({
+      apiKey,
+      contents,
+      systemInstruction,
+      generationConfig: {
+        temperature: 0.5,
+        maxOutputTokens: 1500
+      }
+    });
+  } catch (err) {
+    if (err?.isRateLimit || isRateLimitError(err?.status, err?.message)) {
+      return FRIENDLY_RATE_LIMIT_MESSAGE;
     }
-  });
+    throw err;
+  }
 }
 
 /**
@@ -623,6 +1031,7 @@ export async function extractTasksFromMeetNotes({
   const defaultAdmin = getDefaultAdminCollaborator(liveCollaborators);
 
   const teamRoster = liveCollaborators
+    .slice(0, 60)
     .map(
       (c) =>
         `- Nome: "${c.name}" | E-mail: "${c.email || '-'}" | Setor/Departamento: "${c.department || 'Geral'}" | Cargo: "${c.role || 'Colaborador'}"`
@@ -652,7 +1061,25 @@ Retorne ESTRITAMENTE um array JSON válido (sem blocos markdown ao redor), onde 
   }
 ]`;
 
-  const userPrompt = `TÍTULO / ASSUNTO DA REUNIÃO: ${meetingTitle || 'Anotações da Reunião (Google Meet)'}\n\nCONTEÚDO DA ATA DO GOOGLE MEET:\n${notesText}`;
+  // Otimização RAG para atas ou transcrições muito extensas (evita estourar limite de tokens)
+  const cleanNotes = sanitizeTextForPrompt(notesText || '');
+  let optimizedNotes = cleanNotes;
+  if (cleanNotes.length > 12000) {
+    const actionMatch = cleanNotes.search(/pr[oó]ximas etapas|action items|encaminhamentos|tarefas|pend[eê]ncias/i);
+    if (actionMatch !== -1) {
+      const headerContext = cleanNotes.slice(0, 3000);
+      const actionSection = cleanNotes.slice(Math.max(0, actionMatch - 500), actionMatch + 8500);
+      optimizedNotes = `${headerContext}\n\n[...Trecho Intermediário Omitido...]\n\n${actionSection}`;
+    } else {
+      optimizedNotes = extractRelevantContextFromText(
+        cleanNotes,
+        ['etapa', 'tarefa', 'prazo', 'responsavel', 'enviar', 'criar', 'revisar', 'validar', 'cobrar'],
+        { maxChars: 11000, maxRows: 80 }
+      );
+    }
+  }
+
+  const userPrompt = `TÍTULO / ASSUNTO DA REUNIÃO: ${meetingTitle || 'Anotações da Reunião (Google Meet)'}\n\nCONTEÚDO DA ATA DO GOOGLE MEET:\n${optimizedNotes}`;
 
   const rawResponse = await callGeminiEndpoint({
     apiKey,
@@ -721,9 +1148,9 @@ export async function generateExecutiveMeetingBriefing({
     throw new Error('Configure a Chave da API Gemini no "Cérebro da IA" para gerar o Briefing Executivo.');
   }
 
-  const doneTasks = tasks.filter((t) => t.status === 'done');
-  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress' || t.status === 'waiting');
-  const pendingTasks = tasks.filter((t) => t.status === 'backlog');
+  const doneTasks = tasks.filter((t) => t.status === 'done').slice(0, 25);
+  const inProgressTasks = tasks.filter((t) => t.status === 'in_progress' || t.status === 'waiting').slice(0, 25);
+  const pendingTasks = tasks.filter((t) => t.status === 'backlog').slice(0, 25);
 
   const formatTaskList = (list) =>
     list.length === 0
@@ -731,7 +1158,7 @@ export async function generateExecutiveMeetingBriefing({
       : list
           .map(
             (t) =>
-              `- [${t.department || 'Geral'}] "${t.title}" | Responsável: ${t.assignee || 'Não atribuído'} | Prioridade: ${t.priority || 'media'} | Prazo: ${t.dueDate || '-'}${t.desc ? ` | Detalhe: ${t.desc.slice(0, 140)}` : ''}`
+              `- [${t.department || 'Geral'}] "${t.title}" | Responsável: ${t.assignee || 'Não atribuído'} | Prioridade: ${t.priority || 'media'} | Prazo: ${t.dueDate || '-'}${t.desc ? ` | Detalhe: ${sanitizeTextForPrompt(t.desc).slice(0, 120)}` : ''}`
           )
           .join('\n');
 
@@ -796,3 +1223,4 @@ ${formatTaskList(pendingTasks)}`;
     };
   }
 }
+

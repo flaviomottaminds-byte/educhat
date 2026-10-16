@@ -1845,13 +1845,14 @@ export default function App() {
           }
         } else {
           // =========================================================================
-          // 2. FLUXO REGULAR: Resposta do Copiloto via Google Gemini (RAG, MEC e POPs)
+          // 2. FLUXO REGULAR: Resposta do Copiloto via Google Gemini (RAG Inteligente, MEC e POPs)
           // =========================================================================
-          console.log('💬 [AI Chat] Acionando API Oficial do Google Gemini (gemini-2.5-flash) com RAG completo...');
+          console.log('💬 [AI Chat] Acionando API Oficial do Google Gemini (gemini-2.5-flash) com RAG otimizado...');
           try {
             replyText = await generateGeminiChatReply({
               message: queryText,
-              history: (messages[currentChatKey] || []).slice(-10),
+              attachment,
+              history: (messages[currentChatKey] || []).slice(-6),
               student: null,
               vipClients,
               learnedDocuments,
@@ -1862,8 +1863,10 @@ export default function App() {
               userName: currentUser?.name || 'Consultor'
             });
           } catch (geminiErr) {
-            console.warn('Erro na chamada oficial do Gemini:', geminiErr);
-            replyText = `⚠️ **Conexão com Google Gemini API:** ${geminiErr.message}`;
+            console.warn('Aviso na chamada do Gemini:', geminiErr);
+            replyText =
+              geminiErr?.message ||
+              '⏳ Muitas consultas simultâneas ou arquivo muito extenso. Por favor, aguarde alguns segundos e tente novamente.';
           }
           console.log('🤖 [AI Chat] Resposta gerada pelo Gemini:', replyText.slice(0, 100) + '...');
         }

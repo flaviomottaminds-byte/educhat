@@ -196,15 +196,32 @@ export default function AIMemoryModal({
             `Arquivo: ${fileName} • Anti-duplicidade CPF ativa no Supabase`
           );
         } else if (activeTab === 'docs') {
-          // Ingestão geral de memorandos e documentos
+          // Ingestão inteligente de memorandos, documentos e planilhas com indexação para RAG
           const keywords = [];
           if (/mec|portaria|resolu[çc][ãa]o/i.test(content)) keywords.push('MEC');
           if (/asaas|fatura|split|cobran[çc]a/i.test(content)) keywords.push('Asaas/Financeiro');
           if (/prazo|horas|dias|sla|urgente/i.test(content)) keywords.push('Prazos');
           if (/diploma|certificado|colao|p[oó]s/i.test(content)) keywords.push('Certificação');
+          if (/\.(csv|tsv)$/i.test(fileName) || (content.match(/;/g) || []).length > 10) keywords.push('Planilha RAG');
 
-          let autoSummary = content.slice(0, 300).trim();
-          if (content.length > 300) autoSummary += '...';
+          const nonEmptyLines = content
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter(Boolean);
+
+          let autoSummary = '';
+          if (nonEmptyLines.length > 5 && /\.(csv|tsv)$/i.test(fileName)) {
+            autoSummary = `Planilha indexada (${nonEmptyLines.length - 1} registros). Colunas: ${nonEmptyLines[0].slice(0, 220)}`;
+          } else {
+            autoSummary = content.slice(0, 300).trim();
+            if (content.length > 300) autoSummary += '...';
+          }
+
+          // Mantém até 80KB indexados em memória para filtragem RAG instantânea por pergunta sem estourar localStorage ou tokens da API
+          const indexedTextContent =
+            content.length > 80000
+              ? nonEmptyLines.slice(0, 600).join('\n').slice(0, 80000)
+              : content;
 
           const newDoc = {
             id: 'doc_' + Date.now(),
@@ -212,7 +229,7 @@ export default function AIMemoryModal({
             size: (file.size / 1024).toFixed(1) + ' KB',
             uploadDate: new Date().toLocaleDateString('pt-BR'),
             summary: autoSummary,
-            textContent: content,
+            textContent: indexedTextContent,
             keywords: keywords.length > 0 ? keywords : ['Diretriz Interna'],
             suggestedPriority: content.toLowerCase().includes('urgente') ? 'alta' : 'media'
           };
@@ -222,8 +239,8 @@ export default function AIMemoryModal({
           }
 
           triggerFeedback(
-            `📄 Documento "${fileName}" assimilado com sucesso pela memória da IA!`,
-            `Tamanho: ${newDoc.size} • Tópicos: ${keywords.join(', ') || 'Diretriz'}`
+            `📄 Documento "${fileName}" indexado com RAG inteligente pela memória da IA!`,
+            `Tamanho: ${newDoc.size} • Linhas: ${nonEmptyLines.length} • Tópicos: ${keywords.join(', ') || 'Diretriz'}`
           );
         }
       } catch (err) {
