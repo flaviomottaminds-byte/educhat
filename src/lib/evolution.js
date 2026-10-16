@@ -108,12 +108,35 @@ export async function ensureEvolutionWebhook({ force = false } = {}) {
   }
 }
 
+/** Helper para formatar número brasileiro */
+function formatDisplayPhone(digits) {
+  if (!digits) return '';
+  const d = String(digits).replace(/\D/g, '');
+  if (d.length === 13 && d.startsWith('55')) {
+    return `+55 (${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
+  }
+  if (d.length === 12 && d.startsWith('55')) {
+    return `+55 (${d.slice(2, 4)}) ${d.slice(4, 8)}-${d.slice(8)}`;
+  }
+  if (d.length === 11) {
+    return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+  }
+  return d ? `+${d}` : '';
+}
+
 /** Normaliza para o destino internacional (DDI 55 com dígitos ou remoteJid completo como @lid / @s.whatsapp.net). */
 export function toWhatsAppTarget(raw = '') {
-  const str = String(raw || '').trim();
+  let str = String(raw || '').trim();
   if (!str) return '';
+  if (str.startsWith('wa-')) str = str.replace(/^wa-/, '');
+  if (str.endsWith('_lid')) str = str.replace(/_lid$/, '@lid');
+  if (str.endsWith('_s_whatsapp_net')) str = str.replace(/_s_whatsapp_net$/, '@s.whatsapp.net');
   if (str.includes('@')) return str;
   let d = str.replace(/\D/g, '');
+  // WhatsApp LIDs (Linked Identity) possuem entre 13 e 16 dígitos e NÃO começam com o DDI brasileiro 55
+  if (d.length >= 13 && !d.startsWith('55')) {
+    return `${d}@lid`;
+  }
   if (d.length < 10) return '';
   if (d.length === 10 || d.length === 11) d = `55${d}`;
   return d;
@@ -123,47 +146,63 @@ export function toWhatsAppNumber(raw = '') {
   return toWhatsAppTarget(raw);
 }
 
-/** Envia texto via /message/sendText. Retorna { ok, messageId, error }. */
-export async function sendWhatsAppText(target, text) {
+/** Envia texto via /message/sendText com suporte automático a fallback. Retorna { ok, messageId, error }. */
+export async function sendWhatsAppText(target, text, fallbackTarget = null) {
   const { instance } = getEvolutionConfig();
   const to = toWhatsAppTarget(target);
   if (!to) return { ok: false, error: 'Número/Destinatário inválido' };
-  try {
-    const payload = {
-      number: to,
-      text: text,
-      textMessage: {
-        text: text
-      },
-      options: {
-        delay: 1000,
-        presence: 'composing',
-        linkPreview: false
-      }
-    };
 
-    const res = await evoFetch(
-      `/message/sendText/${instance}`,
-      { method: 'POST', body: JSON.stringify(payload) },
-      15000
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return {
-        ok: false,
-        error: data?.response?.message?.[0] || data?.message || `HTTP ${res.status}`
+  const attemptSend = async (dest) => {
+    try {
+      const payload = {
+        number: dest,
+        text: text,
+        textMessage: {
+          text: text
+        },
+        options: {
+          delay: 500,
+          presence: 'composing',
+          linkPreview: false
+        }
       };
+
+      const res = await evoFetch(
+        `/message/sendText/${instance}`,
+        { method: 'POST', body: JSON.stringify(payload) },
+        15000
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errMsg = data?.response?.message?.[0] || data?.response?.message || data?.message || data?.error || `HTTP ${res.status}`;
+        return { ok: false, status: res.status, error: String(errMsg) };
+      }
+      const messageId =
+        data?.key?.id ||
+        data?.id ||
+        data?.messageId ||
+        data?.[0]?.key?.id ||
+        `wa_${Date.now()}`;
+      return { ok: true, messageId, data };
+    } catch (e) {
+      return { ok: false, error: e.message };
     }
-    const messageId =
-      data?.key?.id ||
-      data?.id ||
-      data?.messageId ||
-      data?.[0]?.key?.id ||
-      `wa_${Date.now()}`;
-    return { ok: true, messageId, data };
-  } catch (e) {
-    return { ok: false, error: e.message };
+  };
+
+  const primaryResult = await attemptSend(to);
+  if (primaryResult.ok) return primaryResult;
+
+  // Se a primeira tentativa falhou (ex: LID rejeitado ou número antigo), tenta o fallback
+  if (fallbackTarget) {
+    const altDest = toWhatsAppTarget(fallbackTarget);
+    if (altDest && altDest !== to) {
+      console.warn(`[Evolution API] Envio para ${to} falhou (${primaryResult.error}). Tentando fallback para ${altDest}...`);
+      const fallbackResult = await attemptSend(altDest);
+      if (fallbackResult.ok) return fallbackResult;
+    }
   }
+
+  return primaryResult;
 }
 
 /**
@@ -190,16 +229,20 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
 
     records.forEach((m) => {
       const rawJid = m.key?.remoteJid;
+      const rawJidAlt = m.key?.remoteJidAlt;
       if (!rawJid || rawJid === 'status@broadcast') return;
       const chatKey = 'wa-' + rawJid.replace(/[@.]/g, '_');
+
       const text =
         m.message?.conversation ||
         m.message?.extendedTextMessage?.text ||
         m.message?.imageMessage?.caption ||
         m.message?.documentMessage?.title ||
+        m.message?.documentMessage?.fileName ||
+        m.message?.videoMessage?.caption ||
         (m.message?.audioMessage ? '🎙️ [Áudio recebido]' : (m.message?.imageMessage ? '📷 [Imagem]' : (m.message?.documentMessage ? '📄 [Documento]' : '')));
 
-      if (!text && !m.message?.audioMessage && !m.message?.imageMessage) return;
+      if (!text && !m.message?.audioMessage && !m.message?.imageMessage && !m.message?.documentMessage) return;
 
       const fromMe = Boolean(m.key?.fromMe);
       const time = m.messageTimestamp
@@ -209,14 +252,26 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
       const contactName =
         m.pushName && m.pushName !== 'Você'
           ? m.pushName
-          : (rawJid.includes('@') ? rawJid.split('@')[0] : 'Contato WhatsApp');
+          : (rawJidAlt && rawJidAlt.includes('@') ? formatDisplayPhone(rawJidAlt.split('@')[0]) : (rawJid.includes('@s.whatsapp.net') ? formatDisplayPhone(rawJid.split('@')[0]) : 'Contato WhatsApp'));
+
+      // Número de telefone real para exibição e discagem direta
+      const phoneDigits = rawJidAlt
+        ? rawJidAlt.replace(/@.*$/, '').replace(/\D/g, '')
+        : (rawJid.includes('@s.whatsapp.net') ? rawJid.replace(/@.*$/, '').replace(/\D/g, '') : '');
+
+      const displayPhone = phoneDigits ? formatDisplayPhone(phoneDigits) : (rawJidAlt || rawJid).replace(/@.*$/, '');
+
+      // Destino prioritário para resposta: se rawJidAlt existir (ex: 556696354155@s.whatsapp.net), usa ele; senão usa rawJid
+      const preferredTarget = rawJidAlt || rawJid;
 
       if (!contactsMap.has(chatKey)) {
         contactsMap.set(chatKey, {
           id: chatKey,
           remoteJid: rawJid,
+          remoteJidAlt: rawJidAlt || null,
+          preferredTarget: preferredTarget,
           name: contactName,
-          phone: rawJid.replace(/@.*$/, ''),
+          phone: displayPhone,
           avatar: '👤',
           department: 'Atendimento',
           assignee: 'Flávio Motta',
@@ -238,6 +293,7 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         isWhatsApp: true,
         fromStudent: !fromMe,
         remoteJid: rawJid,
+        remoteJidAlt: rawJidAlt,
         status: fromMe ? 'delivered' : 'read'
       });
     });

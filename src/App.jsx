@@ -66,6 +66,11 @@ import {
   getEvolutionState,
   fetchEvolutionRecentMessages
 } from './lib/evolution';
+import {
+  publishInternalMessage,
+  publishPresencePing,
+  subscribeToInternalRelay
+} from './lib/internalBus';
 import { extractAttachmentFromText } from './lib/attachmentParser';
 
 const INITIAL_VIP_CLIENTS = [
@@ -262,7 +267,13 @@ export default function App() {
                   (c.phone && incoming.phone && c.phone.replace(/\D/g, '') === incoming.phone.replace(/\D/g, ''))
               );
               if (idx !== -1) {
-                next[idx] = { ...next[idx], ...incoming, remoteJid: incoming.remoteJid || next[idx].remoteJid };
+                next[idx] = {
+                  ...next[idx],
+                  ...incoming,
+                  remoteJid: incoming.remoteJid || next[idx].remoteJid,
+                  remoteJidAlt: incoming.remoteJidAlt || next[idx].remoteJidAlt,
+                  preferredTarget: incoming.preferredTarget || next[idx].preferredTarget || incoming.remoteJid || next[idx].remoteJid
+                };
               } else {
                 next.unshift(incoming);
               }
@@ -310,37 +321,6 @@ export default function App() {
     };
   }, []);
 
-  // Barramento de Comunicação Interna Instantânea Multi-Aba (BroadcastChannel):
-  // Garante que mensagens enviadas em qualquer canal ou DM apareçam em 0ms em todas as abas/janelas
-  useEffect(() => {
-    let bus = null;
-    try {
-      bus = new BroadcastChannel('educhat_internal_bus');
-      bus.onmessage = (event) => {
-        if (event.data?.type === 'INTERNAL_MESSAGE') {
-          const { chatKey, message } = event.data;
-          setMessages((prev) => {
-            const list = prev[chatKey] || [];
-            if (list.some((m) => m.id === message.id)) return prev;
-            return {
-              ...prev,
-              [chatKey]: [...list, message]
-            };
-          });
-
-          if (message.senderId !== currentUserRef.current?.id && !document.hidden) {
-            playMessageSound();
-          }
-        }
-      };
-    } catch {}
-
-    return () => {
-      if (bus) {
-        try { bus.close(); } catch {}
-      }
-    };
-  }, []);
   const [isUserSelectOpen, setIsUserSelectOpen] = useState(() => {
     try {
       return !localStorage.getItem('educhat_user_id');
@@ -1015,6 +995,66 @@ export default function App() {
       notifyIncomingMessage(notificationTitle, msg.text || 'Novo anexo/áudio recebido');
     }
   };
+
+  // =========================================================================
+  // RELAY DE COMUNICAÇÃO INTERNA E PRESENÇA (MULTI-DISPOSITIVO E MULTI-ABA)
+  // Conecta via SSE (EventSource) e BroadcastChannel para envio/recebimento instantâneo
+  // =========================================================================
+  useEffect(() => {
+    const unsubscribe = subscribeToInternalRelay({
+      onMessage: (chatKey, incomingMsg) => {
+        if (!incomingMsg || !incomingMsg.id) return;
+
+        setMessages((prev) => {
+          const list = prev[chatKey] || [];
+          if (list.some((m) => m.id === incomingMsg.id)) return prev;
+          return {
+            ...prev,
+            [chatKey]: [...list, incomingMsg]
+          };
+        });
+
+        const activeUser = currentUserRef.current;
+        if (incomingMsg.senderId !== activeUser?.id && incomingMsg.senderId !== 'system') {
+          playMessageSound();
+          const currentActiveKey = getChatKey(activeChatRef.current, activeUser?.id || 'u1');
+          if (chatKey !== currentActiveKey || document.hidden) {
+            handleIncomingNotification(incomingMsg, chatKey);
+          }
+        }
+      },
+      onPresence: (remoteUser) => {
+        if (!remoteUser || !remoteUser.id) return;
+        const nowIso = remoteUser.lastSeen || new Date().toISOString();
+
+        setHeartbeats((prev) => ({ ...prev, [remoteUser.id]: nowIso }));
+        setOnlineUserIds((prev) => new Set([...prev, remoteUser.id, remoteUser.email].filter(Boolean)));
+        setCollaborators((prev) =>
+          prev.map((c) =>
+            c.id === remoteUser.id || (c.email && remoteUser.email && c.email.toLowerCase() === remoteUser.email.toLowerCase())
+              ? { ...c, online: true, lastSeen: nowIso }
+              : c
+          )
+        );
+      }
+    });
+
+    // Anuncia a presença do usuário atual na rede a cada 20 segundos
+    const announcePresence = () => {
+      const u = currentUserRef.current;
+      if (u && u.id) {
+        publishPresencePing(u);
+      }
+    };
+
+    announcePresence();
+    const presenceTimer = setInterval(announcePresence, 20000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(presenceTimer);
+    };
+  }, []);
 
   // =========================================================================
   // CARREGAMENTO INICIAL LEVE E PERSISTENTE (SEM APAGAR CONVERSAS EXISTENTES)
@@ -2233,21 +2273,24 @@ export default function App() {
       } catch {}
     };
 
-    // Comunicação Interna Instantânea Multi-Aba: propaga mensagem para outras abas abertas
-    try {
-      const bus = new BroadcastChannel('educhat_internal_bus');
-      bus.postMessage({ type: 'INTERNAL_MESSAGE', chatKey: currentChatKey, message: newMsg });
-      bus.close();
-    } catch {}
-
-    // Conversas de WhatsApp: envia de verdade pela Evolution API (texto) e grava com o ID real da mensagem
+    // Conversas de WhatsApp: envia de verdade pela Evolution API (texto) com fallback de número e grava com o ID real da mensagem
     const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
-    const waTarget = waContact?.remoteJid || waContact?.phone || toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
+    const primaryTarget =
+      waContact?.preferredTarget ||
+      waContact?.remoteJidAlt ||
+      waContact?.remoteJid ||
+      waContact?.phone ||
+      toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
+    const fallbackTarget =
+      waContact?.remoteJid && waContact?.remoteJid !== primaryTarget
+        ? waContact.remoteJid
+        : (waContact?.remoteJidAlt && waContact?.remoteJidAlt !== primaryTarget ? waContact.remoteJidAlt : null);
+
     const isWhatsAppSend =
-      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!waTarget;
+      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!primaryTarget;
 
     if (isWhatsAppSend) {
-      sendWhatsAppText(waTarget, text).then((result) => {
+      sendWhatsAppText(primaryTarget, text, fallbackTarget).then((result) => {
         if (result.ok && result.messageId) {
           const realId = 'wa_' + result.messageId;
           setMessages((prev) => {
@@ -2271,6 +2314,8 @@ export default function App() {
         }
       });
     } else {
+      // Comunicação Interna (Canais e DMs): publica imediatamente para todos os colaboradores em tempo real
+      publishInternalMessage(currentChatKey, newMsg);
       saveOutgoingRow(newMsg.id);
     }
 
