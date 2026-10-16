@@ -49,7 +49,6 @@ import {
   extractTasksFromMeetNotes,
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
-import ExecutiveBriefingBanner from './components/ExecutiveBriefingBanner';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
@@ -159,14 +158,117 @@ export default function App() {
       return false;
     }
   });
-  const [channels, setChannels] = useState(INITIAL_CHANNELS);
-  const [whatsAppContacts, setWhatsAppContacts] = useState(INITIAL_WHATSAPP_CONTACTS);
+  const [channels, setChannels] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_channels');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const list = [...parsed];
+          INITIAL_CHANNELS.forEach((ic) => {
+            if (!list.some((c) => c.id === ic.id || c.name === ic.name)) {
+              list.push(ic);
+            }
+          });
+          return list;
+        }
+      }
+    } catch {}
+    return INITIAL_CHANNELS;
+  });
+
+  const [whatsAppContacts, setWhatsAppContacts] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_whatsapp_contacts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const list = [...parsed];
+          INITIAL_WHATSAPP_CONTACTS.forEach((iw) => {
+            if (!list.some((c) => c.id === iw.id)) {
+              list.push(iw);
+            }
+          });
+          return list;
+        }
+      }
+    } catch {}
+    return INITIAL_WHATSAPP_CONTACTS;
+  });
+
   const [whatsAppModal, setWhatsAppModal] = useState({ isOpen: false, tab: 'qrcode' });
   const [isInstagramImportOpen, setIsInstagramImportOpen] = useState(false);
-  const [messages, setMessages] = useState(() => ({
-    ...INITIAL_MESSAGES,
-    ...INITIAL_WHATSAPP_MESSAGES
-  }));
+
+  const [messages, setMessages] = useState(() => {
+    const baseMessages = {
+      ...INITIAL_MESSAGES,
+      ...INITIAL_WHATSAPP_MESSAGES
+    };
+    try {
+      const saved = localStorage.getItem('educhat_messages_cache');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          const merged = { ...baseMessages };
+          Object.keys(parsed).forEach((chatKey) => {
+            const savedList = Array.isArray(parsed[chatKey]) ? parsed[chatKey] : [];
+            const baseList = Array.isArray(merged[chatKey]) ? merged[chatKey] : [];
+            const seenIds = new Set(baseList.map((m) => m.id));
+            const combined = [...baseList];
+            savedList.forEach((m) => {
+              if (m && m.id && !seenIds.has(m.id)) {
+                seenIds.add(m.id);
+                combined.push(m);
+              }
+            });
+            merged[chatKey] = combined;
+          });
+          return merged;
+        }
+      }
+    } catch {}
+    return baseMessages;
+  });
+
+  // Persistência contínua e segura de canais, conversas WhatsApp e histórico de mensagens
+  useEffect(() => {
+    try {
+      if (Array.isArray(channels) && channels.length > 0) {
+        localStorage.setItem('educhat_channels', JSON.stringify(channels));
+      }
+    } catch {}
+  }, [channels]);
+
+  useEffect(() => {
+    try {
+      if (Array.isArray(whatsAppContacts) && whatsAppContacts.length > 0) {
+        localStorage.setItem('educhat_whatsapp_contacts', JSON.stringify(whatsAppContacts));
+      }
+    } catch {}
+  }, [whatsAppContacts]);
+
+  useEffect(() => {
+    try {
+      if (messages && typeof messages === 'object') {
+        const lightCache = {};
+        Object.keys(messages).forEach((k) => {
+          const list = messages[k];
+          if (Array.isArray(list) && list.length > 0) {
+            lightCache[k] = list.slice(-60).map((m) => ({
+              ...m,
+              audioUrl: m.audioUrl && m.audioUrl.startsWith('data:') && m.audioUrl.length > 2048 ? null : m.audioUrl,
+              attachment:
+                m.attachment && m.attachment.dataUrl && m.attachment.dataUrl.length > 2048
+                  ? { ...m.attachment, dataUrl: null, hasLazyPayload: true }
+                  : m.attachment
+            }));
+          }
+        });
+        localStorage.setItem('educhat_messages_cache', JSON.stringify(lightCache));
+      }
+    } catch {}
+  }, [messages]);
+
   const [tasks, setTasks] = useState(INITIAL_TASKS);
   const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'error'
   const [lastSyncTime, setLastSyncTime] = useState('');
@@ -614,12 +716,28 @@ export default function App() {
 
           setMessages((prevMessages) => {
             const existing = prevMessages[targetChatKey] || [];
-            const fetchedIds = new Set(parsedList.map((m) => m.id));
-            // Preserva mensagens otimistas/tempo real que ainda não vieram no select
-            const optimisticOnly = existing.filter((m) => !fetchedIds.has(m.id));
+            const parsedById = new Map(parsedList.map((m) => [m.id, m]));
+            const seenIds = new Set();
+            const mergedList = [];
+
+            // 1. Mantém todas as mensagens iniciais/existentes na ordem, atualizando com o payload completo do banco se existir
+            existing.forEach((msg) => {
+              if (!msg || !msg.id) return;
+              seenIds.add(msg.id);
+              mergedList.push(parsedById.get(msg.id) || msg);
+            });
+
+            // 2. Acrescenta quaisquer mensagens vindas do banco que ainda não estavam em memória
+            parsedList.forEach((msg) => {
+              if (msg && msg.id && !seenIds.has(msg.id)) {
+                seenIds.add(msg.id);
+                mergedList.push(msg);
+              }
+            });
+
             return {
               ...prevMessages,
-              [targetChatKey]: [...parsedList, ...optimisticOnly]
+              [targetChatKey]: mergedList
             };
           });
         }
@@ -694,7 +812,7 @@ export default function App() {
   };
 
   // =========================================================================
-  // CARREGAMENTO INICIAL LEVE (SEM BASE64 PESADOS NAS CONVERSAS INATIVAS - REGRA 4)
+  // CARREGAMENTO INICIAL LEVE E PERSISTENTE (SEM APAGAR CONVERSAS EXISTENTES)
   // =========================================================================
   const fetchSupabaseData = async () => {
     try {
@@ -702,33 +820,25 @@ export default function App() {
       const timeStr = getSaoPauloTime();
       setLastSyncTime(timeStr);
 
-      const isManager = hasFullPortfolioAccess(activeUser);
-
       const storedAssignments = {};
       try {
         const cached = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
         Object.assign(storedAssignments, cached);
       } catch {}
 
-      const { data: dbMessages } = await supabase
+      // 1A. Busca registros de sistema (alunos e colaboradores) separadamente para não consumir o limite de mensagens de chat
+      const { data: sysRows } = await supabase
         .from('messages')
-        .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
-        .order('created_at', { ascending: true })
+        .select('id, chat_id, text')
+        .in('chat_id', ['sys_educontrol_students', 'sys_collaborators'])
         .limit(500);
 
-      if (dbMessages && dbMessages.length > 0) {
+      if (sysRows && sysRows.length > 0) {
         const dbStudents = [];
         const dbCollaborators = [];
 
-        dbMessages.forEach((m) => {
-          if (m.chat_id?.startsWith('wa-') && m.text?.includes('<!-- ASSIGNMENT:')) {
-            const match = m.text.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
-            if (match) {
-              try {
-                storedAssignments[m.chat_id] = JSON.parse(match[1]);
-              } catch {}
-            }
-          } else if (m.chat_id === 'sys_educontrol_students' && m.text?.includes('<!-- STUDENT_RECORD:')) {
+        sysRows.forEach((m) => {
+          if (m.chat_id === 'sys_educontrol_students' && m.text?.includes('<!-- STUDENT_RECORD:')) {
             const match = m.text.match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
             if (match) {
               try {
@@ -792,25 +902,37 @@ export default function App() {
             return list;
           });
         }
+      }
+
+      // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
+      const { data: recentDbMessages } = await supabase
+        .from('messages')
+        .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+        .not('chat_id', 'like', 'sys_%')
+        .order('created_at', { ascending: false })
+        .limit(1000);
+
+      const dbMessages = Array.isArray(recentDbMessages) ? [...recentDbMessages].reverse() : [];
+
+      if (dbMessages.length > 0) {
+        dbMessages.forEach((m) => {
+          if (m.chat_id?.startsWith('wa-') && m.text?.includes('<!-- ASSIGNMENT:')) {
+            const match = m.text.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                storedAssignments[m.chat_id] = JSON.parse(match[1]);
+              } catch {}
+            }
+          }
+        });
 
         const currentActiveKey = getChatKey(activeChatRef.current, activeUser.id);
         const grouped = {};
         const unreadMap = {};
 
         dbMessages.forEach((m) => {
-          if (m.chat_id === 'sys_educontrol_students' || m.chat_id === 'sys_collaborators') return;
+          if (!m.chat_id || m.chat_id.startsWith('sys_')) return;
           const key = normalizeChatKey(m.chat_id, activeUser.id);
-
-          if (key.startsWith('dm-')) {
-            const parts = key.replace('dm-', '').split('-');
-            if (parts.length >= 2) {
-              const id1 = parts[0];
-              const id2 = parts[1];
-              if (activeUser.id !== id1 && activeUser.id !== id2 && !isManager) {
-                return;
-              }
-            }
-          }
 
           if (!grouped[key]) grouped[key] = [];
 
@@ -833,10 +955,33 @@ export default function App() {
           }
         });
 
-        setMessages((prevMessages) => ({
-          ...prevMessages,
-          ...grouped
-        }));
+        // Mescla de forma NÃO-DESTRUTIVA com as mensagens já existentes (nunca apaga o histórico anterior!)
+        setMessages((prevMessages) => {
+          const next = { ...prevMessages };
+          Object.keys(grouped).forEach((key) => {
+            const existingList = Array.isArray(next[key]) ? next[key] : [];
+            const incomingList = grouped[key] || [];
+            const incomingById = new Map(incomingList.map((m) => [m.id, m]));
+            const seenIds = new Set();
+            const mergedList = [];
+
+            existingList.forEach((msg) => {
+              if (!msg || !msg.id) return;
+              seenIds.add(msg.id);
+              mergedList.push(incomingById.get(msg.id) || msg);
+            });
+
+            incomingList.forEach((msg) => {
+              if (msg && msg.id && !seenIds.has(msg.id)) {
+                seenIds.add(msg.id);
+                mergedList.push(msg);
+              }
+            });
+
+            next[key] = mergedList;
+          });
+          return next;
+        });
 
         setUnreadCounts((prev) => {
           const merged = { ...prev, ...unreadMap };
@@ -2700,26 +2845,8 @@ export default function App() {
       setHeartbeats({ ...hb });
     } catch {}
 
-    const isNewUserManager = hasFullPortfolioAccess(newUser);
-
     if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
       setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
-    }
-
-    // Se o chat ativo for WhatsApp e o novo perfil for consultor sem acesso a este chat,
-    // redireciona para a primeira conversa atribuída a ele ou para o canal #geral
-    if (activeChat.type === 'whatsapp' && !isNewUserManager) {
-      const currentContact = whatsAppContacts.find((c) => c.id === activeChat.id);
-      if (!currentContact || !isChatAssignedToUser(currentContact, newUser)) {
-        const myContact =
-          whatsAppContacts.find((c) => isChatAssignedToUser(c, newUser)) ||
-          INITIAL_WHATSAPP_CONTACTS.find((c) => isChatAssignedToUser(c, newUser));
-        if (myContact) {
-          setActiveChat({ type: 'whatsapp', id: myContact.id });
-        } else {
-          setActiveChat({ type: 'channel', id: 'c-geral' });
-        }
-      }
     }
   };
 
@@ -3324,43 +3451,30 @@ export default function App() {
 
       {/* Área Central Baseada na Visualização Ativa */}
       {activeView === 'chat' && (
-        <div className="flex-1 flex flex-col h-full overflow-hidden">
-          {activeChat?.type === 'channel' && (
-            <div className="px-3 pt-2 bg-[#f0f2f5] dark:bg-chatBg shrink-0">
-              <ExecutiveBriefingBanner
-                tasks={tasks}
-                activeDepartment={chatMeta?.data?.department || 'Todos'}
-                vipClients={vipClients}
-                slas={slas}
-                compact={true}
-              />
-            </div>
-          )}
-          <ChatArea
-            chatMeta={chatMeta}
-            messages={currentMessages}
-            onSendMessage={handleSendMessage}
-            onCreateTaskFromMessage={handleCreateTaskFromMessage}
-            onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
-            onDeleteMessage={handleDeleteMessage}
-            onDeleteChat={handleDeleteChat}
-            onOpenTaskDetail={(taskId) => {
-              const found = tasks.find((t) => t.id === taskId);
-              if (found) setSelectedTaskDetail(found);
-            }}
-            onScheduleTask={handleScheduleTask}
-            onDelegateTask={handleDelegateTask}
-            onSummarizeChat={handleSummarizeChat}
-            onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
-            onToggleWhatsAppAI={handleToggleWhatsAppAI}
-            onUpdateChatAssignment={handleUpdateChatAssignment}
-            onRemoveCoAssignee={handleRemoveCoAssignee}
-            currentUser={currentUser}
-            realtimeStatus={realtimeStatus}
-            collaborators={resolvedCollaborators}
-            eduControlStudents={eduControlStudents}
-          />
-        </div>
+        <ChatArea
+          chatMeta={chatMeta}
+          messages={currentMessages}
+          onSendMessage={handleSendMessage}
+          onCreateTaskFromMessage={handleCreateTaskFromMessage}
+          onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
+          onDeleteMessage={handleDeleteMessage}
+          onDeleteChat={handleDeleteChat}
+          onOpenTaskDetail={(taskId) => {
+            const found = tasks.find((t) => t.id === taskId);
+            if (found) setSelectedTaskDetail(found);
+          }}
+          onScheduleTask={handleScheduleTask}
+          onDelegateTask={handleDelegateTask}
+          onSummarizeChat={handleSummarizeChat}
+          onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
+          onToggleWhatsAppAI={handleToggleWhatsAppAI}
+          onUpdateChatAssignment={handleUpdateChatAssignment}
+          onRemoveCoAssignee={handleRemoveCoAssignee}
+          currentUser={currentUser}
+          realtimeStatus={realtimeStatus}
+          collaborators={resolvedCollaborators}
+          eduControlStudents={eduControlStudents}
+        />
       )}
 
       {activeView === 'kanban' && (

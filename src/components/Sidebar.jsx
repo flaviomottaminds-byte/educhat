@@ -76,15 +76,8 @@ export default function Sidebar({
 
   const cleanSearch = (searchQuery || '').trim().toLowerCase();
 
-  // Canais visíveis por perfil (Diretor vê todos; Colaborador vê gerais e do seu setor)
-  const accessibleChannels = safeChannels.filter((c) => {
-    if (!c) return false;
-    if (isDirector) return true;
-    if (!c.department || c.department === 'Todos') return true;
-    const userDept = (currentUser?.department || '').trim().toLowerCase();
-    const channelDept = (c.department || '').trim().toLowerCase();
-    return userDept && channelDept === userDept;
-  });
+  // Garante que todos os canais ativos permaneçam sempre visíveis e acessíveis
+  const accessibleChannels = safeChannels.filter((c) => Boolean(c));
 
   // Filtragem pela busca estilo WhatsApp
   const filteredChannels = accessibleChannels.filter((c) => {
@@ -107,17 +100,10 @@ export default function Sidebar({
     return name.includes(cleanSearch) || role.includes(cleanSearch) || department.includes(cleanSearch);
   });
 
-  // Contatos do WhatsApp (Leads e Alunos)
-  // ISOLAMENTO DE CARTEIRA:
-  // - Gestores / Diretoria (Flávio Motta, Diretores): visibilidade completa de todas as conversas e filas
-  // - Consultores Comerciais / Colaboradores: visibilidade restrita estritamente aos chats atribuídos a eles
+  // Contatos do WhatsApp (Leads e Alunos): mantém todas as conversas ativas permanentemente visíveis e acessíveis
   const isManager = hasFullPortfolioAccess(currentUser);
 
-  const accessibleWhatsAppContacts = safeWhatsAppContacts.filter((c) => {
-    if (!c) return false;
-    if (isManager) return true;
-    return isChatAssignedToUser(c, currentUser);
-  });
+  const accessibleWhatsAppContacts = safeWhatsAppContacts.filter((c) => Boolean(c));
 
   const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;
