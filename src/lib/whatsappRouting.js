@@ -2,6 +2,65 @@
 // Embarca as 3 Portas de Entrada: Carteira Ativa, Aluno Veterano (Opção C) e Números Inéditos (URA Dinâmica)
 import { matchesDepartment, normalizeName } from './portfolioAccess';
 
+/**
+ * Converte data/timestamp para o fuso horário de Brasília (America/Sao_Paulo / UTC-3)
+ * e determina se está fora do expediente comercial (19:00 ou mais, antes das 08:00 ou fim de semana).
+ */
+export function getBrasiliaTime(dateOrTimestamp = new Date()) {
+  let date;
+  if (!dateOrTimestamp) {
+    date = new Date();
+  } else if (dateOrTimestamp instanceof Date) {
+    date = dateOrTimestamp;
+  } else if (typeof dateOrTimestamp === 'number') {
+    date = new Date(dateOrTimestamp > 1e11 ? dateOrTimestamp : dateOrTimestamp * 1000);
+  } else if (typeof dateOrTimestamp === 'string' && !isNaN(Number(dateOrTimestamp))) {
+    const n = Number(dateOrTimestamp);
+    date = new Date(n > 1e11 ? n : n * 1000);
+  } else {
+    date = new Date(dateOrTimestamp);
+    if (isNaN(date.getTime())) date = new Date();
+  }
+
+  try {
+    const formatter = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: 'America/Sao_Paulo',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+      weekday: 'short'
+    });
+    const parts = formatter.formatToParts(date);
+    let hour = 0;
+    let minute = 0;
+    let weekday = '';
+    for (const p of parts) {
+      if (p.type === 'hour') hour = parseInt(p.value, 10);
+      if (p.type === 'minute') minute = parseInt(p.value, 10);
+      if (p.type === 'weekday') weekday = p.value;
+    }
+    const isWeekend =
+      weekday.toLowerCase().startsWith('sáb') ||
+      weekday.toLowerCase().startsWith('dom') ||
+      weekday.toLowerCase().startsWith('sat') ||
+      weekday.toLowerCase().startsWith('sun');
+    // Regra 1: Fora de expediente = 19:00 ou mais (hour >= 19), antes das 08:00 (hour < 8) ou fim de semana
+    const isAfterHours = hour >= 19 || hour < 8 || isWeekend;
+    const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    return { hour, minute, weekday, isAfterHours, timeStr };
+  } catch (_e) {
+    const spMs = date.getTime() - (3 * 3600 * 1000);
+    const spDate = new Date(spMs);
+    const hour = spDate.getUTCHours();
+    const minute = spDate.getUTCMinutes();
+    const day = spDate.getUTCDay();
+    const isWeekend = day === 0 || day === 6;
+    const isAfterHours = hour >= 19 || hour < 8 || isWeekend;
+    const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    return { hour, minute, weekday: '', isAfterHours, timeStr };
+  }
+}
+
 export const INITIAL_WHATSAPP_CONTACTS = [
   {
     id: 'wa-91122697298017_lid',
@@ -281,10 +340,25 @@ export function routeIncomingWhatsAppWebhook({
   channels = []
 }) {
   const cleanPhone = (fromPhone || '').replace(/\D/g, '');
+  const timeInfo = getBrasiliaTime();
 
   // =========================================================================
-  // REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT)
+  // LOGS DE DIAGNÓSTICO (Item 3)
   // =========================================================================
+  if (!timeInfo.isAfterHours) {
+    console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
+  } else {
+    console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
+  }
+
+  // 1. Procura cards no Kanban atrelados a este telefone
+  const matchingTasks = tasks.filter((t) => {
+    const tPhone = (t.clientPhone || '').replace(/\D/g, '');
+    const inDesc = (t.desc || '').includes(cleanPhone) || (t.sourceMessage || '').includes(cleanPhone);
+    const inTitle = (t.title || '').toLowerCase().includes(senderName.toLowerCase().split(' ')[0]);
+    return (tPhone && tPhone === cleanPhone) || inDesc || inTitle;
+  });
+
   const existingContact = (contacts || []).find((c) => {
     if (!c) return false;
     const cPhone = (c.phone || '').replace(/\D/g, '');
@@ -292,6 +366,34 @@ export function routeIncomingWhatsAppWebhook({
     return (cPhone && cPhone === cleanPhone) || (cIdDigits && cIdDigits === cleanPhone);
   });
 
+  // REGRA 2: Verifica se a conversa já está vinculada e "Aberta" por um colaborador humano
+  const isHumanInProgress = matchingTasks.some(
+    (t) => t.status === 'in_progress' && t.assignee && t.assignee !== 'Assistente IA' && t.assignee !== 'Bot de Triagem URA'
+  );
+
+  // SE FOR FORA DE EXPEDIENTE (após as 19h, antes das 8h ou fim de semana):
+  // A IA assume a conversa independentemente do número que envia a mensagem de teste,
+  // a menos que a conversa já esteja vinculada e "Aberta" em andamento por um colaborador humano.
+  if (timeInfo.isAfterHours && !isHumanInProgress) {
+    return {
+      routeType: 'AFTER_HOURS_AI',
+      door: 4,
+      doorName: 'Porta Noturna: Autoatendimento IA Fora de Expediente',
+      isDirectToConsultant: false,
+      targetAssignee: 'Assistente IA (Noturno)',
+      targetDepartment: existingContact?.department || 'Atendimento IA',
+      taskId: null,
+      notificationText: `🌙 [Fora de Expediente] Mensagem de ${senderName} recebida pela IA.`,
+      badgeNotificationUserIds: [],
+      aiActive: true,
+      systemMessage: `Fora de Expediente: IA assumiu o atendimento de ${senderName} (${timeInfo.timeStr} BRT).`,
+      autoReply: null // Gerado pelo Gemini dinamicamente no App
+    };
+  }
+
+  // =========================================================================
+  // HORÁRIO COMERCIAL (OU HUMANO ATIVO): REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT)
+  // =========================================================================
   if (
     existingContact &&
     existingContact.assignee &&
@@ -317,14 +419,6 @@ export function routeIncomingWhatsAppWebhook({
       autoReply: null
     };
   }
-
-  // 1. Procura cards no Kanban atrelados a este telefone
-  const matchingTasks = tasks.filter((t) => {
-    const tPhone = (t.clientPhone || '').replace(/\D/g, '');
-    const inDesc = (t.desc || '').includes(cleanPhone) || (t.sourceMessage || '').includes(cleanPhone);
-    const inTitle = (t.title || '').toLowerCase().includes(senderName.toLowerCase().split(' ')[0]);
-    return (tPhone && tPhone === cleanPhone) || inDesc || inTitle;
-  });
 
   // PORTA 1: Existe Card ATIVO com Consultor Específico (Carteira Ativa)
   const activeTask = matchingTasks.find(

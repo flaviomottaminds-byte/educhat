@@ -91,6 +91,69 @@ function formatSaoPauloTime(dateOrTimestamp?: any): string {
   }
 }
 
+// Conversão precisa para o fuso de Brasília (America/Sao_Paulo, UTC-3)
+// e cálculo se a mensagem chegou fora do expediente (19:00 ou mais, antes das 08:00 ou fim de semana)
+function getBrasiliaTime(dateOrTimestamp?: any): {
+  hour: number;
+  minute: number;
+  weekday: string;
+  isAfterHours: boolean;
+  timeStr: string;
+} {
+  let date: Date;
+  if (!dateOrTimestamp) {
+    date = new Date();
+  } else if (dateOrTimestamp instanceof Date) {
+    date = dateOrTimestamp;
+  } else if (typeof dateOrTimestamp === "number") {
+    date = new Date(dateOrTimestamp > 1e11 ? dateOrTimestamp : dateOrTimestamp * 1000);
+  } else if (typeof dateOrTimestamp === "string" && !isNaN(Number(dateOrTimestamp))) {
+    const num = Number(dateOrTimestamp);
+    date = new Date(num > 1e11 ? num : num * 1000);
+  } else {
+    date = new Date(dateOrTimestamp);
+    if (isNaN(date.getTime())) date = new Date();
+  }
+
+  try {
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+      timeZone: "America/Sao_Paulo",
+      hour: "numeric",
+      minute: "numeric",
+      hour12: false,
+      weekday: "short",
+    });
+    const parts = formatter.formatToParts(date);
+    let hour = 0;
+    let minute = 0;
+    let weekday = "";
+    for (const p of parts) {
+      if (p.type === "hour") hour = parseInt(p.value, 10);
+      if (p.type === "minute") minute = parseInt(p.value, 10);
+      if (p.type === "weekday") weekday = p.value;
+    }
+    const isWeekend =
+      weekday.toLowerCase().startsWith("sáb") ||
+      weekday.toLowerCase().startsWith("dom") ||
+      weekday.toLowerCase().startsWith("sat") ||
+      weekday.toLowerCase().startsWith("sun");
+    // REGRA 1: Fora de expediente = 19:00 ou mais (hour >= 19), antes das 08:00 (hour < 8) ou fim de semana
+    const isAfterHours = hour >= 19 || hour < 8 || isWeekend;
+    const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    return { hour, minute, weekday, isAfterHours, timeStr };
+  } catch (_e) {
+    const spMs = date.getTime() - (3 * 3600 * 1000);
+    const spDate = new Date(spMs);
+    const hour = spDate.getUTCHours();
+    const minute = spDate.getUTCMinutes();
+    const day = spDate.getUTCDay();
+    const isWeekend = day === 0 || day === 6;
+    const isAfterHours = hour >= 19 || hour < 8 || isWeekend;
+    const timeStr = `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+    return { hour, minute, weekday: "", isAfterHours, timeStr };
+  }
+}
+
 // Normalizador universal de mensagens recebidas de qualquer formato da Evolution API v2
 function extractRawMessages(body: any): any[] {
   if (!body) return [];
@@ -438,9 +501,116 @@ Deno.serve(async (req: Request) => {
         console.log("✅ [Supabase] Mensagem gravada com sucesso! ID: " + messageId + " | Chat: " + chatId);
         insertedMessages.push(inserted && inserted[0] ? inserted[0] : { id: messageId });
       }
+
+      // =========================================================================
+      // ETAPA 5: DECISÃO DE ATENDIMENTO IA (HORÁRIO DE EXPEDIENTE)
+      // =========================================================================
+      if (!fromMe) {
+        const timeInfo = getBrasiliaTime(m?.messageTimestamp || Date.now());
+
+        // LOGS DE DIAGNÓSTICO OBRIGATÓRIOS (Item 3)
+        if (!timeInfo.isAfterHours) {
+          console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
+        } else {
+          console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
+        }
+
+        // REGRA 2: A IA assume a conversa independentemente do número que envia a mensagem de teste,
+        // a menos que a conversa já esteja vinculada e "Aberta" por um colaborador humano.
+        let isHumanOpen = false;
+        try {
+          const { data: recentHumanMsgs } = await supabase
+            .from("messages")
+            .select("sender_id, created_at")
+            .eq("chat_id", chatId)
+            .not("sender_id", "in", `("${chatId}","u_ia_copilot","bot","bot_ura","bot_retencao","system")`)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (recentHumanMsgs && recentHumanMsgs.length > 0) {
+            const lastHumanTime = new Date(recentHumanMsgs[0].created_at).getTime();
+            // Aberta se humano atendeu nos últimos 20 minutos
+            if (Date.now() - lastHumanTime < 20 * 60 * 1000) {
+              isHumanOpen = true;
+              console.log(`👤 [Decisão Webhook] Conversa com atendimento humano recente: IA não intervirá.`);
+            }
+          }
+        } catch (_err) {
+          isHumanOpen = false;
+        }
+
+        if (timeInfo.isAfterHours && !isHumanOpen) {
+          console.log(`✨ [Decisão Webhook] Fora de Expediente: IA disparando resposta para ${senderName} (${cleanPhone || remoteJid})`);
+
+          const evoUrl = Deno.env.get("EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app";
+          const evoKey = Deno.env.get("EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
+          const evoInstance = Deno.env.get("EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
+
+          let aiReplyText = `Olá, ${senderName}! Nosso horário de atendimento comercial encerrou-se às 19h.\n\nEu sou o Assistente IA de Plantão do EduChat e assumi seu atendimento para não deixar você esperando! 🌙\n\nComo posso te ajudar agora? (Você pode tirar dúvidas sobre cursos, matrículas, notas fiscais ou deixar uma solicitação para a equipe amanhecer com ela pronta).`;
+
+          const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
+          if (geminiApiKey && messageText) {
+            try {
+              const gPrompt = `Você é o Assistente Virtual Oficial do EduChat (Faculdade Olavo Bilac • Grupo EstudeMais).
+Horário atual em Brasília: ${timeInfo.timeStr} (Fora do expediente comercial de 08h às 19h).
+Aja com cordialidade e acolhimento. Informe gentilmente que o atendimento dos consultores humanos encerrou-se às 19h, mas que você assumiu o atendimento de plantão para ajudar imediatamente.
+Responda de forma clara e objetiva à mensagem do aluno/lead:
+"${messageText}"`;
+
+              const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  contents: [{ role: "user", parts: [{ text: gPrompt }] }],
+                  generationConfig: { maxOutputTokens: 250, temperature: 0.7 }
+                })
+              });
+              if (gRes.ok) {
+                const gData = await gRes.json();
+                const gen = gData?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (gen) aiReplyText = gen.trim();
+              }
+            } catch (gemErr) {
+              console.warn("Aviso ao gerar resposta Gemini no Webhook:", gemErr);
+            }
+          }
+
+          // Dispara a mensagem via Evolution API de volta para o WhatsApp
+          const targetNumber = cleanPhone || remoteJid.replace("@s.whatsapp.net", "").replace("@lid", "");
+          if (targetNumber) {
+            try {
+              const sendRes = await fetch(`${evoUrl}/message/sendText/${evoInstance}`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "apikey": evoKey
+                },
+                body: JSON.stringify({
+                  number: targetNumber,
+                  text: aiReplyText
+                })
+              });
+              console.log(`📤 [Evolution Webhook] Resposta IA enviada via WhatsApp para ${targetNumber} (Status ${sendRes.status})`);
+            } catch (sErr) {
+              console.warn("Erro ao disparar WhatsApp na Evolution API:", sErr);
+            }
+          }
+
+          // Grava a resposta da IA no banco de mensagens
+          const botId = "ia_reply_" + Date.now();
+          await supabase.from("messages").insert([{
+            id: botId,
+            chat_id: chatId,
+            sender_id: "u_ia_copilot",
+            sender_name: "🤖 Assistente IA (Plantão)",
+            text: aiReplyText,
+            timestamp: timeInfo.timeStr
+          }]);
+        }
+      }
     }
 
-    console.log("🎉 [Etapa 5 - Conclusão]: " + insertedMessages.length + " mensagem(ns) persistida(s).");
+    console.log("🎉 [Etapa 6 - Conclusão]: " + insertedMessages.length + " mensagem(ns) persistida(s).");
     console.log("================================================================");
 
     return new Response(
