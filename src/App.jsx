@@ -44,6 +44,7 @@ import {
 } from './lib/whatsappRouting';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
+import { normalizeKey } from './lib/listParsers';
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -144,9 +145,51 @@ export default function App() {
   const [selectedTaskDetail, setSelectedTaskDetail] = useState(null);
 
   // Base de Conhecimento, SLAs e Memória da IA
-  const [vipClients, setVipClients] = useState(INITIAL_VIP_CLIENTS);
-  const [slas, setSlas] = useState(INITIAL_SLAS);
-  const [pops, setPops] = useState(INITIAL_POPS);
+  const [vipClients, setVipClients] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_vip_clients');
+      return saved ? JSON.parse(saved) : INITIAL_VIP_CLIENTS;
+    } catch {
+      return INITIAL_VIP_CLIENTS;
+    }
+  });
+
+  const [slas, setSlas] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_slas');
+      return saved ? JSON.parse(saved) : INITIAL_SLAS;
+    } catch {
+      return INITIAL_SLAS;
+    }
+  });
+
+  const [pops, setPops] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_pops');
+      return saved ? JSON.parse(saved) : INITIAL_POPS;
+    } catch {
+      return INITIAL_POPS;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('educhat_vip_clients', JSON.stringify(vipClients));
+    } catch {}
+  }, [vipClients]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('educhat_slas', JSON.stringify(slas));
+    } catch {}
+  }, [slas]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('educhat_pops', JSON.stringify(pops));
+    } catch {}
+  }, [pops]);
+
   const [customAIPrompt, setCustomAIPrompt] = useState(DEFAULT_AI_PROMPT);
   const [isAIMemoryOpen, setIsAIMemoryOpen] = useState(false);
   const [isDossierOpen, setIsDossierOpen] = useState(false);
@@ -2026,6 +2069,75 @@ export default function App() {
     setLearnedDocuments((prev) => prev.filter((d) => d.id !== docId));
   };
 
+  // Sincronização em Lote de Clientes VIP com Supabase e LocalStorage
+  const handleBatchUpsertVips = async (updatedList, fileName = '', summary = {}) => {
+    setVipClients(updatedList);
+    try {
+      localStorage.setItem('educhat_vip_clients', JSON.stringify(updatedList));
+      const timeStr = getSaoPauloTime();
+      const rows = updatedList.map((item, idx) => ({
+        id: `vip_${normalizeKey(item.name) || idx}`,
+        chat_id: 'sys_vip_clients',
+        sender_id: 'batch_upload',
+        sender_name: 'Gestão VIP',
+        text: `<!-- VIP_RECORD:${JSON.stringify(item)} -->`,
+        timestamp: timeStr
+      }));
+      const chunkSize = 20;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        await supabase.from('messages').upsert(rows.slice(i, i + chunkSize), { onConflict: 'id' });
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar VIPs no Supabase:', err);
+    }
+  };
+
+  // Sincronização em Lote de SLAs com Supabase e LocalStorage
+  const handleBatchUpsertSlas = async (updatedList, fileName = '', summary = {}) => {
+    setSlas(updatedList);
+    try {
+      localStorage.setItem('educhat_slas', JSON.stringify(updatedList));
+      const timeStr = getSaoPauloTime();
+      const rows = updatedList.map((item, idx) => ({
+        id: `sla_${normalizeKey(item.demand) || idx}`,
+        chat_id: 'sys_slas',
+        sender_id: 'batch_upload',
+        sender_name: 'Gestão SLA',
+        text: `<!-- SLA_RECORD:${JSON.stringify(item)} -->`,
+        timestamp: timeStr
+      }));
+      const chunkSize = 20;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        await supabase.from('messages').upsert(rows.slice(i, i + chunkSize), { onConflict: 'id' });
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar SLAs no Supabase:', err);
+    }
+  };
+
+  // Sincronização em Lote de Procedimentos Padrão (POPs) com Supabase e LocalStorage
+  const handleBatchUpsertPops = async (updatedList, fileName = '', summary = {}) => {
+    setPops(updatedList);
+    try {
+      localStorage.setItem('educhat_pops', JSON.stringify(updatedList));
+      const timeStr = getSaoPauloTime();
+      const rows = updatedList.map((item, idx) => ({
+        id: `pop_${normalizeKey(item.title) || idx}`,
+        chat_id: 'sys_pops',
+        sender_id: 'batch_upload',
+        sender_name: 'Gestão POP',
+        text: `<!-- POP_RECORD:${JSON.stringify(item)} -->`,
+        timestamp: timeStr
+      }));
+      const chunkSize = 20;
+      for (let i = 0; i < rows.length; i += chunkSize) {
+        await supabase.from('messages').upsert(rows.slice(i, i + chunkSize), { onConflict: 'id' });
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar POPs no Supabase:', err);
+    }
+  };
+
   // Importação e Roteamento Exclusivo de Leads do Instagram Ads para a Expansão
   const handleImportInstagramLeads = async (newLeads) => {
     if (!newLeads || newLeads.length === 0) return;
@@ -2571,17 +2683,23 @@ export default function App() {
         vipClients={vipClients}
         onAddVipClient={(newVip) => setVipClients((prev) => [...prev, newVip])}
         onRemoveVipClient={(id) => setVipClients((prev) => prev.filter((v) => v.id !== id))}
+        onBatchUpsertVips={handleBatchUpsertVips}
         slas={slas}
         onAddSla={(newSla) => setSlas((prev) => [...prev, newSla])}
         onRemoveSla={(id) => setSlas((prev) => prev.filter((s) => s.id !== id))}
+        onBatchUpsertSlas={handleBatchUpsertSlas}
         pops={pops}
         onAddPop={(newPop) => setPops((prev) => [...prev, newPop])}
         onRemovePop={(id) => setPops((prev) => prev.filter((p) => p.id !== id))}
+        onBatchUpsertPops={handleBatchUpsertPops}
         customPrompt={customAIPrompt}
         onSaveCustomPrompt={(newPrompt) => setCustomAIPrompt(newPrompt)}
         learnedDocuments={learnedDocuments}
         onAddDocument={handleAddDocument}
         onRemoveDocument={handleRemoveDocument}
+        eduControlStudents={eduControlStudents}
+        onSyncStudents={handleSyncEduControlStudents}
+        collaborators={collaborators}
       />
 
       {/* Modal de Dossiê 360º & Auto-Aprendizado do WhatsApp */}
