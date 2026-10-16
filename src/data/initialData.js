@@ -219,22 +219,78 @@ export const INITIAL_MESSAGES = {
   ]
 };
 
+export const canonicalizeWhatsAppPhone = (raw) => {
+  if (!raw) return '';
+  let str = String(raw).trim();
+  // Remove domínios (@s.whatsapp.net, @c.us, @lid, etc.)
+  str = str.split('@')[0];
+  // Remove sufixos de dispositivo (:1, :24, etc.)
+  str = str.split(':')[0];
+  // Remove prefixos wa- e sufixos residuais
+  str = str.replace(/^wa-/, '').replace(/_s_whatsapp_net$/, '').replace(/_lid$/, '');
+  const digits = str.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Se for LID puro (mais de 13 dígitos)
+  if (digits.length > 13) return digits;
+
+  // Normalização de número brasileiro com ou sem o 9º dígito:
+  // Padrão canônico: 55 + DDD (2 dígitos) + 9 + 8 dígitos = 13 dígitos
+  if (digits.startsWith('55')) {
+    if (digits.length === 12) {
+      const ddd = digits.slice(2, 4);
+      const last8 = digits.slice(4);
+      return `55${ddd}9${last8}`;
+    }
+    if (digits.length === 13) {
+      return digits;
+    }
+  } else if (digits.length === 10) {
+    const ddd = digits.slice(0, 2);
+    const last8 = digits.slice(2);
+    return `55${ddd}9${last8}`;
+  } else if (digits.length === 11) {
+    return `55${digits}`;
+  }
+
+  return digits;
+};
+
+export const canonicalizeChatId = (raw) => {
+  if (!raw) return 'wa-desconhecido';
+  const canon = canonicalizeWhatsAppPhone(raw);
+  return canon ? `wa-${canon}` : 'wa-desconhecido';
+};
+
+export const getCanonicalPhoneKey = (contactOrId) => {
+  if (!contactOrId) return '';
+  if (typeof contactOrId === 'string') {
+    return canonicalizeWhatsAppPhone(contactOrId);
+  }
+  const raw = contactOrId.phone || contactOrId.remoteJidAlt || contactOrId.remoteJid || contactOrId.id || '';
+  return canonicalizeWhatsAppPhone(raw);
+};
+
 export const getChatKey = (activeChat, currentUserId) => {
   if (!activeChat) return 'c-geral';
-  if (activeChat.type === 'channel' || activeChat.type === 'whatsapp') return activeChat.id;
+  if (activeChat.type === 'channel') return activeChat.id;
+  if (activeChat.type === 'whatsapp') return canonicalizeChatId(activeChat.id);
   const ids = [currentUserId, activeChat.id].sort();
   return `dm-${ids[0]}-${ids[1]}`;
 };
 
 export const normalizeChatKey = (rawKey, currentUserId = 'u1') => {
   if (!rawKey) return 'c-geral';
-  if (rawKey.startsWith('wa-')) return rawKey;
-  if (rawKey.includes('@s.whatsapp.net') || rawKey.includes('@c.us')) {
-    const digits = rawKey.split('@')[0].replace(/\D/g, '');
-    if (digits) return `wa-${digits}`;
+  if (
+    rawKey.startsWith('wa-') ||
+    rawKey.includes('@s.whatsapp.net') ||
+    rawKey.includes('@c.us') ||
+    rawKey.includes('@lid')
+  ) {
+    return canonicalizeChatId(rawKey);
   }
   if (/^\+?\d{10,15}$/.test(String(rawKey).trim())) {
-    return `wa-${String(rawKey).replace(/\D/g, '')}`;
+    return canonicalizeChatId(rawKey);
   }
   if (rawKey.startsWith('dm-')) {
     const rawIds = rawKey.replace('dm-', '').split('-').filter(Boolean);

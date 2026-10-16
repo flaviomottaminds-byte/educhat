@@ -63,8 +63,9 @@ export function getBrasiliaTime(dateOrTimestamp = new Date()) {
 
 export const INITIAL_WHATSAPP_CONTACTS = [
   {
-    id: 'wa-91122697298017_lid',
+    id: 'wa-5511930594591',
     remoteJid: '91122697298017@lid',
+    remoteJidAlt: '5511930594591@s.whatsapp.net',
     name: 'Flávio Alexandre Motta',
     phone: '+55 11 93059-4591',
     avatar: '👨‍💼',
@@ -159,6 +160,35 @@ export const INITIAL_WHATSAPP_CONTACTS = [
 ];
 
 export const INITIAL_WHATSAPP_MESSAGES = {
+  'wa-5511930594591': [
+    {
+      id: 'wa_flavio_1',
+      senderId: 'wa-5511930594591',
+      senderName: 'Flávio Alexandre Motta',
+      text: 'Flávio, consegui eliminar todas as matrículas e analisei todos os documentos.',
+      timestamp: '14:30',
+      isWhatsApp: true,
+      fromStudent: true
+    },
+    {
+      id: 'wa_flavio_2',
+      senderId: 'u1',
+      senderName: 'Você',
+      text: 'Excelente! Amanhã pegamos o dia para fechar os Ejas restantes.',
+      timestamp: '14:32',
+      isWhatsApp: true,
+      fromStudent: false
+    },
+    {
+      id: 'wa_flavio_3',
+      senderId: 'wa-5511930594591',
+      senderName: 'Flávio Alexandre Motta',
+      text: 'ola .. teste',
+      timestamp: 'Agora',
+      isWhatsApp: true,
+      fromStudent: true
+    }
+  ],
   'wa-91122697298017_lid': [
     {
       id: 'wa_flavio_1',

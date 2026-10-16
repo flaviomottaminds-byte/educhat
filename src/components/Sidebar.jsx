@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   MessageSquare,
   CheckSquare,
@@ -28,6 +28,7 @@ import {
   Edit2
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
+import { getCanonicalPhoneKey } from '../data/initialData';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
 
@@ -103,7 +104,51 @@ export default function Sidebar({
   // Contatos do WhatsApp (Leads e Alunos): mantém todas as conversas ativas permanentemente visíveis e acessíveis
   const isManager = hasFullPortfolioAccess(currentUser);
 
-  const accessibleWhatsAppContacts = safeWhatsAppContacts.filter((c) => Boolean(c));
+  // 3. LIMPEZA DE DUPLICATAS VISUAIS:
+  // Agrupa e desduplica conversas do mesmo número WhatsApp pelo updated_at / lastMessageAt mais recente
+  const accessibleWhatsAppContacts = useMemo(() => {
+    const map = new Map();
+
+    (safeWhatsAppContacts || []).forEach((contact) => {
+      if (!contact) return;
+      const canonKey = getCanonicalPhoneKey(contact);
+      if (!canonKey) {
+        map.set(contact.id, contact);
+        return;
+      }
+
+      if (!map.has(canonKey)) {
+        map.set(canonKey, contact);
+      } else {
+        const existing = map.get(canonKey);
+        const existingTime = new Date(existing.updated_at || existing.lastMessageAt || existing.lastInteraction || 0).getTime();
+        const incomingTime = new Date(contact.updated_at || contact.lastMessageAt || contact.lastInteraction || 0).getTime();
+
+        const unreadTotal = Math.max(
+          Number(existing.unread_count ?? existing.unread ?? 0),
+          Number(contact.unread_count ?? contact.unread ?? 0)
+        );
+
+        if (incomingTime >= existingTime) {
+          map.set(canonKey, {
+            ...existing,
+            ...contact,
+            unread_count: unreadTotal,
+            unread: unreadTotal
+          });
+        } else {
+          map.set(canonKey, {
+            ...contact,
+            ...existing,
+            unread_count: unreadTotal,
+            unread: unreadTotal
+          });
+        }
+      }
+    });
+
+    return Array.from(map.values());
+  }, [safeWhatsAppContacts]);
 
   const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;
@@ -351,7 +396,10 @@ export default function Sidebar({
               </div>
             ) : (
               filteredWhatsAppContacts.map((contact) => {
-                const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
+                const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && (
+                  activeChat.id === contact.id ||
+                  getCanonicalPhoneKey(activeChat.id) === getCanonicalPhoneKey(contact)
+                );
                 const contactUnread = unreadCounts[contact.id] || contact.unread_count || contact.unread || 0;
                 const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
                 const displayName = student?.name || contact.name;

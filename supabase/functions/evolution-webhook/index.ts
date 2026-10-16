@@ -20,7 +20,33 @@ const KNOWN_CONTACTS: Record<string, { id: string; name: string }> = {
   "19971234567": { id: "wa-juliana-rocha", name: "Juliana Rocha (Aluna Pós)" },
   "5521998881122": { id: "wa-carlos-eduardo", name: "Carlos Eduardo (Contato Inédito)" },
   "21998881122": { id: "wa-carlos-eduardo", name: "Carlos Eduardo (Contato Inédito)" },
+  "5511930594591": { id: "wa-5511930594591", name: "Flávio Alexandre Motta" },
+  "551130594591": { id: "wa-5511930594591", name: "Flávio Alexandre Motta" },
 };
+
+// Normalização canônica do número de WhatsApp (padrão único com 9º dígito móvel)
+function canonicalizeWhatsAppPhone(raw?: string | null): string {
+  if (!raw) return "";
+  let clean = String(raw).split("@")[0].split(":")[0].replace(/\D/g, "");
+  if (!clean) return "";
+  if (clean.length === 10 || clean.length === 11) {
+    clean = `55${clean}`;
+  }
+  if (clean.startsWith("55") && (clean.length === 12 || clean.length === 13)) {
+    const ddd = clean.slice(2, 4);
+    const last8 = clean.slice(-8);
+    return `55${ddd}9${last8}`;
+  }
+  return clean;
+}
+
+function canonicalizeChatId(raw?: string | null): string {
+  if (!raw) return "";
+  let s = String(raw).trim();
+  if (s.startsWith("wa-")) s = s.slice(3);
+  const phone = canonicalizeWhatsAppPhone(s);
+  return phone ? `wa-${phone}` : (s ? `wa-${s}` : "");
+}
 
 // Extração robusta do número de telefone real, tratando o modo LID (Linked ID) do WhatsApp
 function extractCleanPhone(remoteJid: string, remoteJidAlt?: string): string {
@@ -421,17 +447,18 @@ Deno.serve(async (req: Request) => {
       }
 
       const fromMe = Boolean(keyObj.fromMe ?? m?.fromMe ?? false);
-      const cleanPhone = extractCleanPhone(remoteJid, remoteJidAlt);
+      const rawPhone = extractCleanPhone(remoteJid, remoteJidAlt);
+      const cleanPhone = canonicalizeWhatsAppPhone(rawPhone || remoteJid);
 
-      // Mapeamento do Chat ID
+      // Mapeamento do Chat ID canônico único
       const known = cleanPhone ? KNOWN_CONTACTS[cleanPhone] : null;
       let chatId = "";
       if (known) {
         chatId = known.id;
       } else if (cleanPhone) {
-        chatId = "wa-" + cleanPhone;
+        chatId = canonicalizeChatId(cleanPhone);
       } else {
-        chatId = "wa-desconhecido";
+        chatId = canonicalizeChatId(remoteJid) || "wa-desconhecido";
       }
 
       // Nome do remetente
@@ -463,6 +490,7 @@ Deno.serve(async (req: Request) => {
       console.log("🔍 [Etapa 2 - Extração de Identificadores]:", {
         remoteJid: remoteJid,
         remoteJidAlt: remoteJidAlt,
+        rawPhone: rawPhone,
         cleanPhone: cleanPhone,
         chatId: chatId,
         fromMe: fromMe,
@@ -478,7 +506,7 @@ Deno.serve(async (req: Request) => {
         timeFormattedSP: timeStr,
       });
 
-      // 4. Inserção direta na tabela 'messages' do EduChat
+      // 4. Inserção / Upsert idempotente na tabela 'messages' do EduChat
       const insertPayload = {
         id: messageId,
         chat_id: chatId,
@@ -492,14 +520,30 @@ Deno.serve(async (req: Request) => {
 
       const { data: inserted, error: insertError } = await supabase
         .from("messages")
-        .insert([insertPayload])
+        .upsert([insertPayload], { onConflict: "id" })
         .select();
 
       if (insertError) {
         console.error("❌ Erro ao gravar mensagem no Supabase:", insertError);
       } else {
-        console.log("✅ [Supabase] Mensagem gravada com sucesso! ID: " + messageId + " | Chat: " + chatId);
+        console.log("✅ [Supabase] Mensagem gravada/atualizada com sucesso! ID: " + messageId + " | Chat: " + chatId);
         insertedMessages.push(inserted && inserted[0] ? inserted[0] : { id: messageId });
+      }
+
+      // Atualiza tabela de conversas/chats (last_message e updated_at) se existir no Supabase
+      try {
+        await supabase
+          .from("chats")
+          .upsert([
+            {
+              id: chatId,
+              phone: cleanPhone,
+              last_message: messageText.length > 250 ? messageText.slice(0, 247) + "..." : messageText,
+              updated_at: new Date().toISOString(),
+            }
+          ], { onConflict: "id" });
+      } catch (_cErr) {
+        // Ignora silenciosamente se a tabela 'chats' não existir no banco
       }
 
       // =========================================================================
@@ -598,14 +642,14 @@ Responda de forma clara e objetiva à mensagem do aluno/lead:
 
           // Grava a resposta da IA no banco de mensagens
           const botId = "ia_reply_" + Date.now();
-          await supabase.from("messages").insert([{
+          await supabase.from("messages").upsert([{
             id: botId,
             chat_id: chatId,
             sender_id: "u_ia_copilot",
             sender_name: "🤖 Assistente IA (Plantão)",
             text: aiReplyText,
             timestamp: timeInfo.timeStr
-          }]);
+          }], { onConflict: "id" });
         }
       }
     }

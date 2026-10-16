@@ -34,7 +34,10 @@ import {
   INITIAL_MESSAGES,
   INITIAL_TASKS,
   getChatKey,
-  normalizeChatKey
+  normalizeChatKey,
+  getCanonicalPhoneKey,
+  canonicalizeChatId,
+  canonicalizeWhatsAppPhone
 } from './data/initialData';
 import {
   INITIAL_WHATSAPP_CONTACTS,
@@ -264,10 +267,12 @@ export default function App() {
           setWhatsAppContacts((prev) => {
             const next = [...prev];
             liveContacts.forEach((incoming) => {
+              const incomingKey = getCanonicalPhoneKey(incoming);
               const idx = next.findIndex(
                 (c) =>
                   c.id === incoming.id ||
                   (incoming.remoteJid && c.remoteJid === incoming.remoteJid) ||
+                  (incomingKey && getCanonicalPhoneKey(c) === incomingKey) ||
                   (c.phone && incoming.phone && c.phone.replace(/\D/g, '') === incoming.phone.replace(/\D/g, ''))
               );
               if (idx !== -1) {
@@ -1360,6 +1365,7 @@ export default function App() {
 
         setWhatsAppContacts((prev) => {
           const existingIds = new Set(prev.map((c) => c.id));
+          const existingCanonicalKeys = new Set(prev.map((c) => getCanonicalPhoneKey(c)).filter(Boolean));
           const newContacts = [];
 
           const updatedExisting = prev.map((c) => {
@@ -1387,7 +1393,10 @@ export default function App() {
           });
 
           for (const waKey of waKeys) {
-            if (!existingIds.has(waKey)) {
+            const canonicalWaKey = getCanonicalPhoneKey(waKey);
+            if (!existingIds.has(waKey) && (!canonicalWaKey || !existingCanonicalKeys.has(canonicalWaKey))) {
+              if (canonicalWaKey) existingCanonicalKeys.add(canonicalWaKey);
+              existingIds.add(waKey);
               const asgn = storedAssignments[waKey];
               const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
               const assignee = asgn?.assignee || initialContact?.assignee || 'Gabriel Carvalho';
@@ -1754,8 +1763,10 @@ export default function App() {
             }
 
             setWhatsAppContacts((prevContacts) => {
+              const incomingKey = getCanonicalPhoneKey(cKey);
               const existingIdx = prevContacts.findIndex((c) => {
                 if (c.id === cKey) return true;
+                if (incomingKey && getCanonicalPhoneKey(c) === incomingKey) return true;
                 const cDigits = (c.phone || '').replace(/\D/g, '');
                 const kDigits = cKey.replace(/\D/g, '');
                 return cDigits.length >= 10 && cDigits === kDigits;

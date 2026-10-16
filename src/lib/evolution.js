@@ -1,3 +1,5 @@
+import { canonicalizeChatId, canonicalizeWhatsAppPhone } from '../data/initialData';
+
 // Cliente leve da Evolution API (Railway): estado da conexão, religamento do webhook e envio de texto.
 const DEFAULT_URL = 'https://evolution-api-production-3fb2.up.railway.app';
 const DEFAULT_KEY = 'e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f';
@@ -235,7 +237,8 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
       const rawJid = m.key?.remoteJid;
       const rawJidAlt = m.key?.remoteJidAlt;
       if (!rawJid || rawJid === 'status@broadcast') return;
-      const chatKey = 'wa-' + rawJid.replace(/[@.]/g, '_');
+      const preferredTarget = rawJidAlt || rawJid;
+      const chatKey = canonicalizeChatId(preferredTarget);
 
       const text =
         m.message?.conversation ||
@@ -253,20 +256,13 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         ? new Date(m.messageTimestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
         : 'Agora';
 
+      const phoneDigits = canonicalizeWhatsAppPhone(preferredTarget);
+      const displayPhone = phoneDigits ? formatDisplayPhone(phoneDigits) : (rawJidAlt || rawJid).replace(/@.*$/, '');
+
       const contactName =
         m.pushName && m.pushName !== 'Você'
           ? m.pushName
-          : (rawJidAlt && rawJidAlt.includes('@') ? formatDisplayPhone(rawJidAlt.split('@')[0]) : (rawJid.includes('@s.whatsapp.net') ? formatDisplayPhone(rawJid.split('@')[0]) : 'Contato WhatsApp'));
-
-      // Número de telefone real para exibição e discagem direta
-      const phoneDigits = rawJidAlt
-        ? rawJidAlt.replace(/@.*$/, '').replace(/\D/g, '')
-        : (rawJid.includes('@s.whatsapp.net') ? rawJid.replace(/@.*$/, '').replace(/\D/g, '') : '');
-
-      const displayPhone = phoneDigits ? formatDisplayPhone(phoneDigits) : (rawJidAlt || rawJid).replace(/@.*$/, '');
-
-      // Destino prioritário para resposta: se rawJidAlt existir (ex: 556696354155@s.whatsapp.net), usa ele; senão usa rawJid
-      const preferredTarget = rawJidAlt || rawJid;
+          : (displayPhone ? `Lead ${displayPhone}` : 'Contato WhatsApp');
 
       if (!contactsMap.has(chatKey)) {
         contactsMap.set(chatKey, {
@@ -284,7 +280,8 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
           statusLabel: 'WhatsApp Oficial',
           aiActive: false,
           lastInteraction: time,
-          lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString()
+          lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString(),
+          updated_at: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString()
         });
       } else {
         const existing = contactsMap.get(chatKey);
