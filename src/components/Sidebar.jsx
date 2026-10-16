@@ -156,16 +156,17 @@ export default function Sidebar({
   });
 
   const totalWhatsAppUnread = accessibleWhatsAppContacts.reduce((sum, c) => {
-    return sum + (c?.id && safeUnread[c.id] ? Number(safeUnread[c.id]) : 0);
+    const count = (c?.id && safeUnread[c.id]) || c?.unread_count || c?.unread || 0;
+    return sum + Number(count || 0);
   }, 0);
 
   const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
     if (!c) return sum;
-    const count = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || 0;
+    const count = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0;
     return sum + Number(count || 0);
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
-    return sum + Number((u.id && safeUnread[u.id]) || 0);
+    return sum + Number((u.id && safeUnread[u.id]) || u.unread_count || u.unread || 0);
   }, 0);
 
   return (
@@ -365,7 +366,7 @@ export default function Sidebar({
             ) : (
               filteredWhatsAppContacts.map((contact) => {
                 const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && activeChat.id === contact.id;
-                const contactUnread = unreadCounts[contact.id] || 0;
+                const contactUnread = unreadCounts[contact.id] || contact.unread_count || contact.unread || 0;
                 const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
                 const displayName = student?.name || contact.name;
 
@@ -385,10 +386,15 @@ export default function Sidebar({
                         <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-white dark:border-chatPanel" />
                       </div>
                       <div className="truncate">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
                           <p className={`text-xs leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'font-semibold text-chatTextTitle'}`}>
                             {displayName}
                           </p>
+                          {contactUnread > 0 && (
+                            <span className="bg-emerald-600 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center shadow-xs animate-pulse inline-flex items-center justify-center">
+                              {contactUnread}
+                            </span>
+                          )}
                           {student ? (
                             <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
                               student.academicStatus === 'Ativo'
@@ -434,14 +440,13 @@ export default function Sidebar({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      {contactUnread > 0 ? (
-                        <span className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                    <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
+                      <span className={`text-[10px] ${contactUnread > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-chatTextMuted font-medium'}`}>
+                        {contact.lastInteraction}
+                      </span>
+                      {contactUnread > 0 && (
+                        <span className="bg-emerald-600 text-white text-[9.5px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce inline-flex items-center justify-center">
                           {contactUnread}
-                        </span>
-                      ) : (
-                        <span className="text-[10px] text-chatTextMuted font-medium">
-                          {contact.lastInteraction}
                         </span>
                       )}
                       {onDeleteChat && (
@@ -452,7 +457,7 @@ export default function Sidebar({
                             onDeleteChat(contact.id);
                           }}
                           title="Excluir histórico deste contato"
-                          className="opacity-0 group-hover:opacity-100 p-1 hover:text-rose-600 dark:hover:text-rose-400 text-slate-400 rounded transition cursor-pointer"
+                          className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-rose-600 dark:hover:text-rose-400 text-slate-400 rounded transition cursor-pointer"
                         >
                           <Trash2 size={12} />
                         </button>
@@ -538,7 +543,7 @@ export default function Sidebar({
                   filteredChannels.map((c) => {
                     if (!c) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
-                    const channelUnread = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread || 0;
+                    const channelUnread = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0;
                     return (
                       <button
                         type="button"
@@ -602,7 +607,7 @@ export default function Sidebar({
                   filteredCollaborators.map((user) => {
                     if (!user) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === user.id;
-                    const dmUnread = (user.id && safeUnread[user.id]) || 0;
+                    const dmUnread = (user.id && safeUnread[user.id]) || user.unread_count || user.unread || 0;
                     return (
                       <div
                         key={user.id}
