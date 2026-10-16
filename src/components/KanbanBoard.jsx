@@ -13,7 +13,6 @@ import {
   Paperclip
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import ExecutiveBriefingBanner from './ExecutiveBriefingBanner';
 import MeetNotesImportModal from './MeetNotesImportModal';
 import { normalizeText, fetchActiveCollaboratorsFromDB } from '../lib/gemini';
 
@@ -208,22 +207,6 @@ export default function KanbanBoard({
   const myAndDeptCount = tasks.filter((t) => isAssignedToMe(t) || isMyDepartment(t)).length;
   const myRequestsCount = tasks.filter((t) => isRequestedByMe(t) && !isAssignedToMe(t)).length;
 
-  const handleSelectAgendaBlock = (block) => {
-    if (!isDirector) return;
-    if (block.id === 'ALL') {
-      setFilterDepartment('Todos');
-      setFilterAssignee('todos');
-      return;
-    }
-    if (block.assigneeQuery || block.assigneeFilter) {
-      setFilterDepartment(block.department || 'Todos');
-      setFilterAssignee(block.assigneeMatch || block.assigneeFilter || block.assigneeQuery);
-      return;
-    }
-    setFilterDepartment(block.department || 'Todos');
-    setFilterAssignee('todos');
-  };
-
   const handleMove = (e, taskId, currentStatus, direction) => {
     e.stopPropagation();
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
@@ -283,7 +266,7 @@ export default function KanbanBoard({
           </div>
           <p className="text-xs text-chatTextMuted">
             {isDirector
-              ? 'Controle executivo integrado com Atas do Google Meet (gemini-notes@google.com) e Briefing da Agenda.'
+              ? 'Controle executivo integrado com Atas do Google Meet (gemini-notes@google.com).'
               : 'Exibindo cartões atribuídos a você ou ao seu setor. Você pode transferir tarefas entre departamentos ao clicar em qualquer card.'}
           </p>
         </div>
@@ -396,17 +379,6 @@ export default function KanbanBoard({
           </button>
         </div>
       </div>
-
-      {/* REQUISITO 4: Briefing Executivo Automático Sincronizado com a Agenda (Topo do Kanban) */}
-      <ExecutiveBriefingBanner
-        tasks={isDirector ? tasks : filteredTasks}
-        activeDepartment={isDirector ? filterDepartment : liveCurrentUser?.department || 'Todos'}
-        activeCollaborator={filterAssignee}
-        collaborators={liveCollaborators}
-        onSelectAgendaBlock={handleSelectAgendaBlock}
-        vipClients={vipClients}
-        slas={slas}
-      />
 
       {/* As 4 Colunas do Kanban (Pendente / A Fazer, Em Andamento, Aguardando Retorno, Concluído) */}
       <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 min-h-[420px] pb-4">
