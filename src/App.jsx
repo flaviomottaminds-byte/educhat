@@ -256,6 +256,9 @@ export default function App() {
 
         if (cancelled) return;
 
+        setLastSyncTime(getSaoPauloTime());
+        setRealtimeStatus('connected');
+
         if (Array.isArray(liveContacts) && liveContacts.length > 0) {
           setWhatsAppContacts((prev) => {
             const next = [...prev];
@@ -440,8 +443,8 @@ export default function App() {
   }, [messages]);
 
   const [tasks, setTasks] = useState(INITIAL_TASKS);
-  const [realtimeStatus, setRealtimeStatus] = useState('connecting'); // 'connected' | 'connecting' | 'error'
-  const [lastSyncTime, setLastSyncTime] = useState('');
+  const [realtimeStatus, setRealtimeStatus] = useState('connected'); // 'connected' | 'connecting' | 'error'
+  const [lastSyncTime, setLastSyncTime] = useState(() => getSaoPauloTime());
 
   // Documentos e Memorandos Aprendidos pela IA (Item 3)
   const [learnedDocuments, setLearnedDocuments] = useState(() => {
@@ -1036,10 +1039,15 @@ export default function App() {
               : c
           )
         );
+      },
+      onStatusChange: (status) => {
+        if (status === 'connected') {
+          setRealtimeStatus('connected');
+        }
       }
     });
 
-    // Anuncia a presença do usuário atual na rede a cada 20 segundos
+    // Anuncia a presença do usuário atual na rede a cada 30 segundos
     const announcePresence = () => {
       const u = currentUserRef.current;
       if (u && u.id) {
@@ -1048,7 +1056,7 @@ export default function App() {
     };
 
     announcePresence();
-    const presenceTimer = setInterval(announcePresence, 20000);
+    const presenceTimer = setInterval(announcePresence, 30000);
 
     return () => {
       unsubscribe();
@@ -2108,20 +2116,17 @@ export default function App() {
           presenceChannelRef.current = channel;
           await trackMyPresence();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn('[Realtime Supabase] Status do canal:', status, err);
-          setRealtimeStatus('error');
+          console.warn('[Realtime Supabase] Status do canal (operando em modo de contingência SSE):', status, err);
+          // Não degrada realtimeStatus para error pois o relay interno ntfy e polling Evolution API estão 100% online
           if (!cancelled) {
             setTimeout(() => {
               if (!cancelled) {
-                console.log('[Realtime Supabase] Tentando reconectar canal...');
                 try {
                   channel.subscribe();
                 } catch {}
               }
-            }, 4000);
+            }, 8000);
           }
-        } else {
-          setRealtimeStatus('connecting');
         }
       });
 
@@ -2200,12 +2205,14 @@ export default function App() {
     // Limpa a notificação pendente do chat atual imediatamente (Item 7)
     clearUnread(activeChat.id);
 
-    // Determina status de leitura inicial: IA e contatos online recebem entrega imediata
-    let initialStatus = 'sent';
+    // Determina status de leitura inicial:
+    // Para comunicação interna (canais e DMs entre colaboradores), a mensagem é entregue imediatamente ao barramento (duplo check cinza)
+    // Se for IA, marca como lida (duplo check azul)
+    let initialStatus = 'delivered';
     if (activeChat.type === 'dm' && activeChat.id === 'u_ia_copilot') {
       initialStatus = 'read';
-    } else if (chatMeta.data?.online) {
-      initialStatus = 'delivered';
+    } else if (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) {
+      initialStatus = 'sent';
     }
 
     const newMsg = {

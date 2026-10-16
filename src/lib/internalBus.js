@@ -3,8 +3,11 @@
  * Combina EventSource (SSE multi-dispositivo mundial) com BroadcastChannel (multi-aba local).
  */
 
-const RELAY_TOPIC = 'educhat_matriz_internal_relay';
-const RELAY_URL = `https://ntfy.sh/${RELAY_TOPIC}`;
+const MSG_TOPIC = 'educhat_matriz_messages_v1';
+const MSG_URL = `https://ntfy.sh/${MSG_TOPIC}`;
+
+const PRESENCE_TOPIC = 'educhat_matriz_presence';
+const PRESENCE_URL = `https://ntfy.sh/${PRESENCE_TOPIC}`;
 
 // Barramento local para comunicação instantânea entre abas no mesmo computador
 let localBus = null;
@@ -35,7 +38,7 @@ export async function publishInternalMessage(chatKey, message) {
 
   // 2. Barramento em nuvem para outros computadores da equipe (HTTP POST ultra-rápido ~50ms)
   try {
-    fetch(RELAY_URL, {
+    fetch(MSG_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -67,7 +70,7 @@ export async function publishPresencePing(user) {
   }
 
   try {
-    fetch(RELAY_URL, {
+    fetch(PRESENCE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -78,8 +81,9 @@ export async function publishPresencePing(user) {
 /**
  * Assina o barramento de eventos (recebe mensagens e status de presença da equipe em tempo real).
  */
-export function subscribeToInternalRelay({ onMessage, onPresence }) {
-  let es = null;
+export function subscribeToInternalRelay({ onMessage, onPresence, onStatusChange }) {
+  let esMessages = null;
+  let esPresence = null;
   let isCancelled = false;
 
   // 1. Escuta eventos locais via BroadcastChannel
@@ -97,30 +101,84 @@ export function subscribeToInternalRelay({ onMessage, onPresence }) {
     localBus.addEventListener('message', handleLocalEvent);
   }
 
-  // 2. Escuta eventos em nuvem via EventSource (SSE multi-dispositivo)
+  // 2. Hidratação inicial de mensagens recentes (recupera histórico recente do tópico ntfy)
+  const hydrateRecentMessages = async () => {
+    try {
+      const res = await fetch(`${MSG_URL}/json?poll=1&since=all`);
+      if (!res.ok) return;
+      const text = await res.text();
+      if (isCancelled || !text) return;
+      const lines = text.trim().split('\n');
+      lines.forEach((line) => {
+        try {
+          const raw = JSON.parse(line);
+          if (raw.event !== 'message' || !raw.message) return;
+          const innerPayload = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw.message;
+          if (innerPayload.type === 'INTERNAL_MESSAGE' && typeof onMessage === 'function') {
+            onMessage(innerPayload.chatKey, innerPayload.message);
+          }
+        } catch {}
+      });
+    } catch {}
+  };
+
+  // 3. Hidratação inicial de presenças recentes (últimos 10 min)
+  const hydrateRecentPresence = async () => {
+    try {
+      const res = await fetch(`${PRESENCE_URL}/json?poll=1&since=10m`);
+      if (!res.ok) return;
+      const text = await res.text();
+      if (isCancelled || !text) return;
+      const lines = text.trim().split('\n');
+      lines.forEach((line) => {
+        try {
+          const raw = JSON.parse(line);
+          if (raw.event !== 'message' || !raw.message) return;
+          const innerPayload = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw.message;
+          if (innerPayload.type === 'PRESENCE_PING' && typeof onPresence === 'function') {
+            onPresence(innerPayload.user);
+          }
+        } catch {}
+      });
+    } catch {}
+  };
+
+  hydrateRecentMessages();
+  hydrateRecentPresence();
+
+  // 4. Escuta eventos em nuvem via EventSource (SSE multi-dispositivo)
   const connectSSE = () => {
     if (isCancelled || typeof window === 'undefined' || !window.EventSource) return;
 
     try {
-      es = new EventSource(`${RELAY_URL}/sse`);
-
-      es.onmessage = (event) => {
+      esMessages = new EventSource(`${MSG_URL}/sse`);
+      esMessages.onopen = () => {
+        if (typeof onStatusChange === 'function') onStatusChange('connected');
+      };
+      esMessages.onmessage = (event) => {
         if (isCancelled || !event.data) return;
         try {
           const raw = JSON.parse(event.data);
-          // O ntfy envelopa o dado enviado no campo 'message'
-          const innerPayload = typeof raw.message === 'string' ? JSON.parse(raw.message) : raw;
-
+          const innerPayload = typeof raw.message === 'string' ? JSON.parse(raw.message) : (raw.message || raw);
           if (innerPayload.type === 'INTERNAL_MESSAGE' && typeof onMessage === 'function') {
             onMessage(innerPayload.chatKey, innerPayload.message);
-          } else if (innerPayload.type === 'PRESENCE_PING' && typeof onPresence === 'function') {
-            onPresence(innerPayload.user);
           }
         } catch {}
       };
+      esMessages.onerror = () => {
+        // EventSource nativo do navegador reconecta automaticamente
+      };
 
-      es.onerror = () => {
-        // EventSource nativo do navegador já tenta reconectar automaticamente
+      esPresence = new EventSource(`${PRESENCE_URL}/sse`);
+      esPresence.onmessage = (event) => {
+        if (isCancelled || !event.data) return;
+        try {
+          const raw = JSON.parse(event.data);
+          const innerPayload = typeof raw.message === 'string' ? JSON.parse(raw.message) : (raw.message || raw);
+          if (innerPayload.type === 'PRESENCE_PING' && typeof onPresence === 'function') {
+            onPresence(innerPayload.user);
+          }
+        } catch {}
       };
     } catch (err) {
       console.warn('[InternalBus] Erro ao conectar SSE:', err);
@@ -136,9 +194,14 @@ export function subscribeToInternalRelay({ onMessage, onPresence }) {
         localBus.removeEventListener('message', handleLocalEvent);
       } catch {}
     }
-    if (es) {
+    if (esMessages) {
       try {
-        es.close();
+        esMessages.close();
+      } catch {}
+    }
+    if (esPresence) {
+      try {
+        esPresence.close();
       } catch {}
     }
   };
