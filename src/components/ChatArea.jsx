@@ -1792,20 +1792,18 @@ export default function ChatArea({
                   onChange={(e) => {
                     const newDept = e.target.value;
                     setSelectedDept(newDept);
-                    const deptCollab = (collaborators || []).find((c) => !c.isBot && c.department === newDept);
+                    const deptCollab = (collaborators || []).find((c) => !c.isBot && (c.department === newDept || (newDept.startsWith('Secretaria') && c.department?.startsWith('Secretaria'))));
                     if (deptCollab) setSelectedAssignee(deptCollab.name);
                   }}
                   className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-brand-500 font-medium cursor-pointer"
                 >
                   <option value="Comercial">🎯 Comercial (Matrículas & Vendas)</option>
-                  <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
-                  <option value="Secretaria Acadêmica">📋 Secretaria Acadêmica</option>
+                  <option value="Marketing">👩‍🎨 Marketing & Comunicação</option>
                   <option value="Tutoria">🎓 Tutoria & Apoio Pedagógico</option>
-                  <option value="Financeiro">💰 Financeiro & Splits Asaas</option>
-                  <option value="Suporte a Polos">🛠️ Suporte a Polos & eAula</option>
-                  <option value="Coordenação Pedagógica">👨‍🏫 Coordenação Pedagógica</option>
-                  <option value="Marketing">👩‍🎨 Marketing & Captação</option>
-                  <option value="Diretoria">👑 Diretoria Executiva</option>
+                  <option value="Secretaria">📋 Secretaria Acadêmica & Documentos</option>
+                  <option value="Pedagógico">👨‍🏫 Coordenação Pedagógica</option>
+                  <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
+                  <option value="Diretoria">👑 Diretoria & Gestão Executiva</option>
                 </select>
               </div>
 

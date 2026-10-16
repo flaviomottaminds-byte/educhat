@@ -24,7 +24,8 @@ import {
   Upload,
   Trash2,
   Database,
-  GraduationCap
+  GraduationCap,
+  Edit2
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 import { matchStudentByPhone } from '../lib/eduControl';
@@ -44,6 +45,7 @@ export default function Sidebar({
   onOpenAIMemory,
   onOpenNewChannel,
   onOpenNewCollaborator,
+  onEditCollaborator,
   onOpenWhatsAppConnection,
   onOpenInstagramImport,
   onOpenEduControlSync,
@@ -601,45 +603,67 @@ export default function Sidebar({
                     const isActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === user.id;
                     const dmUnread = (user.id && safeUnread[user.id]) || 0;
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={user.id}
-                        onClick={() => onSelectCollaborator && onSelectCollaborator(user.id)}
-                        className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition cursor-pointer ${
-                          isActive
-                            ? 'bg-[#f0f2f5] dark:bg-chatPanel shadow-xs font-medium'
-                            : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
-                        }`}
+                        className="group/collab relative flex items-center"
                       >
-                        <div className="flex items-center gap-2.5 truncate">
-                          <div className="relative text-2xl shrink-0">
-                            <span>{user.avatar || '👤'}</span>
-                            <span
-                              className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
-                                user.online ? 'bg-brand-600' : 'bg-gray-300'
-                              }`}
-                            />
+                        <button
+                          type="button"
+                          onClick={() => onSelectCollaborator && onSelectCollaborator(user.id)}
+                          className={`w-full flex items-center justify-between p-2.5 rounded-lg text-left transition cursor-pointer ${
+                            isActive
+                              ? 'bg-[#f0f2f5] dark:bg-chatPanel shadow-xs font-medium'
+                              : 'hover:bg-[#f5f6f6] dark:hover:bg-chatPanel/40'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 truncate">
+                            <div className="relative text-2xl shrink-0">
+                              <span>{user.avatar || '👤'}</span>
+                              <span
+                                className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
+                                  user.online ? 'bg-brand-600' : 'bg-gray-300'
+                                }`}
+                              />
+                            </div>
+                            <div className="truncate pr-5">
+                              <p className={`text-sm leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
+                                {user.name || 'Colaborador'}
+                              </p>
+                              <p className="text-[11px] text-chatTextMuted truncate mt-0.5 flex items-center gap-1">
+                                <span className="font-semibold text-brand-600 dark:text-brand-400">{user.department || 'Comercial'}</span>
+                                <span>•</span>
+                                <span className="truncate">{user.role || 'Equipe'}</span>
+                              </p>
+                            </div>
                           </div>
-                          <div className="truncate">
-                            <p className={`text-sm leading-tight truncate ${isActive ? 'font-bold text-chatTextTitle' : 'text-chatTextTitle'}`}>
-                              {user.name || 'Colaborador'}
-                            </p>
-                            <p className="text-[11px] text-chatTextMuted truncate mt-0.5">
-                              {user.role || user.department || 'Equipe'}
-                            </p>
-                          </div>
-                        </div>
 
-                        {dmUnread > 0 ? (
-                          <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                            {dmUnread}
-                          </span>
-                        ) : (
-                          <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
-                            1 a 1
-                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {dmUnread > 0 ? (
+                              <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                                {dmUnread}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
+                                1 a 1
+                              </span>
+                            )}
+                          </div>
+                        </button>
+
+                        {isDirector && onEditCollaborator && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEditCollaborator(user);
+                            }}
+                            className="hidden group-hover/collab:flex absolute right-11 top-1/2 -translate-y-1/2 p-1.5 rounded-md text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 bg-white dark:bg-chatPanel shadow-xs border border-slate-200 dark:border-chatBorder transition cursor-pointer"
+                            title={`Editar departamento e cargo de ${user.name}`}
+                          >
+                            <Edit2 size={12} />
+                          </button>
                         )}
-                      </button>
+                      </div>
                     );
                   })
                 ) : (

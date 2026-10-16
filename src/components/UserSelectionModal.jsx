@@ -1,8 +1,16 @@
 import React, { useState } from 'react';
-import { Search, UserCheck, Shield, Building2, Mail, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Search, UserCheck, Shield, Building2, Mail, CheckCircle2, ArrowRight, UserPlus, Edit2 } from 'lucide-react';
 import { hasFullPortfolioAccess } from '../lib/portfolioAccess';
 
-export default function UserSelectionModal({ isOpen, onClose, collaborators, onSelectUser, currentUserId }) {
+export default function UserSelectionModal({
+  isOpen,
+  onClose,
+  collaborators,
+  onSelectUser,
+  onEditCollaborator,
+  onNewCollaborator,
+  currentUserId
+}) {
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('Todos');
 
@@ -28,7 +36,7 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
       <div className="bg-white dark:bg-chatPanel w-full max-w-3xl rounded-2xl shadow-2xl border border-slate-200 dark:border-chatBorder overflow-hidden flex flex-col max-h-[90vh]">
         {/* Cabeçalho */}
-        <div className="p-6 bg-linear-to-r from-brand-700 to-brand-600 text-white shrink-0">
+        <div className="p-6 bg-linear-to-r from-brand-700 to-brand-600 text-white shrink-0 flex items-center justify-between flex-wrap gap-4">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-xl bg-white/20 backdrop-blur-md flex items-center justify-center text-2xl shadow-inner">
               🎓
@@ -42,6 +50,17 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
               </p>
             </div>
           </div>
+
+          {onNewCollaborator && (
+            <button
+              type="button"
+              onClick={onNewCollaborator}
+              className="px-3.5 py-2 rounded-xl bg-white/20 hover:bg-white/30 text-white font-semibold text-xs flex items-center gap-1.5 transition backdrop-blur-sm shadow-xs cursor-pointer"
+            >
+              <UserPlus size={14} />
+              <span>+ Novo Colaborador</span>
+            </button>
+          )}
         </div>
 
         {/* Barra de Filtros e Busca */}
@@ -78,7 +97,6 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
         <div className="p-4 md:p-6 overflow-y-auto grid grid-cols-1 md:grid-cols-2 gap-3.5 flex-1">
           {filtered.map((user) => {
             const isCurrent = user.id === currentUserId;
-            const isDirector = user.roleType === 'diretor';
 
             return (
               <div
@@ -123,9 +141,24 @@ export default function UserSelectionModal({ isOpen, onClose, collaborators, onS
                 </div>
 
                 <div className="flex items-center justify-between pt-2.5 border-t border-slate-100 dark:border-chatBorder/60">
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-chatPanel text-[#54656f] dark:text-chatTextMuted">
-                    {user.department}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-chatPanel text-brand-700 dark:text-brand-300 border border-slate-200 dark:border-chatBorder">
+                      🎯 {user.department || 'Comercial'}
+                    </span>
+                    {onEditCollaborator && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEditCollaborator(user);
+                        }}
+                        className="p-1 rounded-md text-chatTextMuted hover:text-brand-600 hover:bg-black/5 dark:hover:bg-white/5 transition"
+                        title={`Editar departamento e cargo de ${user.name}`}
+                      >
+                        <Edit2 size={12} />
+                      </button>
+                    )}
+                  </div>
 
                   <button
                     className={`text-xs font-semibold px-3 py-1 rounded-lg flex items-center gap-1 transition ${

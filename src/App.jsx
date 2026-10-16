@@ -93,11 +93,30 @@ export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
-  const [collaborators, setCollaborators] = useState(INITIAL_COLLABORATORS);
+  const [collaborators, setCollaborators] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_collaborators');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const list = [...parsed];
+          INITIAL_COLLABORATORS.forEach((ic) => {
+            if (!list.some((c) => c.id === ic.id)) {
+              list.push(ic);
+            }
+          });
+          return list;
+        }
+      }
+    } catch {}
+    return INITIAL_COLLABORATORS;
+  });
   const [currentUser, setCurrentUser] = useState(() => {
     try {
-      const saved = localStorage.getItem('educhat_user_id');
-      const found = INITIAL_COLLABORATORS.find((u) => u.id === saved);
+      const savedId = localStorage.getItem('educhat_user_id');
+      const savedList = localStorage.getItem('educhat_collaborators');
+      const allCollabs = savedList ? JSON.parse(savedList) : INITIAL_COLLABORATORS;
+      const found = (Array.isArray(allCollabs) ? allCollabs : INITIAL_COLLABORATORS).find((u) => u.id === savedId);
       return found || INITIAL_COLLABORATORS[0];
     } catch {
       return INITIAL_COLLABORATORS[0];
@@ -524,9 +543,42 @@ export default function App() {
           });
         }
 
+        // Pré-extrai registros de colaboradores persistidos no Supabase
+        const dbCollaborators = [];
+        dbMessages.forEach((m) => {
+          if (m.chat_id === 'sys_collaborators' && m.text?.includes('<!-- COLLABORATOR_RECORD:')) {
+            const match = m.text.match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                dbCollaborators.push(JSON.parse(match[1]));
+              } catch {}
+            }
+          }
+        });
+
+        if (dbCollaborators.length > 0) {
+          setCollaborators((prev) => {
+            const list = [...prev];
+            dbCollaborators.forEach((incoming) => {
+              const existingIdx = list.findIndex(
+                (c) => c.id === incoming.id || (c.name && incoming.name && c.name.toLowerCase() === incoming.name.toLowerCase())
+              );
+              if (existingIdx !== -1) {
+                list[existingIdx] = { ...list[existingIdx], ...incoming };
+              } else {
+                list.push(incoming);
+              }
+            });
+            try {
+              localStorage.setItem('educhat_collaborators', JSON.stringify(list));
+            } catch {}
+            return list;
+          });
+        }
+
         const grouped = {};
         dbMessages.forEach((m) => {
-          if (m.chat_id === 'sys_educontrol_students') return;
+          if (m.chat_id === 'sys_educontrol_students' || m.chat_id === 'sys_collaborators') return;
           const key = normalizeChatKey(m.chat_id, currentUser.id);
 
           // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros (Item 4)
@@ -891,6 +943,32 @@ export default function App() {
                     localStorage.setItem('educhat_educontrol_students', JSON.stringify(studentList));
                   } catch {}
                   return studentList;
+                });
+              } catch {}
+            }
+            return;
+          }
+
+          // Sincronização em Tempo Real de Novos Colaboradores
+          if (row.chat_id === 'sys_collaborators') {
+            const match = (row.text || '').match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                const incomingCollab = JSON.parse(match[1]);
+                setCollaborators((prev) => {
+                  const list = [...prev];
+                  const existingIdx = list.findIndex(
+                    (c) => c.id === incomingCollab.id || (c.name && incomingCollab.name && c.name.toLowerCase() === incomingCollab.name.toLowerCase())
+                  );
+                  if (existingIdx !== -1) {
+                    list[existingIdx] = { ...list[existingIdx], ...incomingCollab };
+                  } else {
+                    list.push(incomingCollab);
+                  }
+                  try {
+                    localStorage.setItem('educhat_collaborators', JSON.stringify(list));
+                  } catch {}
+                  return list;
                 });
               } catch {}
             }
@@ -2112,10 +2190,62 @@ export default function App() {
     setActiveView('chat');
   };
 
-  const handleSaveCollaborator = (newCollaborator) => {
-    setCollaborators((prev) => [...prev, newCollaborator]);
+  const handleSaveCollaborator = async (newCollaborator) => {
+    // 1. Atualização Instantânea no Estado Local e LocalStorage
+    setCollaborators((prev) => {
+      const idx = prev.findIndex((c) => c.id === newCollaborator.id);
+      let updated;
+      if (idx !== -1) {
+        updated = [...prev];
+        updated[idx] = { ...updated[idx], ...newCollaborator };
+      } else {
+        updated = [...prev, newCollaborator];
+      }
+      try {
+        localStorage.setItem('educhat_collaborators', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
     setActiveChat({ type: 'dm', id: newCollaborator.id });
     setActiveView('chat');
+
+    // 2. Persistência na tabela 'profiles' do Supabase (se tabela estiver disponível)
+    try {
+      await supabase.from('profiles').upsert([{
+        id: newCollaborator.id,
+        name: newCollaborator.name,
+        email: newCollaborator.email || '',
+        role: newCollaborator.role || 'Colaborador',
+        role_type: newCollaborator.roleType || 'colaborador',
+        department: newCollaborator.department,
+        avatar: newCollaborator.avatar || '👨‍💼',
+        online: true,
+        is_bot: false,
+        created_at: new Date().toISOString()
+      }], { onConflict: 'id' });
+    } catch {}
+
+    // 3. Persistência Garantida e Replicada em Tempo Real via Tabela 'messages' (chat_id: 'sys_collaborators')
+    const timeStr = getSaoPauloTime();
+    const collabSystemRecord = {
+      id: `sys_collab_${newCollaborator.id}`,
+      chat_id: 'sys_collaborators',
+      sender_id: currentUser?.id || 'system',
+      sender_name: currentUser?.name || 'Gestão',
+      text: `<!-- COLLABORATOR_RECORD:${JSON.stringify(newCollaborator)} -->\nColaborador cadastrado no sistema: ${newCollaborator.name} (${newCollaborator.department} • ${newCollaborator.role})`,
+      timestamp: timeStr,
+      created_at: new Date().toISOString()
+    };
+
+    try {
+      const { error } = await supabase.from('messages').upsert([collabSystemRecord], { onConflict: 'id' });
+      if (error) {
+        await supabase.from('messages').insert([collabSystemRecord]);
+      }
+    } catch (err) {
+      console.warn('Aviso ao persistir colaborador no Supabase:', err);
+    }
   };
 
   const handleSwitchUser = (newUser) => {
@@ -2689,7 +2819,8 @@ export default function App() {
         }
         onOpenAIMemory={() => setIsAIMemoryOpen(true)}
         onOpenNewChannel={() => setModalItem({ isOpen: true, type: 'channel' })}
-        onOpenNewCollaborator={() => setModalItem({ isOpen: true, type: 'collaborator' })}
+        onOpenNewCollaborator={(initialData) => setModalItem({ isOpen: true, type: 'collaborator', initialData: initialData || null })}
+        onEditCollaborator={(collab) => setModalItem({ isOpen: true, type: 'collaborator', initialData: collab })}
         theme={theme}
         onToggleTheme={toggleTheme}
         currentUser={currentUser}
@@ -2800,7 +2931,9 @@ export default function App() {
       <NewItemModal
         isOpen={modalItem.isOpen}
         type={modalItem.type}
-        onClose={() => setModalItem({ ...modalItem, isOpen: false })}
+        channels={channels}
+        initialData={modalItem.initialData || null}
+        onClose={() => setModalItem({ ...modalItem, isOpen: false, initialData: null })}
         onSave={modalItem.type === 'channel' ? handleSaveChannel : handleSaveCollaborator}
       />
 
@@ -2844,6 +2977,14 @@ export default function App() {
         onClose={() => setIsUserSelectOpen(false)}
         collaborators={collaborators}
         onSelectUser={handleSwitchUser}
+        onEditCollaborator={(collab) => {
+          setIsUserSelectOpen(false);
+          setModalItem({ isOpen: true, type: 'collaborator', initialData: collab });
+        }}
+        onNewCollaborator={() => {
+          setIsUserSelectOpen(false);
+          setModalItem({ isOpen: true, type: 'collaborator', initialData: null });
+        }}
         currentUserId={currentUser?.id}
       />
 
