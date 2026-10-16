@@ -662,7 +662,9 @@ export default function ChatArea({
 
   useEffect(() => {
     scrollToBottom(true);
-  }, [messages?.length, chatMeta?.data?.id || chatMeta?.id]);
+    const raf = requestAnimationFrame(() => scrollToBottom(true));
+    return () => cancelAnimationFrame(raf);
+  }, [messages, messages?.length, chatMeta?.data?.id || chatMeta?.id]);
 
   // Limpeza de recursos ao desmontar
   useEffect(() => {

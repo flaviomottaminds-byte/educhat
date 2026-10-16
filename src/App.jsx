@@ -255,14 +255,22 @@ export default function App() {
   });
 
   const activeChatRef = useRef(activeChat);
-  useEffect(() => {
-    activeChatRef.current = activeChat;
-  }, [activeChat]);
+  activeChatRef.current = activeChat;
 
   const currentUserRef = useRef(currentUser);
-  useEffect(() => {
-    currentUserRef.current = currentUser;
-  }, [currentUser]);
+  currentUserRef.current = currentUser;
+
+  const channelsRef = useRef(channels);
+  channelsRef.current = channels;
+
+  const collaboratorsRef = useRef(collaborators);
+  collaboratorsRef.current = collaborators;
+
+  const eduControlStudentsRef = useRef(eduControlStudents);
+  eduControlStudentsRef.current = eduControlStudents;
+
+  const learnedDocumentsRef = useRef(learnedDocuments);
+  learnedDocumentsRef.current = learnedDocuments;
 
   const assignmentsCacheRef = useRef({});
   useEffect(() => {
@@ -354,12 +362,147 @@ export default function App() {
   const currentChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
   const currentMessages = messages[currentChatKey] || [];
 
+  const customAIPromptRef = useRef(customAIPrompt);
+  customAIPromptRef.current = customAIPrompt;
+
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  // Parser leve de linha do banco de dados (com opção de omitir Base64 pesados na listagem lateral)
+  const parseDatabaseMessage = (m, { stripHeavyAttachments = false } = {}) => {
+    let cleanText = m.text || '';
+    let parsedAttachment = null;
+    let linkedTaskId = null;
+    let parsedReplyTo = null;
+    let parsedStatus = 'sent';
+    let isAudio = false;
+    let audioUrl = null;
+    let audioTranscription = null;
+    let duration = '0:14';
+
+    if (cleanText.includes('[ARQUIVO_ANEXO:')) {
+      if (stripHeavyAttachments && cleanText.length > 1500) {
+        // Evita carregar strings gigantes de Base64 de conversas inativas na memória inicial
+        const nameMatch = cleanText.match(/"name"\s*:\s*"([^"]+)"/);
+        const typeMatch = cleanText.match(/"type"\s*:\s*"([^"]+)"/);
+        const sizeMatch = cleanText.match(/"size"\s*:\s*"?([^",}]+)"?/);
+        parsedAttachment = {
+          name: nameMatch ? nameMatch[1] : 'Anexo',
+          type: typeMatch ? typeMatch[1] : 'application/octet-stream',
+          size: sizeMatch ? sizeMatch[1] : '',
+          hasLazyPayload: true
+        };
+        cleanText = cleanText
+          .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+          .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+          .trim();
+      } else {
+        const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
+        if (extracted) {
+          if (stripHeavyAttachments && extracted.dataUrl && extracted.dataUrl.length > 1024) {
+            parsedAttachment = { ...extracted, dataUrl: null, hasLazyPayload: true };
+          } else {
+            parsedAttachment = extracted;
+          }
+        }
+        cleanText = sanitized;
+      }
+    }
+
+    if (cleanText.includes('<!-- AUDIO_URL:')) {
+      const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+      if (match) {
+        const rawAudio = match[1].trim();
+        audioUrl = stripHeavyAttachments && rawAudio.startsWith('data:') && rawAudio.length > 1024 ? null : rawAudio;
+        isAudio = true;
+        cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
+      }
+    }
+
+    if (cleanText.includes('<!-- IS_AUDIO:true -->')) {
+      isAudio = true;
+      cleanText = cleanText.replace(/<!-- IS_AUDIO:true -->/, '').trim();
+    }
+
+    if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+      const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
+      if (match) {
+        audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
+      }
+      isAudio = true;
+    }
+
+    if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
+      isAudio = true;
+      const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
+      if (durMatch) duration = durMatch[1];
+    }
+
+    if (parsedAttachment) {
+      if (
+        parsedAttachment.type?.startsWith('audio/') ||
+        parsedAttachment.isAudio ||
+        parsedAttachment.name?.toLowerCase().includes('audio') ||
+        /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
+      ) {
+        isAudio = true;
+        if (!audioUrl && !stripHeavyAttachments) {
+          audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+        }
+        if (parsedAttachment.duration) duration = parsedAttachment.duration;
+      }
+    }
+
+    if (cleanText.includes('<!-- REPLY_TO:')) {
+      const match = cleanText.match(/<!-- REPLY_TO:([\s\S]+?) -->/);
+      if (match) {
+        try {
+          parsedReplyTo = JSON.parse(match[1]);
+          cleanText = cleanText.replace(/<!-- REPLY_TO:[\s\S]+? -->/, '').trim();
+        } catch {}
+      }
+    }
+
+    if (cleanText.includes('<!-- STATUS:')) {
+      const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
+      if (match) {
+        parsedStatus = match[1];
+        cleanText = cleanText.replace(/<!-- STATUS:[^\s>]+ -->/, '').trim();
+      }
+    }
+
+    if (cleanText.includes('<!-- TASK_ID:')) {
+      const match = cleanText.match(/<!-- TASK_ID:([^\s>]+) -->/);
+      if (match) {
+        linkedTaskId = match[1];
+        cleanText = cleanText.replace(/<!-- TASK_ID:[^\s>]+ -->/, '').trim();
+      }
+    }
+
+    return {
+      id: m.id,
+      senderId: m.sender_id,
+      senderName: m.sender_name,
+      text: cleanText,
+      timestamp: getSaoPauloTime(m.created_at || m.timestamp),
+      attachment: parsedAttachment,
+      replyTo: parsedReplyTo,
+      status: parsedStatus,
+      taskId: linkedTaskId,
+      actionExtracted: false,
+      isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
+      audioUrl: audioUrl || (!stripHeavyAttachments ? (parsedAttachment?.dataUrl || parsedAttachment?.url || null) : null),
+      audioTranscription: audioTranscription || null,
+      duration: duration || parsedAttachment?.duration || '0:14'
+    };
+  };
+
   // Solicitar permissão nativa de notificação do Windows ao carregar
   useEffect(() => {
     requestDesktopNotificationPermission();
   }, []);
 
-  // Helper para limpar contador de mensagens não lidas instantaneamente (Item 7)
+  // Helper para limpar contador de mensagens não lidas instantaneamente
   const clearUnread = (targetId) => {
     if (!targetId) return;
     setUnreadCounts((prev) => {
@@ -372,7 +515,6 @@ export default function App() {
         delete next[`c-${targetId}`];
         delete next[`#${targetId}`];
       }
-      // Limpa também chaves compostas vinculadas (ex: dm-u1-u9, u9)
       Object.keys(next).forEach((k) => {
         if (k === targetId || k.includes(`-${targetId}`) || k.includes(`${targetId}-`)) {
           delete next[k];
@@ -399,10 +541,10 @@ export default function App() {
     stopTaskbarBlink();
   };
 
-  // Helper para marcar mensagens da conversa ativa como lidas no banco e no estado (Item 3)
+  // Helper para marcar mensagens da conversa ativa como lidas no banco e no estado
   const markMessagesAsRead = (chat) => {
     if (!chat) return;
-    const currentUserId = currentUserRef.current?.id || currentUser.id;
+    const currentUserId = currentUserRef.current?.id || 'u1';
     const cKey = getChatKey(chat, currentUserId);
     clearUnread(chat.id);
 
@@ -421,7 +563,6 @@ export default function App() {
 
       if (!hasUnread) return prev;
 
-      // Dispara atualização assíncrona no Supabase para que o remetente receba os dois checks azuis
       supabase
         .from('messages')
         .select('id, text')
@@ -443,103 +584,60 @@ export default function App() {
     });
   };
 
-  // Sincroniza limpeza de notificação e carregamento imediato ao alternar de chat (Item 1 & 7)
+  // Ao trocar de conversa ativa: limpa não lidas e hidrata anexos pesados apenas da conversa aberta (Regra 4)
+  // IMPORTANTE: Depende apenas de [activeChat?.id, activeChat?.type] para jamais gerar loop de renderização!
   useEffect(() => {
-    if (activeChat?.id) {
-      clearUnread(activeChat.id);
-      markMessagesAsRead(activeChat);
+    if (!activeChat?.id) return;
 
-      const targetChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
-      const rawId = activeChat.id;
+    clearUnread(activeChat.id);
+    markMessagesAsRead(activeChat);
 
-      // Se o chat ativo não possui mensagens no estado local, busca do Supabase para evitar chat vazio
-      if (!messages[targetChatKey] || messages[targetChatKey].length === 0) {
-        supabase
-          .from('messages')
-          .select('*')
-          .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
-          .order('created_at', { ascending: true })
-          .then(({ data: fetchedDbMessages }) => {
-            if (fetchedDbMessages && fetchedDbMessages.length > 0) {
-              const parsedList = fetchedDbMessages.map((m) => {
-                let cleanText = m.text || '';
-                let parsedAttachment = null;
-                let linkedTaskId = null;
-                let parsedReplyTo = null;
-                let isAudio = false;
-                let audioUrl = null;
-                let audioTranscription = null;
-                let duration = '0:14';
+    const activeUserId = currentUserRef.current?.id || 'u1';
+    const targetChatKey = getChatKey(activeChat, activeUserId);
+    const rawId = activeChat.id;
 
-                if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-                  const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
-                  if (extracted) parsedAttachment = extracted;
-                  cleanText = sanitized;
-                }
-                if (cleanText.includes('<!-- AUDIO_URL:')) {
-                  const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
-                  if (match) {
-                    audioUrl = match[1].trim();
-                    cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
-                  }
-                }
-                if (cleanText.includes('<!-- IS_AUDIO:true -->') || cleanText.includes('🎙️')) {
-                  isAudio = true;
-                }
-                if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
-                  const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
-                  if (match) audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
-                  isAudio = true;
-                }
-                if (parsedAttachment?.type?.startsWith('audio/') || parsedAttachment?.isAudio) {
-                  isAudio = true;
-                  if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
-                }
+    supabase
+      .from('messages')
+      .select('*')
+      .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
+      .order('created_at', { ascending: true })
+      .then(({ data: fetchedDbMessages }) => {
+        if (fetchedDbMessages && fetchedDbMessages.length > 0) {
+          const parsedList = fetchedDbMessages.map((m) =>
+            parseDatabaseMessage(m, { stripHeavyAttachments: false })
+          );
 
-                return {
-                  id: m.id,
-                  senderId: m.sender_id,
-                  senderName: m.sender_name,
-                  text: cleanText,
-                  timestamp: getSaoPauloTime(m.created_at || m.timestamp),
-                  attachment: parsedAttachment,
-                  replyTo: parsedReplyTo,
-                  status: 'read',
-                  taskId: linkedTaskId,
-                  actionExtracted: false,
-                  isAudio: isAudio || !!audioUrl,
-                  audioUrl,
-                  audioTranscription,
-                  duration
-                };
-              });
-
-              setMessages((prev) => ({
-                ...prev,
-                [targetChatKey]: parsedList
-              }));
-            }
+          setMessages((prevMessages) => {
+            const existing = prevMessages[targetChatKey] || [];
+            const fetchedIds = new Set(parsedList.map((m) => m.id));
+            // Preserva mensagens otimistas/tempo real que ainda não vieram no select
+            const optimisticOnly = existing.filter((m) => !fetchedIds.has(m.id));
+            return {
+              ...prevMessages,
+              [targetChatKey]: [...parsedList, ...optimisticOnly]
+            };
           });
-      }
-    }
-  }, [activeChat?.id, currentMessages?.length]);
+        }
+      });
+  }, [activeChat?.id, activeChat?.type]);
 
-  // Limpa notificações fantasmas quando a janela/aba do navegador ganha foco (Item 7)
+  // Limpa notificações quando a janela/aba do navegador ganha foco
   useEffect(() => {
     const handleWindowFocus = () => {
-      if (activeChat?.id) {
-        clearUnread(activeChat.id);
-        markMessagesAsRead(activeChat);
+      if (activeChatRef.current?.id) {
+        clearUnread(activeChatRef.current.id);
+        markMessagesAsRead(activeChatRef.current);
       }
     };
     window.addEventListener('focus', handleWindowFocus);
     return () => window.removeEventListener('focus', handleWindowFocus);
-  }, [activeChat]);
+  }, []);
 
-  // Helper para processar mensagem recebida, disparar som e piscar barra do Windows (Item 1, 4 e 7)
+  // Helper para processar mensagem recebida, disparar som Web Audio API e atualizar contadores
   const handleIncomingNotification = (msg, cKey) => {
-    const currentUserId = currentUserRef.current?.id || currentUser.id;
-    if (msg.senderId === currentUserId) return;
+    const activeUser = currentUserRef.current || currentUser;
+    const currentUserId = activeUser?.id || 'u1';
+    if (msg.senderId === currentUserId || msg.senderId === 'system') return;
 
     // Trava de Privacidade: Se for conversa privada 1 a 1 (DM), só notifica os dois participantes
     if (cKey.startsWith('dm-')) {
@@ -547,32 +645,27 @@ export default function App() {
       if (parts.length >= 2) {
         const id1 = parts[0];
         const id2 = parts[1];
-        if (currentUserId !== id1 && currentUserId !== id2 && (currentUserRef.current?.roleType || currentUser.roleType) !== 'diretor') {
-          return; // Conversa confidencial de terceiros
+        if (currentUserId !== id1 && currentUserId !== id2 && activeUser?.roleType !== 'diretor') {
+          return;
         }
       }
     }
 
-    const currentKey = getChatKey(activeChatRef.current, currentUserId);
-    const isCurrentActive = cKey === currentKey && !document.hidden;
+    // REGRA 3: Toca SEMPRE o alerta sonoro nativo (880Hz/1046Hz) quando chega um INSERT de mensagem recebida
+    playMessageSound();
 
-    // REQUISITO 1: Alerta sonoro SEMPRE que uma nova mensagem de WhatsApp chegar na plataforma
-    if (cKey.startsWith('wa-')) {
-      playMessageSound();
-    }
+    const currentKey = getChatKey(activeChatRef.current, currentUserId);
+    const isCurrentActive =
+      (cKey === currentKey || activeChatRef.current?.id === cKey) && !document.hidden;
 
     if (isCurrentActive) {
-      // Se a conversa já está visível e aberta, marca como lida imediatamente sem criar badge
       markMessagesAsRead(activeChatRef.current);
     } else {
-      // Identifica o identificador correto da badge (para DMs, o outro usuário; para canais, o ID do canal)
       let targetBadgeKey = cKey;
-      let notificationTitle = msg.senderName;
+      let notificationTitle = msg.senderName || 'Nova mensagem';
       if (cKey.startsWith('dm-')) {
         const parts = cKey.replace('dm-', '').split('-');
         targetBadgeKey = parts[0] === currentUserId ? parts[1] : parts[0];
-      } else if (cKey.startsWith('wa-')) {
-        targetBadgeKey = cKey;
       } else if (cKey.startsWith('c-')) {
         targetBadgeKey = cKey;
         const channelName = cKey.replace('c-', '');
@@ -580,7 +673,7 @@ export default function App() {
       }
 
       setUnreadCounts((prev) => {
-        const currentCount = prev[targetBadgeKey] || prev[cKey] || 0;
+        const currentCount = Number(prev[targetBadgeKey] || prev[cKey] || 0);
         const next = {
           ...prev,
           [targetBadgeKey]: currentCount + 1,
@@ -591,39 +684,37 @@ export default function App() {
         return next;
       });
 
-      // Toca áudio para canais/DMs inativos e faz a barra de tarefas do Windows piscar
-      if (!cKey.startsWith('wa-')) {
-        playMessageSound();
-      }
-      notifyIncomingMessage(notificationTitle, msg.text);
+      notifyIncomingMessage(notificationTitle, msg.text || 'Novo anexo/áudio recebido');
     }
   };
 
   // =========================================================================
-  // SUPABASE REALTIME & SINCRONIZAÇÃO A CADA 2 MINUTOS
+  // CARREGAMENTO INICIAL LEVE (SEM BASE64 PESADOS NAS CONVERSAS INATIVAS - REGRA 4)
   // =========================================================================
-  const fetchSupabaseData = async (silent = false) => {
+  const fetchSupabaseData = async () => {
     try {
+      const activeUser = currentUserRef.current || currentUser;
       const timeStr = getSaoPauloTime();
       setLastSyncTime(timeStr);
 
-      // 1. Mensagens
-      const isManager = hasFullPortfolioAccess(currentUser);
+      const isManager = hasFullPortfolioAccess(activeUser);
 
-      // Pre-carrega mapa de atribuições a partir do localStorage para correlação rápida
       const storedAssignments = {};
       try {
         const cached = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
         Object.assign(storedAssignments, cached);
       } catch {}
 
-      const { data: dbMessages, error: msgError } = await supabase
+      const { data: dbMessages } = await supabase
         .from('messages')
-        .select('*')
-        .order('created_at', { ascending: true });
+        .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+        .order('created_at', { ascending: true })
+        .limit(500);
 
       if (dbMessages && dbMessages.length > 0) {
-        // Pré-extrai tags de atribuição mais recentes para todas as mensagens recebidas
+        const dbStudents = [];
+        const dbCollaborators = [];
+
         dbMessages.forEach((m) => {
           if (m.chat_id?.startsWith('wa-') && m.text?.includes('<!-- ASSIGNMENT:')) {
             const match = m.text.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
@@ -632,21 +723,23 @@ export default function App() {
                 storedAssignments[m.chat_id] = JSON.parse(match[1]);
               } catch {}
             }
-          }
-        });
-
-        // Pré-extrai registros de alunos sincronizados do EduControl
-        const dbStudents = [];
-        dbMessages.forEach((m) => {
-          if (m.chat_id === 'sys_educontrol_students' && m.text?.includes('<!-- STUDENT_RECORD:')) {
+          } else if (m.chat_id === 'sys_educontrol_students' && m.text?.includes('<!-- STUDENT_RECORD:')) {
             const match = m.text.match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
             if (match) {
               try {
                 dbStudents.push(JSON.parse(match[1]));
               } catch {}
             }
+          } else if (m.chat_id === 'sys_collaborators' && m.text?.includes('<!-- COLLABORATOR_RECORD:')) {
+            const match = m.text.match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                dbCollaborators.push(JSON.parse(match[1]));
+              } catch {}
+            }
           }
         });
+
         if (dbStudents.length > 0) {
           setEduControlStudents((prev) => {
             const studentList = [...prev];
@@ -675,47 +768,6 @@ export default function App() {
           });
         }
 
-        // Pré-extrai registros de colaboradores persistidos no Supabase
-        const dbCollaborators = [];
-        dbMessages.forEach((m) => {
-          if (m.chat_id === 'sys_collaborators' && m.text?.includes('<!-- COLLABORATOR_RECORD:')) {
-            const match = m.text.match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
-            if (match) {
-              try {
-                dbCollaborators.push(JSON.parse(match[1]));
-              } catch {}
-            }
-          }
-        });
-
-        // Busca dedicada para sys_collaborators para garantir que nenhum usuário seja omitido por limite de paginação
-        try {
-          const { data: dedicatedCollabMessages } = await supabase
-            .from('messages')
-            .select('*')
-            .eq('chat_id', 'sys_collaborators')
-            .order('created_at', { ascending: true });
-
-          if (dedicatedCollabMessages && dedicatedCollabMessages.length > 0) {
-            dedicatedCollabMessages.forEach((m) => {
-              if (m.text?.includes('<!-- COLLABORATOR_RECORD:')) {
-                const match = m.text.match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
-                if (match) {
-                  try {
-                    const parsed = JSON.parse(match[1]);
-                    const alreadyExists = dbCollaborators.some((c) => c.id === parsed.id || (c.name && parsed.name && c.name.toLowerCase() === parsed.name.toLowerCase()));
-                    if (!alreadyExists) {
-                      dbCollaborators.push(parsed);
-                    }
-                  } catch {}
-                }
-              }
-            });
-          }
-        } catch (e) {
-          console.warn('Aviso ao consultar sys_collaborators dedicado:', e);
-        }
-
         if (dbCollaborators.length > 0) {
           setCollaborators((prev) => {
             const list = [...prev];
@@ -736,186 +788,50 @@ export default function App() {
           });
         }
 
+        const currentActiveKey = getChatKey(activeChatRef.current, activeUser.id);
         const grouped = {};
+        const unreadMap = {};
+
         dbMessages.forEach((m) => {
           if (m.chat_id === 'sys_educontrol_students' || m.chat_id === 'sys_collaborators') return;
-          const key = normalizeChatKey(m.chat_id, currentUser.id);
+          const key = normalizeChatKey(m.chat_id, activeUser.id);
 
-          // Trava de Privacidade no Carregamento: Não carregar DMs de terceiros (Item 4)
           if (key.startsWith('dm-')) {
             const parts = key.replace('dm-', '').split('-');
             if (parts.length >= 2) {
               const id1 = parts[0];
               const id2 = parts[1];
-              if (currentUser.id !== id1 && currentUser.id !== id2 && !isManager) {
+              if (activeUser.id !== id1 && activeUser.id !== id2 && !isManager) {
                 return;
               }
             }
           }
 
-          // ISOLAMENTO DE CARTEIRA SUPABASE (ITEM 1 E 3):
-          // Se for mensagem de WhatsApp e o usuário for consultor, NÃO expor nem carregar no estado local
-          // conversas que pertençam a outro consultor ou leads não atribuídos a ele.
-          if (key.startsWith('wa-') && !isManager) {
-            const asgn = storedAssignments[key];
-            const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === key);
-            const assignee = asgn?.assignee || initialContact?.assignee || '';
-            if (!isChatAssignedToUser(assignee, currentUser)) {
-              return; // Descarta mensagem da carteira alheia
-            }
-          }
-
           if (!grouped[key]) grouped[key] = [];
 
-          let cleanText = m.text || '';
-          let parsedAttachment = null;
-          let linkedTaskId = null;
-          let parsedReplyTo = null;
-          let parsedStatus = 'sent';
-          let isAudio = false;
-          let audioUrl = null;
-          let audioTranscription = null;
-          let duration = '0:14';
+          // REGRA 4: Não carrega Base64 pesados nas conversas inativas da barra lateral
+          const isInactiveChat = key !== currentActiveKey;
+          const parsedMsg = parseDatabaseMessage(m, { stripHeavyAttachments: isInactiveChat });
+          grouped[key].push(parsedMsg);
 
-          if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
-            if (extracted) {
-              parsedAttachment = extracted;
-            }
-            cleanText = sanitized;
-          }
-
-          if (cleanText.includes('<!-- AUDIO_URL:')) {
-            const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
-            if (match) {
-              audioUrl = match[1].trim();
-              cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
-            }
-          }
-
-          if (cleanText.includes('<!-- IS_AUDIO:true -->')) {
-            isAudio = true;
-            cleanText = cleanText.replace(/<!-- IS_AUDIO:true -->/, '').trim();
-          }
-
-          if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
-            const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
-            if (match) {
-              audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
-            }
-            isAudio = true;
-          }
-
-          if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
-            isAudio = true;
-            const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
-            if (durMatch) duration = durMatch[1];
-          }
-
-          if (parsedAttachment) {
-            if (
-              parsedAttachment.type?.startsWith('audio/') ||
-              parsedAttachment.isAudio ||
-              parsedAttachment.name?.toLowerCase().includes('audio') ||
-              /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
-            ) {
-              isAudio = true;
-              if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
-              if (parsedAttachment.duration) duration = parsedAttachment.duration;
-            }
-          }
-
-          if (cleanText.includes('<!-- REPLY_TO:')) {
-            const match = cleanText.match(/<!-- REPLY_TO:([\s\S]+?) -->/);
-            if (match) {
-              try {
-                parsedReplyTo = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/<!-- REPLY_TO:[\s\S]+? -->/, '').trim();
-              } catch {}
-            }
-          }
-
-          if (cleanText.includes('<!-- STATUS:')) {
-            const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
-            if (match) {
-              parsedStatus = match[1];
-              cleanText = cleanText.replace(/<!-- STATUS:[^\s>]+ -->/, '').trim();
-            }
-          }
-
-          if (cleanText.includes('<!-- TASK_ID:')) {
-            const match = cleanText.match(/<!-- TASK_ID:([^\s>]+) -->/);
-            if (match) {
-              linkedTaskId = match[1];
-              cleanText = cleanText.replace(/<!-- TASK_ID:[^\s>]+ -->/, '').trim();
-            }
-          }
-
-          grouped[key].push({
-            id: m.id,
-            senderId: m.sender_id,
-            senderName: m.sender_name,
-            text: cleanText,
-            timestamp: getSaoPauloTime(m.created_at || m.timestamp),
-            attachment: parsedAttachment,
-            replyTo: parsedReplyTo,
-            status: parsedStatus,
-            taskId: linkedTaskId,
-            actionExtracted: false,
-            isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
-            audioUrl: audioUrl || parsedAttachment?.dataUrl || parsedAttachment?.url || null,
-            audioTranscription: audioTranscription || null,
-            duration: duration || parsedAttachment?.duration || '0:14'
-          });
-        });
-
-        // Limpa e sanitiza o estado de mensagens para que consultores não guardem chaves residuais
-        setMessages((prev) => {
-          const sanitized = {};
-          Object.keys(prev).forEach((k) => {
-            if (k.startsWith('c-')) {
-              sanitized[k] = prev[k];
-            } else if (k.startsWith('dm-')) {
-              const parts = k.replace('dm-', '').split('-');
-              if (isManager || parts.includes(currentUser.id)) {
-                sanitized[k] = prev[k];
-              }
-            } else if (k.startsWith('wa-')) {
-              if (isManager) {
-                sanitized[k] = prev[k];
-              } else {
-                const asgn = storedAssignments[k];
-                const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === k);
-                const assignee = asgn?.assignee || initialContact?.assignee || '';
-                if (isChatAssignedToUser(assignee, currentUser)) {
-                  sanitized[k] = prev[k];
-                }
-              }
-            }
-          });
-          return { ...sanitized, ...grouped };
-        });
-
-        // Calcula contadores de não lidas com base nas mensagens do banco
-        const currentActiveKey = getChatKey(activeChatRef.current, currentUser.id);
-        const unreadMap = {};
-        dbMessages.forEach((m) => {
-          if (m.chat_id === 'sys_educontrol_students' || m.chat_id === 'sys_collaborators') return;
-          const key = normalizeChatKey(m.chat_id, currentUser.id);
-
-          const isFromMe = m.sender_id === currentUser.id;
+          const isFromMe = m.sender_id === activeUser.id;
           const isRead = m.text?.includes('<!-- STATUS:read -->');
 
           if (!isFromMe && !isRead && key !== currentActiveKey) {
             let badgeKey = key;
             if (key.startsWith('dm-')) {
               const parts = key.replace('dm-', '').split('-');
-              badgeKey = parts[0] === currentUser.id ? parts[1] : parts[0];
+              badgeKey = parts[0] === activeUser.id ? parts[1] : parts[0];
             }
             unreadMap[badgeKey] = (unreadMap[badgeKey] || 0) + 1;
             unreadMap[key] = (unreadMap[key] || 0) + 1;
           }
         });
+
+        setMessages((prevMessages) => ({
+          ...prevMessages,
+          ...grouped
+        }));
 
         setUnreadCounts((prev) => {
           const merged = { ...prev, ...unreadMap };
@@ -938,23 +854,16 @@ export default function App() {
           })
         );
 
-        // Descoberta dinâmica e restauração de atribuições (Sticky Assignment) a partir do Supabase
         const waKeys = Object.keys(grouped).filter((k) => k.startsWith('wa-'));
 
         setWhatsAppContacts((prev) => {
-          // Se for consultor, purga contatos que não pertencem à sua carteira
-          const sourceContacts = isManager
-            ? prev
-            : prev.filter((c) => isChatAssignedToUser(c, currentUser));
-
-          const existingIds = new Set(sourceContacts.map((c) => c.id));
+          const existingIds = new Set(prev.map((c) => c.id));
           const newContacts = [];
 
-          // 1. Atualiza contatos existentes com as atribuições persistidas do Supabase
-          const updatedExisting = sourceContacts.map((c) => {
+          const updatedExisting = prev.map((c) => {
             const asgn = storedAssignments[c.id];
             const latestMsg = grouped[c.id]?.[grouped[c.id].length - 1];
-            const unreadCount = unreadMap[c.id] || c.unread_count || c.unread || 0;
+            const unreadCount = unreadMap[c.id] ?? c.unread_count ?? c.unread ?? 0;
             const primaryAssignee = asgn?.assignee || c.assignee;
             const allAssignees = asgn?.assignees || (asgn?.assignee ? [asgn.assignee] : c.assignees || [c.assignee]);
 
@@ -973,21 +882,14 @@ export default function App() {
               unread_count: unreadCount,
               unread: unreadCount
             };
-          }).filter((c) => isManager || isChatAssignedToUser(c, currentUser));
+          });
 
-          // 2. Adiciona novos contatos descobertos via Supabase aplicando atribuições salvas
           for (const waKey of waKeys) {
             if (!existingIds.has(waKey)) {
               const asgn = storedAssignments[waKey];
               const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
               const assignee = asgn?.assignee || initialContact?.assignee || 'Gabriel Carvalho';
               const assignees = asgn?.assignees || (assignee ? [assignee] : ['Gabriel Carvalho']);
-
-              // ISOLAMENTO: Só adiciona se for atribuído ao consultor ou se for gestor
-              if (!isManager && !isChatAssignedToUser({ assignee, assignees }, currentUser)) {
-                continue;
-              }
-
               const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
               const rawDigits = waKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
@@ -999,8 +901,8 @@ export default function App() {
                 phone: formattedPhone,
                 avatar: '👤',
                 department: asgn?.department || 'Comercial',
-                assignee: assignee,
-                assignees: assignees,
+                assignee,
+                assignees,
                 status: asgn?.status || 'ura_inedito',
                 statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
                 aiActive: false,
@@ -1016,7 +918,6 @@ export default function App() {
           }
 
           const combined = newContacts.length > 0 ? [...newContacts, ...updatedExisting] : updatedExisting;
-          // Ordena para que conversas com mensagens não lidas ou mais recentes fiquem no topo
           combined.sort((a, b) => {
             const unreadA = (a.unread_count || 0) > 0 ? 1 : 0;
             const unreadB = (b.unread_count || 0) > 0 ? 1 : 0;
@@ -1028,76 +929,62 @@ export default function App() {
       }
 
       // 2. Tarefas do Kanban
-      const { data: dbTasks, error: taskError } = await supabase
+      const { data: dbTasks } = await supabase
         .from('tasks')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (dbTasks && dbTasks.length > 0) {
-        setTasks(dbTasks.map((t) => {
-          let reqName = t.requester || '';
-          let reqDept = t.requester_dept || '';
-          if (!reqName && t.source_message && t.source_message.includes('Solicitado por:')) {
-            const match = t.source_message.match(/Solicitado por:\s*([^(•]+)\s*(?:\(([^)]+)\))?/);
-            if (match) {
-              reqName = match[1].trim();
-              reqDept = match[2]?.trim() || '';
+        setTasks(
+          dbTasks.map((t) => {
+            let reqName = t.requester || '';
+            let reqDept = t.requester_dept || '';
+            if (!reqName && t.source_message && t.source_message.includes('Solicitado por:')) {
+              const match = t.source_message.match(/Solicitado por:\s*([^(•]+)\s*(?:\(([^)]+)\))?/);
+              if (match) {
+                reqName = match[1].trim();
+                reqDept = match[2]?.trim() || '';
+              }
             }
-          }
 
-          let cleanDesc = t.description || '';
-          let comments = [];
-          let attachments = [];
-          if (cleanDesc.includes('<!-- TASK_META:')) {
-            const match = cleanDesc.match(/<!-- TASK_META:([\s\S]+?) -->/);
-            if (match) {
-              try {
-                const meta = JSON.parse(match[1]);
-                comments = meta.comments || [];
-                attachments = meta.attachments || [];
-                cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]+? -->/, '').trim();
-              } catch {}
+            let cleanDesc = t.description || '';
+            let comments = [];
+            let attachments = [];
+            if (cleanDesc.includes('<!-- TASK_META:')) {
+              const match = cleanDesc.match(/<!-- TASK_META:([\s\S]+?) -->/);
+              if (match) {
+                try {
+                  const meta = JSON.parse(match[1]);
+                  comments = meta.comments || [];
+                  attachments = meta.attachments || [];
+                  cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]+? -->/, '').trim();
+                } catch {}
+              }
             }
-          }
 
-          return {
-            id: t.id,
-            title: t.title,
-            desc: cleanDesc,
-            status: t.status,
-            priority: t.priority,
-            isVip: t.is_vip,
-            assignee: t.assignee,
-            assigneeAvatar: t.assignee_avatar || '👤',
-            department: t.department || 'Geral',
-            dueDate: t.due_date,
-            channel: t.channel,
-            sourceMessage: t.source_message,
-            requester: reqName,
-            requesterDept: reqDept,
-            comments,
-            attachments
-          };
-        }));
+            return {
+              id: t.id,
+              title: t.title,
+              desc: cleanDesc,
+              status: t.status,
+              priority: t.priority,
+              isVip: t.is_vip,
+              assignee: t.assignee,
+              assigneeAvatar: t.assignee_avatar || '👤',
+              department: t.department || 'Geral',
+              dueDate: t.due_date,
+              channel: t.channel,
+              sourceMessage: t.source_message,
+              requester: reqName,
+              requesterDept: reqDept,
+              comments,
+              attachments
+            };
+          })
+        );
       }
 
-      // 3. Canais (sincroniza com Supabase se tabela 'channels' existir)
-      try {
-        const { data: dbChannels, error: chErr } = await supabase.from('channels').select('*');
-        if (!chErr && dbChannels && Array.isArray(dbChannels) && dbChannels.length > 0) {
-          setChannels(dbChannels.map((c) => ({
-            id: c.id,
-            name: c.name || 'geral',
-            desc: c.desc || c.description || '',
-            department: c.department || 'Todos',
-            unread: 0
-          })));
-        }
-      } catch (err) {
-        // Tabela channels ainda não criada ou RLS; mantém INITIAL_CHANNELS
-      }
-
-      // 4. Colaboradores / Perfis (sincroniza com Supabase se tabela 'profiles' existir)
+      // 3. Colaboradores / Perfis
       try {
         const { data: dbProfiles, error: profErr } = await supabase.from('profiles').select('*');
         if (!profErr && dbProfiles && Array.isArray(dbProfiles) && dbProfiles.length > 0) {
@@ -1111,7 +998,7 @@ export default function App() {
                 role: p.role || 'Colaborador',
                 roleType: p.role_type || (p.role === 'admin' || p.role === 'diretor' ? 'diretor' : 'colaborador'),
                 avatar: p.avatar || '👤',
-                online: p.is_bot ? true : (p.online === true),
+                online: p.is_bot ? true : p.online === true,
                 lastSeen: p.last_seen || null,
                 department: p.department || 'Comercial',
                 isBot: p.is_bot || false
@@ -1131,26 +1018,60 @@ export default function App() {
             return list;
           });
         }
-      } catch (err) {
-        // Tabela profiles ainda não criada ou RLS; mantém INITIAL_COLLABORATORS
-      }
+      } catch {}
     } catch (err) {
       console.warn('Erro ao sincronizar dados com Supabase:', err);
     }
   };
 
+  // =========================================================================
+  // REGRA 1 & 2: CONEXÃO ÚNICA E ESTÁVEL DO SUPABASE REALTIME (SEM STALE CLOSURES)
+  // =========================================================================
   useEffect(() => {
-    fetchSupabaseData(false);
+    fetchSupabaseData();
 
-    const channelListener = supabase
-      .channel('educhat_realtime_channel')
+    const initialUser = currentUserRef.current;
+    if (initialUser?.id) {
+      const initialHb = saveLocalHeartbeat(initialUser.id);
+      setHeartbeats(initialHb);
+    }
+
+    const channel = supabase.channel('educhat_global_realtime', {
+      config: {
+        presence: {
+          key: initialUser?.id || 'u1'
+        }
+      }
+    });
+
+    const syncPresence = () => {
+      try {
+        const state = channel.presenceState();
+        const activeIds = new Set();
+        Object.keys(state).forEach((key) => {
+          activeIds.add(key);
+          const presences = state[key] || [];
+          presences.forEach((p) => {
+            if (p.userId) activeIds.add(p.userId);
+            if (p.email) activeIds.add(p.email);
+          });
+        });
+        if (currentUserRef.current?.id) {
+          activeIds.add(currentUserRef.current.id);
+        }
+        setOnlineUserIds(activeIds);
+      } catch {}
+    };
+
+    channel
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
+          if (!row) return;
 
-          // Sincronização em Tempo Real da Base de Alunos do EduControl
+          // Registros de sistema (Alunos EduControl)
           if (row.chat_id === 'sys_educontrol_students') {
             const match = (row.text || '').match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
             if (match) {
@@ -1184,7 +1105,7 @@ export default function App() {
             return;
           }
 
-          // Sincronização em Tempo Real de Novos Colaboradores
+          // Registros de sistema (Colaboradores)
           if (row.chat_id === 'sys_collaborators') {
             const match = (row.text || '').match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
             if (match) {
@@ -1210,206 +1131,87 @@ export default function App() {
             return;
           }
 
-          const cKey = normalizeChatKey(row.chat_id, currentUser.id);
+          const activeUser = currentUserRef.current || { id: 'u1', roleType: 'diretor' };
+          const currentUserId = activeUser.id || 'u1';
+          const cKey = normalizeChatKey(row.chat_id, currentUserId);
 
-          // Trava de Privacidade Realtime: Se for DM, só processa se o usuário for participante (Item 4)
+          // Trava de privacidade apenas para DMs 1-a-1 de terceiros
           if (cKey.startsWith('dm-')) {
             const parts = cKey.replace('dm-', '').split('-');
             if (parts.length >= 2) {
               const id1 = parts[0];
               const id2 = parts[1];
-              if (currentUser.id !== id1 && currentUser.id !== id2 && currentUser.roleType !== 'diretor') {
-                return; // Conversa privada de terceiros
+              if (currentUserId !== id1 && currentUserId !== id2 && activeUser.roleType !== 'diretor') {
+                return;
               }
             }
           }
 
-          // Verificação de Canais para Usuários Não-Diretores (Item 4)
-          if (cKey.startsWith('c-')) {
-            const ch = channels.find((c) => c.id === cKey);
-            const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-            if (ch && ch.department !== 'Todos' && norm(ch.department) !== norm(currentUser.department) && !hasFullPortfolioAccess(currentUser)) {
-              return; // Canal restrito de outro departamento
-            }
-          }
+          const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
 
-          // ISOLAMENTO DE CARTEIRA REALTIME (ITEM 1 E 3):
-          // Se for mensagem de WhatsApp e o usuário logado for consultor, verifica se pertence estritamente à sua carteira
-          if (cKey.startsWith('wa-') && !hasFullPortfolioAccess(currentUser)) {
-            // Verifica se a mensagem contém nova tag de atribuição manual em tempo real
-            const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
-            let realtimeAsgn = null;
-            if (asgnMatch) {
-              try {
-                realtimeAsgn = JSON.parse(asgnMatch[1]);
-              } catch {}
-            }
+          const currentActiveKey = getChatKey(activeChatRef.current, currentUserId);
+          const isCurrentActive =
+            (cKey === currentActiveKey || activeChatRef.current?.id === cKey || activeChatRef.current?.id === row.chat_id) &&
+            !document.hidden;
 
-            const cachedAsgn = assignmentsCacheRef.current[cKey] || null;
-
-            const existingContact = whatsAppContacts.find((c) => c.id === cKey);
-            const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === cKey);
-            const targetAssignee = realtimeAsgn?.assignee || existingContact?.assignee || cachedAsgn?.assignee || initialContact?.assignee || '';
-
-            if (!isChatAssignedToUser(targetAssignee, currentUser)) {
-              // Se foi reatribuído para outro consultor, remove da tela do consultor atual
-              setWhatsAppContacts((prev) => prev.filter((c) => c.id !== cKey));
-              setMessages((prev) => {
-                if (!prev[cKey]) return prev;
-                const next = { ...prev };
-                delete next[cKey];
-                return next;
-              });
-              return; // Descarta: conversa da carteira de outro consultor ou lead não atribuído
-            }
-          }
-
-          let cleanText = row.text || '';
-          let parsedAttachment = null;
-          let linkedTaskId = null;
-          let parsedReplyTo = null;
-          let parsedStatus = 'sent';
-          let isAudio = false;
-          let audioUrl = null;
-          let audioTranscription = null;
-          let duration = '0:14';
-
-          if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
-            if (extracted) {
-              parsedAttachment = extracted;
-            }
-            cleanText = sanitized;
-          }
-
-          if (cleanText.includes('<!-- AUDIO_URL:')) {
-            const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
-            if (match) {
-              audioUrl = match[1].trim();
-              cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
-            }
-          }
-
-          if (cleanText.includes('<!-- IS_AUDIO:true -->')) {
-            isAudio = true;
-            cleanText = cleanText.replace(/<!-- IS_AUDIO:true -->/, '').trim();
-          }
-
-          if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
-            const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
-            if (match) {
-              audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
-            }
-            isAudio = true;
-          }
-
-          if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
-            isAudio = true;
-            const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
-            if (durMatch) duration = durMatch[1];
-          }
-
-          if (parsedAttachment) {
-            if (
-              parsedAttachment.type?.startsWith('audio/') ||
-              parsedAttachment.isAudio ||
-              parsedAttachment.name?.toLowerCase().includes('audio') ||
-              /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
-            ) {
-              isAudio = true;
-              if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
-              if (parsedAttachment.duration) duration = parsedAttachment.duration;
-            }
-          }
-
-          if (cleanText.includes('<!-- REPLY_TO:')) {
-            const match = cleanText.match(/<!-- REPLY_TO:([\s\S]+?) -->/);
-            if (match) {
-              try {
-                parsedReplyTo = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/<!-- REPLY_TO:[\s\S]+? -->/, '').trim();
-              } catch {}
-            }
-          }
-
-          if (cleanText.includes('<!-- STATUS:')) {
-            const match = cleanText.match(/<!-- STATUS:([^\s>]+) -->/);
-            if (match) {
-              parsedStatus = match[1];
-              cleanText = cleanText.replace(/<!-- STATUS:[^\s>]+ -->/, '').trim();
-            }
-          }
-
-          if (cleanText.includes('<!-- TASK_ID:')) {
-            const match = cleanText.match(/<!-- TASK_ID:([^\s>]+) -->/);
-            if (match) {
-              linkedTaskId = match[1];
-              cleanText = cleanText.replace(/<!-- TASK_ID:[^\s>]+ -->/, '').trim();
-            }
-          }
-
-          const incoming = {
-            id: row.id,
-            senderId: row.sender_id,
-            senderName: row.sender_name,
-            text: cleanText,
-            timestamp: getSaoPauloTime(row.created_at || row.timestamp),
-            attachment: parsedAttachment,
-            replyTo: parsedReplyTo,
-            status: parsedStatus,
-            taskId: linkedTaskId,
-            actionExtracted: false,
-            isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
-            audioUrl: audioUrl || parsedAttachment?.dataUrl || parsedAttachment?.url || null,
-            audioTranscription: audioTranscription || null,
-            duration: duration || parsedAttachment?.duration || '0:14'
-          };
-
-          setMessages((prev) => {
-            const list = prev[cKey] || [];
-            if (list.some((m) => m.id === incoming.id)) return prev;
+          // REGRA 2: Atualização FUNCIONAL IMEDIATA (0ms) de setMessages (Sem Stale Closure!)
+          setMessages((prevMessages) => {
+            const prevList = prevMessages[cKey] || [];
+            if (prevList.some((m) => m.id === incoming.id)) return prevMessages;
             return {
-              ...prev,
-              [cKey]: [...list, incoming]
+              ...prevMessages,
+              [cKey]: [...prevList, incoming]
             };
           });
 
-          const currentUserId = currentUserRef.current?.id || currentUser.id;
-          const currentActiveKey = getChatKey(activeChatRef.current, currentUserId);
-          const isCurrentActive = cKey === currentActiveKey && !document.hidden;
-
-          // Se for mensagem de contato WhatsApp (wa-), adiciona ou atualiza o contato na lista lateral
-          // e MOVA A CONVERSA IMEDIATAMENTE PARA O TOPO DA LISTA (Item 1 & Requisito do Usuário)
+          // Se for contato WhatsApp: sobe para o topo da lista e soma +1 em unread_count se não estiver aberta
           if (cKey.startsWith('wa-')) {
-            // Verifica se a mensagem contém tag de atribuição manual em tempo real
-            const asgnMatch = incoming.text?.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
+            const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
             let asgnData = null;
             if (asgnMatch) {
               try {
                 asgnData = JSON.parse(asgnMatch[1]);
                 assignmentsCacheRef.current[cKey] = asgnData;
-                setTimeout(() => {
-                  try {
-                    const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-                    stored[cKey] = asgnData;
-                    localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
-                  } catch {}
-                }, 0);
+                const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+                stored[cKey] = asgnData;
+                localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
               } catch {}
             }
 
-            setWhatsAppContacts((prev) => {
-              const existing = prev.find((c) => c.id === cKey);
+            setWhatsAppContacts((prevContacts) => {
+              const existingIdx = prevContacts.findIndex((c) => {
+                if (c.id === cKey) return true;
+                const cDigits = (c.phone || '').replace(/\D/g, '');
+                const kDigits = cKey.replace(/\D/g, '');
+                return cDigits.length >= 10 && cDigits === kDigits;
+              });
+
               let updatedContact;
 
-              if (existing) {
-                const currentUnread = existing.unread_count || existing.unread || 0;
-                const nextUnread = isCurrentActive ? 0 : currentUnread + 1;
+              if (existingIdx !== -1) {
+                const existing = prevContacts[existingIdx];
+                const isOpenContact =
+                  (isCurrentActive || activeChatRef.current?.id === existing.id) && !document.hidden;
+                const currentUnread = Number(existing.unread_count ?? existing.unread ?? 0);
+                const nextUnread = isOpenContact ? 0 : currentUnread + 1;
+
+                // Se o contato usa um ID de slug (ex: wa-lucas-mendes) diferente de cKey, espelha a mensagem em 0ms
+                if (existing.id !== cKey) {
+                  setMessages((prevMessages) => {
+                    const aliasList = prevMessages[existing.id] || [];
+                    if (aliasList.some((m) => m.id === incoming.id)) return prevMessages;
+                    return {
+                      ...prevMessages,
+                      [existing.id]: [...aliasList, incoming]
+                    };
+                  });
+                }
 
                 updatedContact = {
                   ...existing,
                   department: asgnData?.department || existing.department,
                   assignee: asgnData?.assignee || existing.assignee,
+                  assignees: asgnData?.assignees || existing.assignees || [asgnData?.assignee || existing.assignee].filter(Boolean),
                   status: asgnData?.status || existing.status,
                   statusLabel: asgnData?.statusLabel || existing.statusLabel,
                   triageContext: asgnData?.updatedBy
@@ -1420,14 +1222,14 @@ export default function App() {
                   unread_count: nextUnread,
                   unread: nextUnread
                 };
+
+                const remaining = prevContacts.filter((_, idx) => idx !== existingIdx);
+                return [updatedContact, ...remaining];
               } else {
-                // Novo contato descoberto via Realtime
                 const rawDigits = cKey.replace('wa-', '');
                 const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
-
                 const cachedAsgn = assignmentsCacheRef.current[cKey] || null;
-
-                const matchedStudent = matchStudentByPhone(cKey, eduControlStudents);
+                const matchedStudent = matchStudentByPhone(cKey, eduControlStudentsRef.current);
 
                 const finalName = matchedStudent?.name || incoming.senderName || `WhatsApp (${formattedPhone})`;
                 const finalAvatar = matchedStudent ? '🎓' : '👤';
@@ -1439,11 +1241,6 @@ export default function App() {
                 const finalStatusLabel = matchedStudent
                   ? `${matchedStudent.academicStatus} • ${matchedStudent.course}`
                   : (asgnData?.statusLabel || cachedAsgn?.statusLabel || 'Lead WhatsApp');
-                const finalContext = matchedStudent
-                  ? `Aluno ${matchedStudent.academicStatus} (${matchedStudent.course} • ${matchedStudent.polo}) • Matrícula ${matchedStudent.matricula}`
-                  : (asgnData || cachedAsgn)
-                  ? `Permanência de Carteira ativa (${finalAssignee} • ${finalDept})`
-                  : 'Mensagem recebida via WhatsApp.';
 
                 updatedContact = {
                   id: cKey,
@@ -1452,29 +1249,28 @@ export default function App() {
                   avatar: finalAvatar,
                   department: finalDept,
                   assignee: finalAssignee,
+                  assignees: [finalAssignee],
                   status: finalStatus,
                   statusLabel: finalStatusLabel,
                   aiActive: false,
                   lastInteraction: incoming.timestamp || 'Agora',
                   lastMessageAt: new Date().toISOString(),
-                  triageContext: finalContext,
+                  triageContext: 'Mensagem recebida via WhatsApp.',
                   unread_count: isCurrentActive ? 0 : 1,
                   unread: isCurrentActive ? 0 : 1
                 };
-              }
 
-              // REQUISITO: Move imediatamente a conversa para o topo da lista
-              const remaining = prev.filter((c) => c.id !== cKey);
-              return [updatedContact, ...remaining];
+                return [updatedContact, ...prevContacts];
+              }
             });
           }
 
-          // Se for canal interno, atualiza o contador de mensagens não lidas
+          // Se for canal interno, atualiza o contador de não lidas funcionalmente
           if (cKey.startsWith('c-')) {
-            setChannels((prev) =>
-              prev.map((c) => {
+            setChannels((prevChannels) =>
+              prevChannels.map((c) => {
                 if (c.id === cKey || c.name === cKey.replace('c-', '')) {
-                  const currentUnread = c.unread_count || c.unread || 0;
+                  const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
                   const nextUnread = isCurrentActive ? 0 : currentUnread + 1;
                   return { ...c, unread: nextUnread, unread_count: nextUnread };
                 }
@@ -1483,14 +1279,15 @@ export default function App() {
             );
           }
 
+          // Dispara alerta sonoro (880Hz/1046Hz) e badge se não foi enviada pelo próprio usuário
           handleIncomingNotification(incoming, cKey);
 
-          // GATILHO INTELIGENTE DE RESPOSTA AUTOMÁTICA VIA SUPABASE REALTIME (URA & GEMINI AI)
+          // Resposta automática URA / Gemini AI quando aplicável
           if (
             cKey.startsWith('wa-') &&
             row.sender_id !== currentUserId &&
             row.sender_id !== 'system' &&
-            !row.sender_id.startsWith('bot') &&
+            !String(row.sender_id || '').startsWith('bot') &&
             row.sender_id !== 'u_ia_copilot' &&
             !document.hidden
           ) {
@@ -1498,12 +1295,15 @@ export default function App() {
               const contact = prevContacts.find((c) => c.id === cKey);
               if (!contact) return prevContacts;
 
-              // 1. Resposta de URA / Seleção de Departamento
               if (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao') {
-                const triageResult = processTriageResponse(incoming.text, contact.status, channels, collaborators);
+                const triageResult = processTriageResponse(
+                  incoming.text,
+                  contact.status,
+                  channelsRef.current,
+                  collaboratorsRef.current
+                );
                 if (triageResult) {
                   setTimeout(() => {
-                    // Atualiza contato para Carteira Ativa na fila correspondente
                     setWhatsAppContacts((list) =>
                       list.map((c) =>
                         c.id === cKey
@@ -1542,29 +1342,26 @@ export default function App() {
                       sender_name: botReply.senderName,
                       text: botReply.text,
                       timestamp: botReply.timestamp
-                    }]).then(({ error }) => {
-                      if (error) console.warn('Erro ao salvar resposta de URA:', error);
-                    });
+                    }]);
                   }, 500);
 
                   return prevContacts;
                 }
               }
 
-              // 2. Diálogo Contínuo com Google Gemini AI (RAG de Memorandos e Regras)
               if (contact.aiActive) {
                 setTimeout(async () => {
                   try {
-                    const matchedStudent = matchStudentByPhone(cKey, eduControlStudents);
-                    const history = (messages[cKey] || []).slice(-10);
+                    const matchedStudent = matchStudentByPhone(cKey, eduControlStudentsRef.current);
+                    const history = (messagesRef.current[cKey] || []).slice(-10);
                     const reply = await generateGeminiChatReply({
                       message: incoming.text,
                       history,
                       student: matchedStudent,
-                      learnedDocuments,
+                      learnedDocuments: learnedDocumentsRef.current,
                       pops: [],
                       slas: INITIAL_SLAS,
-                      customPrompt: customAIPrompt,
+                      customPrompt: customAIPromptRef.current,
                       department: contact.department || 'Geral',
                       userName: incoming.senderName || contact.name
                     });
@@ -1591,11 +1388,7 @@ export default function App() {
                       sender_name: geminiMsg.senderName,
                       text: geminiMsg.text,
                       timestamp: geminiMsg.timestamp
-                    }]).then(({ error }) => {
-                      if (error) console.warn('Erro ao persistir resposta Gemini Realtime:', error);
-                    });
-
-                    playMessageSound();
+                    }]);
                   } catch (e) {
                     console.warn('Erro ao gerar resposta Gemini Realtime:', e);
                   }
@@ -1614,7 +1407,6 @@ export default function App() {
           const row = payload.new;
           if (!row) return;
 
-          // Sincronização em Tempo Real de Novos Colaboradores / Atualizações (UPDATE)
           if (row.chat_id === 'sys_collaborators') {
             const match = (row.text || '').match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
             if (match) {
@@ -1640,7 +1432,6 @@ export default function App() {
             return;
           }
 
-          // Sincronização em Tempo Real da Base de Alunos (UPDATE)
           if (row.chat_id === 'sys_educontrol_students') {
             const match = (row.text || '').match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
             if (match) {
@@ -1668,7 +1459,8 @@ export default function App() {
             return;
           }
 
-          const cKey = normalizeChatKey(row.chat_id, currentUser.id);
+          const currentUserId = currentUserRef.current?.id || 'u1';
+          const cKey = normalizeChatKey(row.chat_id, currentUserId);
 
           let cleanText = row.text || '';
           let parsedStatus = 'sent';
@@ -1677,13 +1469,33 @@ export default function App() {
             if (match) parsedStatus = match[1];
           }
 
-          setMessages((prev) => {
-            const list = prev[cKey];
-            if (!list) return prev;
+          setMessages((prevMessages) => {
+            const list = prevMessages[cKey];
+            if (!list) return prevMessages;
             return {
-              ...prev,
+              ...prevMessages,
               [cKey]: list.map((m) => (m.id === row.id ? { ...m, status: parsedStatus } : m))
             };
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'messages' },
+        (payload) => {
+          const deletedId = payload.old?.id;
+          if (!deletedId) return;
+
+          setMessages((prevMessages) => {
+            const next = { ...prevMessages };
+            let changed = false;
+            Object.keys(next).forEach((key) => {
+              if (next[key]?.some((m) => m.id === deletedId)) {
+                next[key] = next[key].filter((m) => m.id !== deletedId);
+                changed = true;
+              }
+            });
+            return changed ? next : prevMessages;
           });
         }
       )
@@ -1700,7 +1512,7 @@ export default function App() {
             role: row.role || 'Colaborador',
             roleType: row.role_type || (row.role === 'admin' || row.role === 'diretor' ? 'diretor' : 'colaborador'),
             avatar: row.avatar || '👤',
-            online: row.is_bot ? true : (row.online === true),
+            online: row.is_bot ? true : row.online === true,
             lastSeen: row.last_seen || null,
             department: row.department || 'Comercial',
             isBot: row.is_bot || false
@@ -1724,66 +1536,11 @@ export default function App() {
       )
       .on(
         'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'messages' },
-        (payload) => {
-          const deletedId = payload.old?.id;
-          if (!deletedId) return;
-
-          setMessages((prev) => {
-            const next = { ...prev };
-            let changed = false;
-            Object.keys(next).forEach((key) => {
-              if (next[key]?.some((m) => m.id === deletedId)) {
-                next[key] = next[key].filter((m) => m.id !== deletedId);
-                changed = true;
-              }
-            });
-            return changed ? next : prev;
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'notifications' },
-        (payload) => {
-          const notif = payload.new;
-          if (!notif) return;
-
-          // Se a notificação for destinada ao usuário atual (ou legado recipient_id)
-          const isForMe = notif.user_id === currentUser.id || notif.recipient_id === currentUser.id;
-          const isNotFromMe = notif.sender_id !== currentUser.id;
-
-          if (isForMe && isNotFromMe) {
-            const rawChat = notif.chat_id || 'c-geral';
-            const cKey = normalizeChatKey(rawChat, currentUser.id);
-            const currentKey = getChatKey(activeChat, currentUser.id);
-
-            if (cKey === currentKey && !document.hidden) {
-              markMessagesAsRead(activeChat);
-            } else {
-              let targetBadgeKey = cKey;
-              if (cKey.startsWith('dm-')) {
-                const parts = cKey.replace('dm-', '').split('-');
-                targetBadgeKey = parts[0] === currentUser.id ? parts[1] : parts[0];
-              }
-
-              setUnreadCounts((prev) => ({
-                ...prev,
-                [targetBadgeKey]: (prev[targetBadgeKey] || 0) + 1
-              }));
-
-              playMessageSound();
-              notifyIncomingMessage(notif.title || 'EduChat', notif.content || 'Nova mensagem');
-            }
-          }
-        }
-      )
-      .on(
-        'postgres_changes',
         { event: '*', schema: 'public', table: 'tasks' },
         (payload) => {
           if (payload.eventType === 'INSERT') {
             const row = payload.new;
+            if (!row) return;
             let reqName = row.requester || '';
             let reqDept = row.requester_dept || '';
             if (!reqName && row.source_message && row.source_message.includes('Solicitado por:')) {
@@ -1817,6 +1574,7 @@ export default function App() {
             });
           } else if (payload.eventType === 'UPDATE') {
             const row = payload.new;
+            if (!row) return;
             setTasks((prev) =>
               prev.map((t) =>
                 t.id === row.id
@@ -1839,56 +1597,7 @@ export default function App() {
           }
         }
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          setRealtimeStatus('connected');
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          setRealtimeStatus('error');
-          // Contingência de auto-recuperação: busca dados caso a conexão caia
-          fetchSupabaseData(true);
-        } else {
-          setRealtimeStatus('connecting');
-        }
-      });
-
-    return () => {
-      supabase.removeChannel(channelListener);
-    };
-  }, [currentUser?.id]);
-
-  // Canal de Presença em Tempo Real (Supabase Realtime Presence) & Heartbeat Periódico
-  useEffect(() => {
-    if (!currentUser?.id) return;
-
-    // Registra heartbeat local para o usuário ativo
-    const initialHb = saveLocalHeartbeat(currentUser.id);
-    setHeartbeats(initialHb);
-
-    const presenceChannel = supabase.channel('educhat_presence_room', {
-      config: {
-        presence: {
-          key: currentUser.id
-        }
-      }
-    });
-
-    const updatePresenceState = () => {
-      const state = presenceChannel.presenceState();
-      const activeIds = new Set();
-      Object.keys(state).forEach((key) => {
-        activeIds.add(key);
-        const presences = state[key] || [];
-        presences.forEach((p) => {
-          if (p.userId) activeIds.add(p.userId);
-          if (p.email) activeIds.add(p.email);
-        });
-      });
-      activeIds.add(currentUser.id);
-      setOnlineUserIds(activeIds);
-    };
-
-    presenceChannel
-      .on('presence', { event: 'sync' }, updatePresenceState)
+      .on('presence', { event: 'sync' }, syncPresence)
       .on('presence', { event: 'join' }, ({ key, newPresences }) => {
         setOnlineUserIds((prev) => {
           const next = new Set(prev);
@@ -1903,7 +1612,7 @@ export default function App() {
       .on('presence', { event: 'leave' }, ({ key }) => {
         setOnlineUserIds((prev) => {
           const next = new Set(prev);
-          if (key !== currentUser.id) {
+          if (key !== currentUserRef.current?.id) {
             next.delete(key);
           }
           return next;
@@ -1911,46 +1620,47 @@ export default function App() {
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          try {
-            await presenceChannel.track({
-              userId: currentUser.id,
-              userName: currentUser.name,
-              department: currentUser.department,
-              onlineAt: new Date().toISOString()
-            });
-          } catch (e) {
-            console.warn('Erro ao registrar presença no Supabase:', e);
+          setRealtimeStatus('connected');
+          const u = currentUserRef.current;
+          if (u?.id) {
+            try {
+              await channel.track({
+                userId: u.id,
+                userName: u.name,
+                department: u.department,
+                onlineAt: new Date().toISOString()
+              });
+            } catch {}
           }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setRealtimeStatus('error');
+        } else {
+          setRealtimeStatus('connecting');
         }
       });
 
-    // Heartbeat periódico a cada 30 segundos enquanto a janela estiver ativa
+    // Heartbeat leve de presença local na mesma assinatura
     const hbInterval = setInterval(() => {
-      if (!document.hidden && currentUser?.id) {
-        const hb = saveLocalHeartbeat(currentUser.id);
+      const u = currentUserRef.current;
+      if (!document.hidden && u?.id) {
+        const hb = saveLocalHeartbeat(u.id);
         setHeartbeats({ ...hb });
         try {
-          presenceChannel.track({
-            userId: currentUser.id,
-            userName: currentUser.name,
-            department: currentUser.department,
+          channel.track({
+            userId: u.id,
+            userName: u.name,
+            department: u.department,
             onlineAt: new Date().toISOString()
           });
         } catch {}
       }
-    }, 30000);
+    }, 45000);
 
     return () => {
       clearInterval(hbInterval);
-      try {
-        presenceChannel.untrack().finally(() => {
-          supabase.removeChannel(presenceChannel);
-        });
-      } catch {
-        supabase.removeChannel(presenceChannel);
-      }
+      supabase.removeChannel(channel);
     };
-  }, [currentUser?.id]);
+  }, []);
 
   // Enviar nova mensagem no chat ativo com suporte a anexo, resposta/citação e áudio (Item 2, 3, 5 e 7)
   const handleSendMessage = (text, attachment = null, options = {}) => {

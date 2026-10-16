@@ -49,6 +49,14 @@ export const getChatKey = (activeChat, currentUserId) => {
 
 export const normalizeChatKey = (rawKey, currentUserId = 'u1') => {
   if (!rawKey) return 'c-geral';
+  if (rawKey.startsWith('wa-')) return rawKey;
+  if (rawKey.includes('@s.whatsapp.net') || rawKey.includes('@c.us')) {
+    const digits = rawKey.split('@')[0].replace(/\D/g, '');
+    if (digits) return `wa-${digits}`;
+  }
+  if (/^\+?\d{10,15}$/.test(String(rawKey).trim())) {
+    return `wa-${String(rawKey).replace(/\D/g, '')}`;
+  }
   if (rawKey.startsWith('dm-')) {
     const rawIds = rawKey.replace('dm-', '').split('-').filter(Boolean);
     if (rawIds.length === 1) {
