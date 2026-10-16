@@ -25,48 +25,60 @@ export function formatLastSeen(dateOrIso) {
   }
 }
 
+export const PRESENCE_TTL_MS = 3 * 60 * 1000; // sem sinal por 3 min => offline
+
+export function normalizePresenceKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function toMs(value) {
+  if (!value) return 0;
+  const t = new Date(value).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
+/** Última atividade conhecida: o mais recente entre last_seen do banco e heartbeats. */
+export function getLatestSeen(user, heartbeats = {}) {
+  if (!user) return null;
+  const ms = Math.max(
+    toMs(user.lastSeen),
+    toMs(heartbeats[user.id]),
+    toMs(user.email && heartbeats[user.email])
+  );
+  return ms ? new Date(ms).toISOString() : null;
+}
+
 /**
- * Retorna true se o colaborador estiver estritamente ativo na sessão atual:
- * 1. O assistente IA institucional é 24h online por definição.
- * 2. O usuário logado nesta janela/dispositivo está ativo.
- * 3. Outros usuários estão online APENAS se estiverem conectados via Supabase Realtime Presence
- *    ou com heartbeat registrado há menos de 90 segundos.
+ * Online se:
+ * 1. Assistente IA (24h);
+ * 2. Usuário logado nesta janela;
+ * 3. Presente no Supabase Realtime Presence (casando por id, e-mail ou nome);
+ * 4. Atividade (last_seen em profiles / heartbeat) dentro do TTL.
  */
 export function isCollaboratorOnline(user, onlineUserIds, heartbeats = {}, currentUserId = null) {
   if (!user) return false;
+  if (user.isBot || user.id === 'u_ia_copilot') return true;
+  if (currentUserId && user.id === currentUserId) return true;
 
-  // 1. Assistente IA institucional (24/7)
-  if (user.isBot || user.id === 'u_ia_copilot') {
-    return true;
-  }
-
-  // 2. Usuário com sessão ativa no navegador atual
-  if (currentUserId && user.id === currentUserId) {
-    return true;
-  }
-
-  // 3. Usuários conectados via Supabase Realtime Presence
   if (onlineUserIds) {
-    if (onlineUserIds instanceof Set) {
-      if (onlineUserIds.has(user.id) || (user.email && onlineUserIds.has(user.email))) {
-        return true;
-      }
-    } else if (Array.isArray(onlineUserIds)) {
-      if (onlineUserIds.includes(user.id) || (user.email && onlineUserIds.includes(user.email))) {
-        return true;
-      }
-    }
-  }
-
-  // 4. Verificação de Heartbeat recente (últimos 90 segundos)
-  const lastHeartbeat = heartbeats[user.id] || user.lastSeen;
-  if (lastHeartbeat) {
-    const diffMs = Date.now() - new Date(lastHeartbeat).getTime();
-    if (diffMs >= 0 && diffMs < 90 * 1000) {
+    const has = (k) =>
+      k && (onlineUserIds instanceof Set ? onlineUserIds.has(k) : Array.isArray(onlineUserIds) && onlineUserIds.includes(k));
+    const nameKey = normalizePresenceKey(user.name);
+    const emailKey = normalizePresenceKey(user.email);
+    if (has(user.id) || has(user.email) || has(emailKey) || (nameKey && has('name:' + nameKey))) {
       return true;
     }
   }
 
+  const last = toMs(getLatestSeen(user, heartbeats));
+  if (last) {
+    const diffMs = Date.now() - last;
+    if (diffMs < PRESENCE_TTL_MS) return true;
+  }
   return false;
 }
 
@@ -74,7 +86,7 @@ export function getPresenceStatusLabel(user, isOnline) {
   if (!user) return 'offline';
   if (user.isBot || user.id === 'u_ia_copilot') return 'online 24h';
   if (isOnline) return 'online';
-  if (!user.lastSeen) return 'offline (nunca acessou)';
+  if (!user.lastSeen) return 'offline';
   return `visto por último ${formatLastSeen(user.lastSeen)}`;
 }
 

@@ -615,7 +615,7 @@ export default function Sidebar({
                                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
                                   user.online ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
                                 }`}
-                                title={user.online ? 'Online' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline (nunca acessou)'}
+                                title={user.online ? 'Online' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline'}
                               />
                             </div>
                             <div className="truncate pr-5">

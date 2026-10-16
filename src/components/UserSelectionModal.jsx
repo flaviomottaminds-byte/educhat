@@ -119,7 +119,7 @@ export default function UserSelectionModal({
                       className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-chatPanel ${
                         user.online ? 'bg-emerald-500 ring-2 ring-emerald-500/20' : 'bg-slate-300 dark:bg-slate-600'
                       }`}
-                      title={user.online ? 'Online agora' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline (nunca acessou)'}
+                      title={user.online ? 'Online agora' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline'}
                     />
                   </div>
                   <div className="flex-1 min-w-0">

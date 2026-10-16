@@ -45,18 +45,24 @@ export default function WhatsAppConnectionModal({
   const [customMsg, setCustomMsg] = useState('');
   const [simulatedFeedback, setSimulatedFeedback] = useState(null);
 
-  // Estados do QR Code e Evolution API
+  // Estados do QR Code e Evolution API (Inicializa SEMPRE verificando o estado real, nunca estático!)
   const [qrCodeDataUrl, setQrCodeDataUrl] = useState('');
   const [pairingCode, setPairingCode] = useState('');
   const [timer, setTimer] = useState(45);
-  const [connectionStatus, setConnectionStatus] = useState('connected'); // 'connecting' | 'connected' | 'expired'
+  const [connectionStatus, setConnectionStatus] = useState('checking'); // 'checking' | 'connected' | 'connecting' | 'disconnected' | 'expired'
   const [connectedInfo, setConnectedInfo] = useState({
     phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
     name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+    profileName: '',
     department: 'Secretaria Acadêmica / Matriz',
-    instanceName: 'EduChat-Matriz-01',
-    status: 'open',
-    battery: 98
+    instanceName: PROD_EVO_INSTANCE,
+    status: 'checking',
+    pingMs: null,
+    webhookEnabled: false,
+    webhookUrl: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook',
+    totalMessages: null,
+    totalContacts: null,
+    lastVerifiedAt: null
   });
 
   const [evolutionConfig, setEvolutionConfig] = useState(() => {
@@ -91,11 +97,23 @@ export default function WhatsAppConnectionModal({
   const [errorMessage, setErrorMessage] = useState('');
   const [successFeedback, setSuccessFeedback] = useState('');
 
+  // Formata número vindo de ownerJid (ex: 5511930594591@s.whatsapp.net -> +55 (11) 93059-4591)
+  const formatJidPhone = (jid) => {
+    if (!jid || typeof jid !== 'string') return import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591';
+    const digits = jid.split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (digits.length === 13 && digits.startsWith('55')) {
+      return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9)}`;
+    }
+    if (digits.length === 12 && digits.startsWith('55')) {
+      return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`;
+    }
+    return digits ? `+${digits}` : (import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591');
+  };
+
   // Helper: Extrai diretamente a URL de imagem Base64 da Evolution API sem passar por biblioteca de QR Code
   const extractBase64Image = (data) => {
     if (!data) return null;
 
-    // Se for objeto
     if (typeof data === 'object') {
       const candidate =
         data.base64 ||
@@ -113,7 +131,6 @@ export default function WhatsAppConnectionModal({
       }
     }
 
-    // Se for string
     if (typeof data === 'string') {
       const trimmed = data.trim();
       if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
@@ -132,38 +149,67 @@ export default function WhatsAppConnectionModal({
     return null;
   };
 
-  // Gerador de QR Code fallback (apenas para modo demonstração local)
-  const generateFreshQRCode = async () => {
-    setIsLoadingQR(true);
-    setErrorMessage('');
-    setSuccessFeedback('');
+  // Fetch com timeout seguro para evitar travamentos se o Railway estiver offline
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = 10000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const mockSessionCode = `2@WA_EDUCHAT_${Date.now()}_EVOLUTION_API_${Math.random().toString(36).substring(2, 9)}`;
-      const url = await QRCode.toDataURL(mockSessionCode, {
-        width: 320,
-        margin: 2,
-        color: {
-          dark: '#111b21',
-          light: '#ffffff'
-        },
-        errorCorrectionLevel: 'M'
-      });
-      setQrCodeDataUrl(url);
-      setConnectionStatus('connecting');
-      setTimer(60);
-    } catch (err) {
-      console.error('Erro ao gerar QR Code inicial:', err);
-      setErrorMessage('Falha ao renderizar código QR.');
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      return response;
     } finally {
-      setIsLoadingQR(false);
+      clearTimeout(id);
     }
   };
 
-  // Inicialização ao abrir o modal
+  // Garante que o Webhook de entrada na Evolution API esteja sempre ativo e apontando para o Supabase
+  const ensureWebhookActive = async (cleanUrl, instName, headers) => {
+    const targetWebhookUrl = 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook';
+    try {
+      const findRes = await fetchWithTimeout(`${cleanUrl}/webhook/find/${instName}`, {
+        method: 'GET',
+        headers
+      }, 6000);
+
+      if (findRes.ok) {
+        const findData = await findRes.json();
+        const currentUrl = findData?.url || findData?.webhook?.url;
+        const isEnabled = Boolean(findData?.enabled ?? findData?.webhook?.enabled);
+        const events = findData?.events || findData?.webhook?.events || [];
+        if (isEnabled && currentUrl === targetWebhookUrl && events.includes('MESSAGES_UPSERT')) {
+          return { enabled: true, url: currentUrl, autoUpdated: false };
+        }
+      }
+
+      // Religamento automático do Webhook se estiver desativado ou apontando para outra URL
+      const setRes = await fetchWithTimeout(`${cleanUrl}/webhook/set/${instName}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          webhook: {
+            enabled: true,
+            url: targetWebhookUrl,
+            byEvents: false,
+            base64: false,
+            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE']
+          }
+        })
+      }, 8000);
+
+      return {
+        enabled: setRes.ok,
+        url: targetWebhookUrl,
+        autoUpdated: setRes.ok
+      };
+    } catch (whErr) {
+      console.warn('Aviso ao verificar/religar webhook na Evolution API:', whErr);
+      return { enabled: false, url: targetWebhookUrl, autoUpdated: false };
+    }
+  };
+
+  // Inicialização ao abrir o modal: Faz checagem REAL imediata na Evolution API
   useEffect(() => {
     if (isOpen) {
       if (initialTab) setActiveTab(initialTab);
-      // Limpeza forçada de cache/localStorage caso tenha URL fictícia antiga
       const currentUrl = localStorage.getItem('educhat_evo_url');
       if (!currentUrl || currentUrl.includes('suaempresa.com')) {
         const prodUrl = import.meta.env.VITE_EVOLUTION_API_URL || PROD_EVO_URL;
@@ -179,15 +225,61 @@ export default function WhatsAppConnectionModal({
         });
       }
 
-      // Busca o QR Code real da Evolution API
       handleFetchFromEvolutionEndpoint();
     }
   }, [isOpen, initialTab]);
 
+  // Polling em tempo real enquanto aguarda leitura do QR Code:
+  // Verifica a cada 5 segundos se o celular escaneou o QR Code (/instance/connectionState)
+  useEffect(() => {
+    if (!isOpen || connectionStatus === 'connected') return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const cleanUrl = (evolutionConfig.apiUrl || PROD_EVO_URL).trim().replace(/\/+$/, '');
+        const instName = (evolutionConfig.instanceName || PROD_EVO_INSTANCE).trim();
+        const apiKey = (evolutionConfig.apiKey || PROD_EVO_KEY).trim();
+        if (!cleanUrl || !apiKey) return;
+
+        const headers = { 'Content-Type': 'application/json', apikey: apiKey };
+        const startMs = performance.now();
+        const stateRes = await fetchWithTimeout(`${cleanUrl}/instance/connectionState/${instName}`, {
+          method: 'GET',
+          headers
+        }, 5000);
+
+        if (!stateRes.ok) return;
+        const stateData = await stateRes.json();
+        const pingMs = Math.round(performance.now() - startMs);
+        const liveState = stateData?.instance?.state || stateData?.state || stateData?.connectionStatus;
+
+        if (liveState === 'open') {
+          const whStatus = await ensureWebhookActive(cleanUrl, instName, headers);
+          setConnectionStatus('connected');
+          setQrCodeDataUrl('');
+          setErrorMessage('');
+          setConnectedInfo((prev) => ({
+            ...prev,
+            instanceName: instName,
+            status: 'open',
+            pingMs,
+            webhookEnabled: whStatus.enabled,
+            lastVerifiedAt: new Date().toLocaleTimeString('pt-BR')
+          }));
+          setSuccessFeedback('✅ Leitura do QR Code confirmada! WhatsApp conectado e Webhook sincronizado no Railway.');
+        }
+      } catch {
+        // Silencioso durante o polling em background
+      }
+    }, 5000);
+
+    return () => clearInterval(pollInterval);
+  }, [isOpen, connectionStatus, evolutionConfig.apiUrl, evolutionConfig.instanceName, evolutionConfig.apiKey]);
+
   // Contagem regressiva de expiração do QR Code (60 segundos)
   useEffect(() => {
     let interval = null;
-    if (activeTab === 'qrcode' && connectionStatus === 'connecting') {
+    if (activeTab === 'qrcode' && connectionStatus === 'connecting' && qrCodeDataUrl) {
       interval = setInterval(() => {
         setTimer((prev) => {
           if (prev <= 1) {
@@ -199,14 +291,15 @@ export default function WhatsAppConnectionModal({
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [activeTab, connectionStatus]);
+  }, [activeTab, connectionStatus, qrCodeDataUrl]);
 
-  // Parser Universal para Retorno da Evolution API (Item 1: Renderização Direta em <img src={base64} />)
+  // Parser Universal para Retorno da Evolution API (Renderização Direta em <img src={base64} />)
   const handleConvertAndPlotQRCode = async (rawInput) => {
     const content = rawInput !== undefined ? rawInput : manualPayloadInput;
     if (!content) {
+      setConnectionStatus('disconnected');
       setErrorMessage('Por favor, informe ou cole o retorno da Evolution API (JSON ou Base64).');
-      return;
+      return false;
     }
 
     setIsLoadingQR(true);
@@ -214,39 +307,15 @@ export default function WhatsAppConnectionModal({
     setSuccessFeedback('');
 
     try {
-      // 0. Se a instância já estiver aberta/conectada no Railway
-      const isOpenState =
-        content?.state === 'open' ||
-        content?.instance?.state === 'open' ||
-        content?.connectionStatus === 'open' ||
-        content?.status === 'open' ||
-        (typeof content === 'string' && (content.includes('"state":"open"') || content.includes('"connectionStatus":"open"')));
-
-      if (isOpenState) {
-        setConnectionStatus('connected');
-        setConnectedInfo((prev) => ({
-          ...prev,
-          phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
-          name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
-          department: 'Secretaria Acadêmica / Matriz',
-          instanceName: evolutionConfig.instanceName || 'EduChat-Matriz-01',
-          status: 'open'
-        }));
-        setSuccessFeedback('✅ Aparelho WhatsApp oficial já está autenticado e online no Railway!');
-        return;
-      }
-
       // 1. Extração Direta da Imagem Base64 (Sem Dupla Codificação)
       const directImage = extractBase64Image(content);
 
       if (directImage) {
-        // Atribui DIRETAMENTE ao src da tag <img> sem passar por biblioteca de QR Code!
         setQrCodeDataUrl(directImage);
         setConnectionStatus('connecting');
         setTimer(60);
-        setSuccessFeedback('✅ QR Code em Base64 nativo da Evolution API renderizado diretamente na imagem!');
+        setSuccessFeedback('✅ QR Code da Evolution API gerado! Aponte a câmera do WhatsApp para escanear.');
 
-        // Extrai pairing code se houver
         if (typeof content === 'object') {
           const pCode = content.pairingCode || content.qrcode?.pairingCode;
           if (pCode) setPairingCode(String(pCode));
@@ -254,12 +323,12 @@ export default function WhatsAppConnectionModal({
           const pMatch = content.match(/"pairingCode":\s*"([^"]+)"/);
           if (pMatch) setPairingCode(pMatch[1]);
         }
-        return;
+        return true;
       }
 
       // 2. Se for exclusivamente um Token de Pareamento puro (ex: 2@...) e NÃO uma imagem
       const rawString = typeof content === 'string' ? content.trim() : (content.code || content.qrcode?.code || '');
-      if (rawString.startsWith('2@') || rawString.startsWith('1@')) {
+      if (rawString && (rawString.startsWith('2@') || rawString.startsWith('1@') || rawString.length > 20)) {
         const generatedUrl = await QRCode.toDataURL(rawString, {
           width: 320,
           margin: 2,
@@ -269,97 +338,111 @@ export default function WhatsAppConnectionModal({
         setQrCodeDataUrl(generatedUrl);
         setConnectionStatus('connecting');
         setTimer(60);
-        setSuccessFeedback('✅ Token 2@ da Evolution API convertido em QR Code escaneável!');
-        return;
+        setSuccessFeedback('✅ Código de pareamento da Evolution API convertido em QR Code escaneável!');
+        return true;
       }
 
-      throw new Error('Formato não reconhecido. Certifique-se de colar o Base64 nativo da Evolution API ou o JSON retornado.');
+      setConnectionStatus('disconnected');
+      throw new Error('A instância está desconectada e não retornou imagem de QR Code. Clique em "Resetar Instância (Logout & Novo QR)" para gerar um novo QR Code.');
     } catch (err) {
       console.error('Falha ao processar QR Code:', err);
-      setErrorMessage(`Erro ao renderizar QR Code: ${err.message}`);
+      setConnectionStatus('disconnected');
+      setErrorMessage(err.message);
+      return false;
     } finally {
       setIsLoadingQR(false);
     }
   };
 
-  // Chamada via Supabase Edge Function 'evolution-proxy' (livre de CORS) com fallback inteligente
-  const callEvolutionApi = async (action = 'connect') => {
-    const cleanUrl = (evolutionConfig.apiUrl || '').trim().replace(/\/+$/, '');
-    const instName = (evolutionConfig.instanceName || 'EduChat-Matriz-01').trim();
-    const apiKey = (evolutionConfig.apiKey || '').trim();
+  // Chamada Direta e via Proxy à Evolution API
+  const callEvolutionApi = async (action = 'status') => {
+    const cleanUrl = (evolutionConfig.apiUrl || PROD_EVO_URL).trim().replace(/\/+$/, '');
+    const instName = (evolutionConfig.instanceName || PROD_EVO_INSTANCE).trim();
+    const apiKey = (evolutionConfig.apiKey || PROD_EVO_KEY).trim();
 
     if (cleanUrl) localStorage.setItem('educhat_evo_url', cleanUrl);
     if (instName) localStorage.setItem('educhat_evo_instance', instName);
     if (apiKey) localStorage.setItem('educhat_evo_key', apiKey);
 
-    // 1. Tentar primeiro via Supabase Edge Function (Bypass de CORS no Navegador)
-    try {
-      const { data: edgeData, error: edgeErr } = await supabase.functions.invoke('evolution-proxy', {
-        body: {
-          action,
-          apiUrl: cleanUrl,
-          instanceName: instName,
-          apiKey: apiKey
-        }
-      });
-
-      if (!edgeErr && edgeData) {
-        if (edgeData.success) {
-          return { success: true, via: 'edge-function', data: edgeData.data || edgeData };
-        }
-        if (edgeData.error) {
-          throw new Error(edgeData.error);
-        }
-      }
-    } catch (edgeError) {
-      console.warn('Proxy Supabase Edge Function indisponível ou falhou, tentando fallback direto:', edgeError.message);
-    }
-
-    // 2. Fallback: Chamada direta ao endpoint da Evolution API
     if (!cleanUrl) {
-      throw new Error('URL da Evolution API não informada. Preencha nos parâmetros da API abaixo ou no arquivo .env.');
+      throw new Error('URL da Evolution API não informada. Preencha nos parâmetros da API.');
     }
 
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers['apikey'] = apiKey;
 
+    // 1. Checagem Real de Status (/instance/connectionState/{instance})
+    if (action === 'status') {
+      const startMs = performance.now();
+      const stateEndpoint = `${cleanUrl}/instance/connectionState/${instName}`;
+      const response = await fetchWithTimeout(stateEndpoint, { method: 'GET', headers }, 8000);
+      const pingMs = Math.round(performance.now() - startMs);
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status} em /instance/connectionState: ${errText || response.statusText}`);
+      }
+
+      const stateData = await response.json();
+
+      // Busca metadados reais da instância (/instance/fetchInstances) para validar sessão e telefone
+      let instanceDetails = null;
+      try {
+        const instRes = await fetchWithTimeout(`${cleanUrl}/instance/fetchInstances?instanceName=${encodeURIComponent(instName)}`, {
+          method: 'GET',
+          headers
+        }, 6000);
+        if (instRes.ok) {
+          const instList = await instRes.json();
+          if (Array.isArray(instList)) {
+            instanceDetails = instList.find((i) => (i.name || i.instance?.instanceName) === instName) || instList[0];
+          } else if (instList && typeof instList === 'object') {
+            instanceDetails = instList;
+          }
+        }
+      } catch (metaErr) {
+        console.warn('Aviso ao consultar /instance/fetchInstances:', metaErr);
+      }
+
+      return {
+        success: true,
+        via: 'direct',
+        pingMs,
+        data: stateData,
+        instanceDetails
+      };
+    }
+
+    // 2. Logout da Instância
     if (action === 'logout') {
       const logoutEndpoint = `${cleanUrl}/instance/logout/${instName}`;
       try {
-        await fetch(logoutEndpoint, { method: 'DELETE', headers });
+        await fetchWithTimeout(logoutEndpoint, { method: 'DELETE', headers }, 8000);
       } catch {
-        await fetch(logoutEndpoint, { method: 'POST', headers });
+        await fetchWithTimeout(logoutEndpoint, { method: 'POST', headers }, 8000);
       }
       return { success: true, via: 'direct' };
     }
 
+    // 3. Configurar Webhook
     if (action === 'set-webhook' || action === 'setup-webhook') {
-      const webhookEndpoint = `${cleanUrl}/webhook/set/${instName}`;
-      const whRes = await fetch(webhookEndpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          webhook: {
-            enabled: true,
-            url: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook',
-            byEvents: false,
-            base64: false,
-            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE']
-          }
-        })
-      });
-      const data = await whRes.json();
-      return { success: whRes.ok, via: 'direct', data };
+      const whStatus = await ensureWebhookActive(cleanUrl, instName, headers);
+      return {
+        success: whStatus.enabled,
+        via: 'direct',
+        data: whStatus
+      };
     }
 
+    // 4. Obter QR Code (/instance/connect/{instance})
     const connectEndpoint = `${cleanUrl}/instance/connect/${instName}`;
-    let response = await fetch(connectEndpoint, { method: 'GET', headers });
+    let response = await fetchWithTimeout(connectEndpoint, { method: 'GET', headers }, 10000);
 
     // Auto-criação caso a instância ainda não exista no servidor Railway (404)
     if (response.status === 404) {
       console.log(`Instância "${instName}" não existe (404). Criando automaticamente via POST /instance/create...`);
       try {
-        const createRes = await fetch(`${cleanUrl}/instance/create`, {
+        const createRes = await fetchWithTimeout(`${cleanUrl}/instance/create`, {
           method: 'POST',
           headers,
           body: JSON.stringify({
@@ -367,15 +450,16 @@ export default function WhatsAppConnectionModal({
             qrcode: true,
             integration: 'WHATSAPP-BAILEYS'
           })
-        });
+        }, 10000);
 
         if (createRes.ok) {
           const createData = await createRes.json();
+          await ensureWebhookActive(cleanUrl, instName, headers);
           if (createData?.qrcode?.base64 || createData?.base64) {
             return { success: true, via: 'direct-created', data: createData };
           }
           await new Promise((r) => setTimeout(r, 1000));
-          response = await fetch(connectEndpoint, { method: 'GET', headers });
+          response = await fetchWithTimeout(connectEndpoint, { method: 'GET', headers }, 10000);
         }
       } catch (createErr) {
         console.warn('Falha na tentativa de auto-criação da instância:', createErr);
@@ -391,97 +475,163 @@ export default function WhatsAppConnectionModal({
     return { success: true, via: 'direct', data };
   };
 
-  // Obter QR Code da Evolution API ou Validar Conexão Ativa
+  // Checagem Real da Evolution API (/instance/connectionState) + Geração de QR Code se Desconectado
   const handleFetchFromEvolutionEndpoint = async () => {
     setIsLoadingQR(true);
     setErrorMessage('');
     setSuccessFeedback('');
+    setConnectionStatus('checking');
+
+    const cleanUrl = (evolutionConfig.apiUrl || PROD_EVO_URL).trim().replace(/\/+$/, '');
+    const instName = (evolutionConfig.instanceName || PROD_EVO_INSTANCE).trim();
+    const apiKey = (evolutionConfig.apiKey || PROD_EVO_KEY).trim();
+    const headers = { 'Content-Type': 'application/json', apikey: apiKey };
 
     try {
-      const result = await callEvolutionApi('connect');
-      const payloadData = result?.data?.data || result?.data;
+      // ETAPA 1: Faz ping real em /instance/connectionState/{instance} e /instance/fetchInstances
+      const statusResult = await callEvolutionApi('status');
+      const statePayload = statusResult?.data;
+      const details = statusResult?.instanceDetails;
+      const pingMs = statusResult?.pingMs ?? null;
 
-      // Se a instância já estiver aberta/conectada no Railway
-      const isOpenState =
-        payloadData?.state === 'open' ||
-        payloadData?.instance?.state === 'open' ||
-        payloadData?.connectionStatus === 'open' ||
-        payloadData?.status === 'open' ||
-        result?.data?.instance?.state === 'open' ||
-        result?.data?.state === 'open';
+      const rawState =
+        statePayload?.instance?.state ||
+        statePayload?.state ||
+        details?.connectionStatus ||
+        statePayload?.connectionStatus ||
+        'close';
 
-      if (isOpenState) {
+      // Verifica se está REALMENTE conectado ('open')
+      if (rawState === 'open') {
+        // Garante religamento automático do Webhook no Railway -> Supabase
+        const whStatus = await ensureWebhookActive(cleanUrl, instName, headers);
+
+        const realPhone = details?.ownerJid
+          ? formatJidPhone(details.ownerJid)
+          : (import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591');
+
+        setConnectionStatus('connected');
+        setQrCodeDataUrl('');
+        setConnectedInfo({
+          phone: realPhone,
+          name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
+          profileName: details?.profileName || 'Secretaria Acadêmica',
+          department: details?.profileName ? `${details.profileName} • Matriz` : 'Secretaria Acadêmica / Matriz',
+          instanceName: instName,
+          status: 'open',
+          pingMs,
+          webhookEnabled: whStatus.enabled,
+          webhookUrl: whStatus.url,
+          totalMessages: details?._count?.Message ?? null,
+          totalContacts: details?._count?.Contact ?? null,
+          lastVerifiedAt: new Date().toLocaleTimeString('pt-BR')
+        });
+        setSuccessFeedback(
+          `✅ Conexão verificada em tempo real no Railway (${pingMs}ms)! WhatsApp ${realPhone} online e Webhook ativo.`
+        );
+        return;
+      }
+
+      // ETAPA 2: Se NÃO estiver 'open' (ex: 'close' ou 'connecting'), define estado real desconectado/conectando e busca QR Code
+      setConnectionStatus('disconnected');
+      setConnectedInfo((prev) => ({
+        ...prev,
+        instanceName: instName,
+        status: rawState,
+        pingMs,
+        lastVerifiedAt: new Date().toLocaleTimeString('pt-BR')
+      }));
+
+      const connectResult = await callEvolutionApi('connect');
+      const connectPayload = connectResult?.data?.data || connectResult?.data;
+
+      // Caso o /instance/connect informe que acabou de abrir
+      const connectState = connectPayload?.instance?.state || connectPayload?.state;
+      if (connectState === 'open') {
+        const whStatus = await ensureWebhookActive(cleanUrl, instName, headers);
         setConnectionStatus('connected');
         setConnectedInfo((prev) => ({
           ...prev,
-          phone: import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
-          name: import.meta.env.VITE_INSTITUTION_NAME || 'Faculdade Olavo Bilac • Grupo EstudeMais',
-          department: 'Secretaria Acadêmica / Matriz',
-          instanceName: evolutionConfig.instanceName || 'EduChat-Matriz-01',
-          status: 'open'
+          status: 'open',
+          pingMs,
+          webhookEnabled: whStatus.enabled,
+          lastVerifiedAt: new Date().toLocaleTimeString('pt-BR')
         }));
-        setSuccessFeedback(`✅ WhatsApp Oficial (+55 11 93059-4591) está 100% conectado e ativo no Railway!`);
+        setSuccessFeedback(`✅ WhatsApp Oficial conectado e validado no Railway!`);
         return;
       }
 
-      await handleConvertAndPlotQRCode(payloadData);
-      setSuccessFeedback(`✅ QR Code carregado com sucesso ${result.via === 'edge-function' ? '(via Edge Function Proxy)' : '(via conexão direta)'}!`);
+      await handleConvertAndPlotQRCode(connectPayload);
     } catch (err) {
-      console.warn('Erro ao chamar Evolution API:', err);
-      if (err.message && (err.message.includes('open') || err.message.includes('connected'))) {
-        setConnectionStatus('connected');
-        setSuccessFeedback(`✅ WhatsApp Oficial já está conectado.`);
-        return;
-      }
-      setErrorMessage(`Falha na comunicação (${err.message}). Se o navegador bloquear por CORS, verifique a Edge Function "evolution-proxy" ou use os botões abaixo para tentar novamente ou colar o Payload manualmente.`);
+      console.warn('Erro ao validar conexão na Evolution API:', err);
+      // JAMAIS exibe conectado se houver erro de rede, timeout ou 401/404/500!
+      setConnectionStatus('disconnected');
+      setQrCodeDataUrl('');
+      setConnectedInfo((prev) => ({
+        ...prev,
+        status: 'disconnected',
+        pingMs: null,
+        lastVerifiedAt: new Date().toLocaleTimeString('pt-BR')
+      }));
+      setErrorMessage(
+        `Desconectado / Falha na comunicação com a Evolution API (${err.message}). Verifique as credenciais abaixo ou clique em "Resetar Instância" para gerar um novo QR Code.`
+      );
       setShowApiConfig(true);
     } finally {
       setIsLoadingQR(false);
     }
   };
 
-  // Reset de Instância Travada na Evolution API (Logout + Connect) - Com Proteção contra Desconexão Acidental
+  // Reset de Instância na Evolution API (Logout + Connect + Webhook)
   const handleResetInstance = async () => {
-    const instName = evolutionConfig.instanceName || 'EduChat-Matriz-01';
+    const instName = evolutionConfig.instanceName || PROD_EVO_INSTANCE;
 
-    const confirmed = window.confirm(
-      `⚠️ ATENÇÃO: A instância "${instName}" está vinculada ao WhatsApp Oficial da Faculdade Olavo Bilac (+55 11 93059-4591).\n\n` +
-      `Fazer o reset desconectará o aparelho do servidor Railway e interromperá os atendimentos até um novo QR Code ser escaneado.\n\n` +
-      `Tem certeza que deseja desconectar e gerar um novo QR Code?`
-    );
-
-    if (!confirmed) {
-      return;
+    if (connectionStatus === 'connected') {
+      const confirmed = window.confirm(
+        `⚠️ ATENÇÃO: A instância "${instName}" está conectada ao WhatsApp (${connectedInfo.phone}).\n\n` +
+        `Fazer o reset desconectará o aparelho atual no Railway e exigirá a leitura de um novo QR Code.\n\n` +
+        `Tem certeza que deseja desconectar e gerar um novo QR Code?`
+      );
+      if (!confirmed) return;
     }
 
     setIsLoadingQR(true);
     setErrorMessage('');
     setSuccessFeedback('');
     setQrCodeDataUrl('');
-    setConnectionStatus('connecting');
+    setConnectionStatus('disconnected');
 
     try {
-      setSuccessFeedback(`1/2 Desconectando instância "${instName}" (logout) para limpar sessão fantasma...`);
-      await callEvolutionApi('logout');
+      setSuccessFeedback(`1/3 Encerrando sessão anterior da instância "${instName}" (/instance/logout)...`);
+      try {
+        await callEvolutionApi('logout');
+      } catch (logoutErr) {
+        console.warn('Aviso no logout:', logoutErr);
+      }
 
-      // Pausa técnica de 1.5s para a Evolution API finalizar o processo
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      setSuccessFeedback(`2/2 Solicitando novo QR Code limpo para "${instName}"...`);
+      setSuccessFeedback(`2/3 Religando Webhook para o Supabase (/webhook/set/${instName})...`);
+      await callEvolutionApi('set-webhook');
+
+      setSuccessFeedback(`3/3 Gerando novo QR Code oficial na Evolution API (/instance/connect/${instName})...`);
       const result = await callEvolutionApi('connect');
       const payloadData = result?.data?.data || result?.data;
-      await handleConvertAndPlotQRCode(payloadData);
-      setSuccessFeedback(`✅ Instância "${instName}" resetada com sucesso! Escaneie o novo QR Code com seu WhatsApp.`);
+      const plotted = await handleConvertAndPlotQRCode(payloadData);
+      if (plotted) {
+        setSuccessFeedback(`✅ Novo QR Code gerado para "${instName}"! Escaneie com o WhatsApp do aparelho.`);
+      }
     } catch (err) {
       console.warn('Erro ao resetar instância na Evolution API:', err);
-      setErrorMessage(`Falha ao resetar via endpoint: ${err.message}.`);
+      setConnectionStatus('disconnected');
+      setErrorMessage(`Falha ao gerar novo QR Code: ${err.message}`);
       setShowApiConfig(true);
     } finally {
       setIsLoadingQR(false);
     }
   };
 
-  // Recarregar inteligente
+  // Recarregar / Revalidar conexão real
   const handleRefreshClick = () => {
     handleFetchFromEvolutionEndpoint();
   };
@@ -494,9 +644,14 @@ export default function WhatsAppConnectionModal({
     try {
       const result = await callEvolutionApi('set-webhook');
       if (result.success) {
-        setSuccessFeedback('✅ Webhook da Evolution API configurado com sucesso para https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook!');
+        setConnectedInfo((prev) => ({
+          ...prev,
+          webhookEnabled: true,
+          webhookUrl: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook'
+        }));
+        setSuccessFeedback('✅ Webhook da Evolution API religado e verificado com sucesso para https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook!');
       } else {
-        throw new Error(result.error || 'Falha ao registrar webhook.');
+        throw new Error(result.error || 'Falha ao registrar webhook no Railway.');
       }
     } catch (err) {
       console.error('Erro ao configurar webhook:', err);
@@ -553,19 +708,43 @@ export default function WhatsAppConnectionModal({
         {/* Header */}
         <div className="px-6 py-4 bg-chatPanel border-b border-chatBorder flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-emerald-600 flex items-center justify-center text-white shadow-xs shrink-0">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white shadow-xs shrink-0 ${
+              connectionStatus === 'connected'
+                ? 'bg-emerald-600'
+                : connectionStatus === 'checking'
+                ? 'bg-brand-600'
+                : 'bg-rose-600'
+            }`}>
               <Smartphone size={20} />
             </div>
             <div>
-              <h2 className="text-base font-bold text-chatTextTitle leading-tight flex items-center gap-2">
+              <h2 className="text-base font-bold text-chatTextTitle leading-tight flex items-center gap-2 flex-wrap">
                 Conexão WhatsApp & Evolution API
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1.5 ${
                   connectionStatus === 'connected'
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30'
+                    : connectionStatus === 'checking'
+                    ? 'bg-brand-500/15 text-brand-700 dark:text-brand-400 border border-brand-500/30'
+                    : connectionStatus === 'connecting'
+                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30'
+                    : 'bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30'
                 }`}>
-                  <span className={`w-1.5 h-1.5 rounded-full ${connectionStatus === 'connected' ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-                  {connectionStatus === 'connected' ? 'Instância Pareada' : 'Aguardando Escaneamento'}
+                  <span className={`w-1.5 h-1.5 rounded-full ${
+                    connectionStatus === 'connected'
+                      ? 'bg-emerald-500'
+                      : connectionStatus === 'checking'
+                      ? 'bg-brand-500 animate-ping'
+                      : connectionStatus === 'connecting'
+                      ? 'bg-amber-500 animate-pulse'
+                      : 'bg-rose-500 animate-pulse'
+                  }`} />
+                  {connectionStatus === 'connected'
+                    ? `Conectado no Railway${connectedInfo.pingMs ? ` (${connectedInfo.pingMs}ms)` : ''}`
+                    : connectionStatus === 'checking'
+                    ? 'Verificando Status Real...'
+                    : connectionStatus === 'connecting'
+                    ? 'Aguardando Leitura do QR Code'
+                    : 'Desconectado • Requer Pareamento'}
                 </span>
               </h2>
               <p className="text-xs text-chatTextMuted">
@@ -573,12 +752,24 @@ export default function WhatsAppConnectionModal({
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200 dark:hover:bg-chatBorder transition"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleRefreshClick}
+              disabled={isLoadingQR}
+              title="Testar conexão real com a Evolution API agora"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-chatBorder text-xs font-semibold text-chatTextTitle hover:bg-slate-100 dark:hover:bg-chatBorder transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={isLoadingQR ? 'animate-spin text-emerald-600' : 'text-emerald-600'} />
+              <span className="hidden sm:inline">Testar Ping</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-200 dark:hover:bg-chatBorder transition"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Abas Superiores */}
@@ -638,18 +829,29 @@ export default function WhatsAppConnectionModal({
                 </div>
               )}
 
-              {/* Se o aparelho já estiver conectado */}
-              {connectionStatus === 'connected' ? (
+              {/* Estado 1: Verificando em Tempo Real */}
+              {connectionStatus === 'checking' ? (
+                <div className="bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder rounded-2xl p-8 text-center space-y-3 animate-in fade-in">
+                  <RefreshCw size={36} className="text-brand-600 animate-spin mx-auto" />
+                  <h3 className="text-sm font-bold text-chatTextTitle">
+                    Consultando Evolution API em Tempo Real no Railway...
+                  </h3>
+                  <p className="text-xs text-chatTextMuted max-w-md mx-auto">
+                    Verificando endpoint <code>/instance/connectionState/{evolutionConfig.instanceName || PROD_EVO_INSTANCE}</code> e validando rota do Webhook no Supabase.
+                  </p>
+                </div>
+              ) : connectionStatus === 'connected' ? (
+                /* Estado 2: Conectado (Validado via /instance/connectionState === 'open') */
                 <div className="bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-300 dark:border-emerald-500/40 rounded-2xl p-6 text-center space-y-3.5 animate-in fade-in">
                   <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto shadow-md">
                     <CheckCircle2 size={36} />
                   </div>
                   <div>
                     <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/50 px-2.5 py-0.5 rounded-full">
-                      Gateway Ativo no Railway
+                      Status Real Validado • state: &quot;open&quot; {connectedInfo.pingMs ? `• ${connectedInfo.pingMs}ms` : ''}
                     </span>
                     <h3 className="text-base font-bold text-emerald-950 dark:text-emerald-100 mt-1">
-                      WhatsApp Oficial Conectado com Sucesso!
+                      WhatsApp Oficial Conectado no Railway!
                     </h3>
                   </div>
 
@@ -660,49 +862,71 @@ export default function WhatsAppConnectionModal({
                     <p className="text-emerald-700 dark:text-emerald-400 font-mono text-base font-extrabold tracking-wide">
                       {connectedInfo.phone}
                     </p>
-                    <div className="flex items-center justify-center gap-2 text-[11px] text-chatTextMuted pt-1.5 border-t border-slate-100 dark:border-chatBorder">
-                      <span>Instância: <strong className="text-chatTextTitle">{evolutionConfig.instanceName || 'EduChat-Matriz-01'}</strong></span>
+                    <div className="flex items-center justify-center gap-2 flex-wrap text-[11px] text-chatTextMuted pt-1.5 border-t border-slate-100 dark:border-chatBorder">
+                      <span>Instância: <strong className="text-chatTextTitle">{evolutionConfig.instanceName || PROD_EVO_INSTANCE}</strong></span>
                       <span>•</span>
-                      <span>Carteira: <strong className="text-emerald-600 dark:text-emerald-400">Matriz Olavo Bilac</strong></span>
+                      <span>Webhook: <strong className={connectedInfo.webhookEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600'}>{connectedInfo.webhookEnabled ? 'Ativo (Supabase)' : 'Sincronizando'}</strong></span>
+                      {connectedInfo.lastVerifiedAt && (
+                        <>
+                          <span>•</span>
+                          <span>Checado às <strong>{connectedInfo.lastVerifiedAt}</strong></span>
+                        </>
+                      )}
                     </div>
                   </div>
 
                   <p className="text-xs text-emerald-800 dark:text-emerald-300 max-w-md mx-auto leading-relaxed">
-                    A sessão Baileys está <strong>online e sincronizada em segundo plano</strong>. As mensagens enviadas por alunos e candidatos são entregues instantaneamente via Webhook ao Supabase e ao EduChat.
+                    A sessão Baileys respondeu <strong>state: &quot;open&quot;</strong> na verificação direta da Evolution API. Caso o celular tenha sido desconectado ou precise ler um novo QR Code, clique em <strong>Desconectar & Gerar Novo QR Code</strong> abaixo.
                   </p>
 
-                  <div className="pt-2 flex items-center justify-center gap-2.5">
+                  <div className="pt-2 flex items-center justify-center gap-2.5 flex-wrap">
                     <button
                       type="button"
-                      onClick={onClose}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer"
+                      onClick={handleFetchFromEvolutionEndpoint}
+                      disabled={isLoadingQR}
+                      className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                     >
-                      Manter Conexão & Abrir Atendimentos
+                      <RefreshCw size={14} className={isLoadingQR ? 'animate-spin' : ''} />
+                      Revalidar Conexão Real
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfigureWebhook}
+                      disabled={isLoadingQR}
+                      className="px-3.5 py-2.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <Shield size={14} />
+                      Religar Webhook Supabase
                     </button>
                     <button
                       type="button"
                       onClick={handleResetInstance}
-                      className="px-3.5 py-2.5 border border-rose-300 dark:border-rose-800/60 text-rose-700 dark:text-rose-400 text-xs font-semibold rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer"
-                      title="Desconecta a sessão atual no Railway para ler um novo QR Code"
+                      disabled={isLoadingQR}
+                      className="px-3.5 py-2.5 border border-rose-300 dark:border-rose-800/60 text-rose-700 dark:text-rose-400 text-xs font-semibold rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition cursor-pointer disabled:opacity-50"
+                      title="Desconecta a sessão atual no Railway (/instance/logout) e gera um novo QR Code para escanear"
                     >
-                      Trocar Aparelho
+                      Desconectar & Gerar Novo QR Code
                     </button>
                   </div>
                 </div>
               ) : (
-                /* Grid Principal Estilo WhatsApp Web */
+                /* Grid Principal Estilo WhatsApp Web (Quando Desconectado / Aguardando Pareamento) */
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
                   {/* Lado Esquerdo: Instruções Passo a Passo */}
                   <div className="space-y-4 text-left">
                     <div>
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-rose-100 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 text-[10px] font-bold mb-1.5">
+                        <AlertCircle size={12} />
+                        Instância Desconectada • Escaneie para Parear
+                      </div>
                       <h3 className="text-base font-bold text-chatTextTitle flex items-center gap-2">
-                        Usar o WhatsApp no EduChat
+                        Parear WhatsApp no EduChat
                         <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded-full">
-                          WhatsApp Web
+                          Evolution API
                         </span>
                       </h3>
                       <p className="text-xs text-chatTextMuted mt-1 leading-relaxed">
-                        Aponte a câmera do WhatsApp para escanear o código visual e autorizar a sincronização de alunos e mensagens.
+                        Aponte a câmera do WhatsApp (+55 11 93059-4591) para escanear o QR Code ao lado. Assim que a leitura for concluída no celular, o painel detectará a conexão automaticamente.
                       </p>
                     </div>
 
@@ -736,18 +960,19 @@ export default function WhatsAppConnectionModal({
                     <div className="pt-2 flex items-center gap-3 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => setConnectionStatus('connected')}
-                        className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1"
+                        onClick={handleFetchFromEvolutionEndpoint}
+                        disabled={isLoadingQR}
+                        className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 cursor-pointer"
                       >
-                        <CheckCircle2 size={13} /> Simular Leitura Concluída
+                        <RefreshCw size={13} className={isLoadingQR ? 'animate-spin' : ''} /> Verificar Conexão Real Agora
                       </button>
                       <span className="text-chatTextMuted">•</span>
                       <button
                         type="button"
                         onClick={() => setShowApiConfig(!showApiConfig)}
-                        className="text-[11px] font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+                        className="text-[11px] font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 cursor-pointer"
                       >
-                        <Sliders size={13} /> {showApiConfig ? 'Ocultar Parâmetros' : 'Chamar API / Colar Payload'}
+                        <Sliders size={13} /> {showApiConfig ? 'Ocultar Parâmetros' : 'Configurar API / Colar Payload'}
                       </button>
                     </div>
                   </div>
@@ -765,7 +990,7 @@ export default function WhatsAppConnectionModal({
                       {isLoadingQR ? (
                         <div className="w-60 h-60 flex flex-col items-center justify-center space-y-2 bg-slate-50 dark:bg-chatPanel rounded-lg">
                           <RefreshCw size={28} className="text-emerald-600 animate-spin" />
-                          <span className="text-xs font-semibold text-chatTextMuted">Gerando código visual...</span>
+                          <span className="text-xs font-semibold text-chatTextMuted">Consultando Evolution API...</span>
                         </div>
                       ) : qrCodeDataUrl ? (
                         <img
@@ -777,7 +1002,7 @@ export default function WhatsAppConnectionModal({
                         <div className="w-60 h-60 flex flex-col items-center justify-center bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-500/30 rounded-lg p-3 text-center space-y-2">
                           <AlertCircle size={28} className="text-rose-600 dark:text-rose-400" />
                           <p className="text-[11px] font-bold text-rose-800 dark:text-rose-300 leading-tight">
-                            Falha na Conexão Evolution
+                            Instância Desconectada
                           </p>
                           <p className="text-[10px] text-rose-700/80 dark:text-rose-300/70 leading-tight line-clamp-2">
                             {errorMessage}
@@ -788,14 +1013,14 @@ export default function WhatsAppConnectionModal({
                               onClick={handleRefreshClick}
                               className="w-full py-1.5 px-2 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-md shadow-xs flex items-center justify-center gap-1 transition cursor-pointer"
                             >
-                              <RefreshCw size={11} /> Tentar Novamente
+                              <RefreshCw size={11} /> Verificar / Buscar QR
                             </button>
                             <button
                               type="button"
                               onClick={handleResetInstance}
                               className="w-full py-1.5 px-2 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-md shadow-xs flex items-center justify-center gap-1 transition cursor-pointer"
                             >
-                              <RotateCcw size={11} /> Resetar Instância
+                              <RotateCcw size={11} /> Resetar & Gerar Novo QR
                             </button>
                             <button
                               type="button"
@@ -818,10 +1043,10 @@ export default function WhatsAppConnectionModal({
                           <span className="text-xs font-medium">Aguardando geração do QR Code</span>
                           <button
                             type="button"
-                            onClick={handleRefreshClick}
-                            className="mt-1 px-3 py-1 bg-emerald-600 text-white text-[11px] font-bold rounded-md hover:bg-emerald-500 transition cursor-pointer flex items-center gap-1"
+                            onClick={handleResetInstance}
+                            className="mt-1 px-3 py-1.5 bg-emerald-600 text-white text-[11px] font-bold rounded-md hover:bg-emerald-500 transition cursor-pointer flex items-center gap-1"
                           >
-                            <RefreshCw size={12} /> Gerar Agora
+                            <RefreshCw size={12} /> Gerar Novo QR Code
                           </button>
                         </div>
                       )}
@@ -854,7 +1079,7 @@ export default function WhatsAppConnectionModal({
                     </div>
 
                     {/* Temporizador e Botão de Atualização Manual */}
-                    {connectionStatus !== 'expired' && (
+                    {connectionStatus !== 'expired' && qrCodeDataUrl && (
                       <div className="mt-3 flex items-center gap-3 text-xs">
                         <span className="text-chatTextMuted flex items-center gap-1.5">
                           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -908,7 +1133,7 @@ export default function WhatsAppConnectionModal({
                       Parâmetros da Evolution API & Conversor de Payload
                     </span>
                     <span className="text-[10px] text-chatTextMuted font-mono">
-                      /instance/connect
+                      /instance/connectionState • /instance/connect
                     </span>
                   </div>
 
@@ -972,7 +1197,7 @@ export default function WhatsAppConnectionModal({
                       className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 transition disabled:opacity-50"
                     >
                       <RefreshCw size={13} className={isLoadingQR ? 'animate-spin' : ''} />
-                      <span>Buscar QR Code da Evolution API</span>
+                      <span>Testar Status & Buscar QR Code</span>
                     </button>
                   </div>
 
@@ -1147,31 +1372,55 @@ export default function WhatsAppConnectionModal({
             </div>
           )}
 
-          {/* ABA 3: STATUS DO GATEWAY & WEBHOOKS */}
+          {/* ABA 3: STATUS DO GATEWAY & WEBHOOKS (100% DINÂMICO) */}
           {activeTab === 'settings' && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="p-3 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-1">
-                  <span className="text-[10px] text-chatTextMuted uppercase font-bold">Instância WhatsApp</span>
-                  <p className="font-bold text-chatTextTitle">{evolutionConfig.instanceName}</p>
-                  <span className="text-[10px] text-emerald-600 flex items-center gap-1">
-                    <Wifi size={12} /> Conexão Estável (12ms)
-                  </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3.5 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-1.5">
+                  <span className="text-[10px] text-chatTextMuted uppercase font-bold">Instância Evolution API</span>
+                  <p className="font-bold text-chatTextTitle">{evolutionConfig.instanceName || PROD_EVO_INSTANCE}</p>
+                  {connectionStatus === 'connected' ? (
+                    <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                      <Wifi size={12} /> Conectado (state: open{connectedInfo.pingMs ? ` • ${connectedInfo.pingMs}ms` : ''})
+                    </span>
+                  ) : connectionStatus === 'checking' ? (
+                    <span className="text-[11px] text-brand-600 font-semibold flex items-center gap-1">
+                      <RefreshCw size={12} className="animate-spin" /> Verificando status no Railway...
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-rose-600 dark:text-rose-400 font-semibold flex items-center gap-1">
+                      <AlertCircle size={12} /> Desconectado ({connectedInfo.status || 'close'})
+                    </span>
+                  )}
                 </div>
-                <div className="p-3 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-1">
-                  <span className="text-[10px] text-chatTextMuted uppercase font-bold">Número Vinculado</span>
+                <div className="p-3.5 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-1.5">
+                  <span className="text-[10px] text-chatTextMuted uppercase font-bold">Número Oficial & Sessão</span>
                   <p className="font-bold text-chatTextTitle">{connectedInfo.phone}</p>
-                  <span className="text-[10px] text-emerald-600 flex items-center gap-1">
-                    <BatteryCharging size={12} /> Bateria 94% • Carregando
-                  </span>
+                  {connectionStatus === 'connected' ? (
+                    <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                      <CheckCircle2 size={12} /> {connectedInfo.profileName || 'Sessão Ativa'}
+                      {connectedInfo.totalMessages !== null ? ` • ${connectedInfo.totalMessages.toLocaleString('pt-BR')} msgs` : ''}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                      <QrCode size={12} /> Requer leitura do QR Code na Aba 1
+                    </span>
+                  )}
                 </div>
               </div>
 
               <div className="p-3.5 bg-slate-50 dark:bg-chatPanel rounded-xl border border-slate-200 dark:border-chatBorder space-y-2 text-xs">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <h5 className="font-bold text-chatTextTitle flex items-center gap-1.5">
                     <Shield size={14} className="text-brand-600" />
                     URL do Webhook Supabase (Evolution API)
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                      connectedInfo.webhookEnabled
+                        ? 'bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-amber-100 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300'
+                    }`}>
+                      {connectedInfo.webhookEnabled ? 'Webhook Ativo' : 'Verificar Webhook'}
+                    </span>
                   </h5>
                   <button
                     type="button"
@@ -1180,14 +1429,14 @@ export default function WhatsAppConnectionModal({
                     className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-semibold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
                   >
                     <RefreshCw size={11} className={isLoadingQR ? 'animate-spin' : ''} />
-                    Sincronizar no Railway
+                    Religar Webhook no Railway
                   </button>
                 </div>
                 <code className="block bg-white dark:bg-chatCard p-2 rounded-lg border border-slate-200 dark:border-chatBorder text-[11px] font-mono text-chatTextMuted break-all select-all">
                   https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook
                 </code>
                 <p className="text-[11px] text-chatTextMuted">
-                  Eventos ativos: <code>MESSAGES_UPSERT</code>, <code>MESSAGES_UPDATE</code>, <code>CONNECTION_UPDATE</code>. As mensagens recebidas são gravadas no Supabase em tempo real.
+                  Eventos ativos: <code>MESSAGES_UPSERT</code>, <code>MESSAGES_UPDATE</code>, <code>CONNECTION_UPDATE</code>, <code>SEND_MESSAGE</code>. As mensagens recebidas são gravadas no Supabase em tempo real.
                 </p>
               </div>
             </div>

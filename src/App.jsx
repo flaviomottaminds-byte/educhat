@@ -54,6 +54,8 @@ import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
 import {
   isCollaboratorOnline,
+  getLatestSeen,
+  normalizePresenceKey,
   loadLocalHeartbeats,
   saveLocalHeartbeat
 } from './lib/presence';
@@ -141,16 +143,62 @@ export default function App() {
   const [onlineUserIds, setOnlineUserIds] = useState(() => new Set());
   const [heartbeats, setHeartbeats] = useState(() => loadLocalHeartbeats());
 
-  // Resolução dinâmica de colaboradores com status online/offline estrito baseado em presença e heartbeat
+  const presenceChannelRef = React.useRef(null);
+
+  // Resolução dinâmica de colaboradores: online/offline e última atividade vindos de Presence + profiles.last_seen
   const resolvedCollaborators = React.useMemo(() => {
     return (collaborators || []).map((collab) => {
       const isOnline = isCollaboratorOnline(collab, onlineUserIds, heartbeats, currentUser?.id);
       return {
         ...collab,
-        online: isOnline
+        online: isOnline,
+        lastSeen: isOnline && !collab.isBot ? new Date().toISOString() : getLatestSeen(collab, heartbeats)
       };
     });
   }, [collaborators, onlineUserIds, heartbeats, currentUser?.id]);
+
+  // Ao trocar de usuário logado, anuncia a nova identidade no canal de presença imediatamente
+  useEffect(() => {
+    const u = currentUser;
+    if (!u?.id) return;
+    const nowIso = new Date().toISOString();
+    setHeartbeats({ ...saveLocalHeartbeat(u.id, nowIso) });
+    const ch = presenceChannelRef.current;
+    if (ch) {
+      try {
+        ch.track({ userId: u.id, userName: u.name, email: u.email || '', department: u.department, onlineAt: nowIso });
+      } catch {}
+    }
+    supabase.from('profiles').update({ last_seen: nowIso }).eq('id', u.id).then(() => {}, () => {});
+  }, [currentUser?.id]);
+
+  // Fallback: sincroniza last_seen de toda a equipe direto da tabela profiles a cada 30s
+  useEffect(() => {
+    let cancelled = false;
+    const refreshProfilesPresence = async () => {
+      try {
+        const { data, error } = await supabase.from('profiles').select('id,email,name,last_seen');
+        if (error || !data || cancelled) return;
+        setCollaborators((prev) =>
+          prev.map((c) => {
+            const row = data.find(
+              (p) =>
+                p.id === c.id ||
+                (p.email && c.email && p.email.toLowerCase() === c.email.toLowerCase()) ||
+                (p.name && c.name && p.name.trim().toLowerCase() === c.name.trim().toLowerCase())
+            );
+            return row && row.last_seen && row.last_seen !== c.lastSeen ? { ...c, lastSeen: row.last_seen } : c;
+          })
+        );
+      } catch {}
+    };
+    refreshProfilesPresence();
+    const id = setInterval(refreshProfilesPresence, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
   const [isUserSelectOpen, setIsUserSelectOpen] = useState(() => {
     try {
       return !localStorage.getItem('educhat_user_id');
@@ -1202,17 +1250,69 @@ export default function App() {
       }
     });
 
+    const addPresenceKeys = (set, p) => {
+      if (!p) return;
+      if (p.userId) set.add(p.userId);
+      if (p.email) {
+        set.add(p.email);
+        set.add(normalizePresenceKey(p.email));
+      }
+      if (p.userName) set.add('name:' + normalizePresenceKey(p.userName));
+    };
+
+    const trackMyPresence = async () => {
+      const u = currentUserRef.current;
+      if (!u?.id) return;
+      try {
+        await channel.track({
+          userId: u.id,
+          userName: u.name,
+          email: u.email || '',
+          department: u.department,
+          onlineAt: new Date().toISOString()
+        });
+      } catch {}
+    };
+
+    // Grava a atividade real do usuário logado na tabela profiles (fonte única para toda a equipe)
+    const persistMyHeartbeat = async () => {
+      const u = currentUserRef.current;
+      if (!u?.id) return;
+      const nowIso = new Date().toISOString();
+      setHeartbeats({ ...saveLocalHeartbeat(u.id, nowIso) });
+      try {
+        let { data, error } = await supabase
+          .from('profiles')
+          .update({ last_seen: nowIso })
+          .eq('id', u.id)
+          .select('id');
+        if ((error || !data || data.length === 0) && u.email) {
+          await supabase.from('profiles').update({ last_seen: nowIso }).eq('email', u.email);
+        }
+      } catch {}
+    };
+
+    const markMyselfOffline = () => {
+      const u = currentUserRef.current;
+      if (!u?.id) return;
+      supabase.from('profiles').update({ last_seen: new Date().toISOString() }).eq('id', u.id).then(() => {}, () => {});
+    };
+    window.addEventListener('pagehide', markMyselfOffline);
+    const onVisible = () => {
+      if (!document.hidden) {
+        persistMyHeartbeat();
+        trackMyPresence();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
     const syncPresence = () => {
       try {
         const state = channel.presenceState();
         const activeIds = new Set();
         Object.keys(state).forEach((key) => {
           activeIds.add(key);
-          const presences = state[key] || [];
-          presences.forEach((p) => {
-            if (p.userId) activeIds.add(p.userId);
-            if (p.email) activeIds.add(p.email);
-          });
+          (state[key] || []).forEach((p) => addPresenceKeys(activeIds, p));
         });
         if (currentUserRef.current?.id) {
           activeIds.add(currentUserRef.current.id);
@@ -1760,36 +1860,19 @@ export default function App() {
         setOnlineUserIds((prev) => {
           const next = new Set(prev);
           next.add(key);
-          (newPresences || []).forEach((p) => {
-            if (p.userId) next.add(p.userId);
-            if (p.email) next.add(p.email);
-          });
+          (newPresences || []).forEach((p) => addPresenceKeys(next, p));
           return next;
         });
       })
-      .on('presence', { event: 'leave' }, ({ key }) => {
-        setOnlineUserIds((prev) => {
-          const next = new Set(prev);
-          if (key !== currentUserRef.current?.id) {
-            next.delete(key);
-          }
-          return next;
-        });
+      .on('presence', { event: 'leave' }, () => {
+        // Recalcula a partir do estado real do canal (evita remover quem ainda tem outra aba aberta)
+        syncPresence();
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           setRealtimeStatus('connected');
-          const u = currentUserRef.current;
-          if (u?.id) {
-            try {
-              await channel.track({
-                userId: u.id,
-                userName: u.name,
-                department: u.department,
-                onlineAt: new Date().toISOString()
-              });
-            } catch {}
-          }
+          presenceChannelRef.current = channel;
+          await trackMyPresence();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           setRealtimeStatus('error');
         } else {
@@ -1797,25 +1880,18 @@ export default function App() {
         }
       });
 
-    // Heartbeat leve de presença local na mesma assinatura
+    // Heartbeat: renova presença no Realtime e grava last_seen em profiles (visível para toda a equipe)
     const hbInterval = setInterval(() => {
-      const u = currentUserRef.current;
-      if (!document.hidden && u?.id) {
-        const hb = saveLocalHeartbeat(u.id);
-        setHeartbeats({ ...hb });
-        try {
-          channel.track({
-            userId: u.id,
-            userName: u.name,
-            department: u.department,
-            onlineAt: new Date().toISOString()
-          });
-        } catch {}
-      }
-    }, 45000);
+      persistMyHeartbeat();
+      trackMyPresence();
+    }, 30000);
+    persistMyHeartbeat();
 
     return () => {
       clearInterval(hbInterval);
+      window.removeEventListener('pagehide', markMyselfOffline);
+      document.removeEventListener('visibilitychange', onVisible);
+      presenceChannelRef.current = null;
       supabase.removeChannel(channel);
     };
   }, []);

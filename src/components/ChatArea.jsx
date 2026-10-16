@@ -873,7 +873,7 @@ export default function ChatArea({
                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatPanel ${
                   target.online ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
                 }`}
-                title={target.online ? 'Online' : target.lastSeen ? `Visto por último ${formatLastSeen(target.lastSeen)}` : 'Offline (nunca acessou)'}
+                title={target.online ? 'Online' : target.lastSeen ? `Visto por último ${formatLastSeen(target.lastSeen)}` : 'Offline'}
               />
             </div>
           ) : (
@@ -1010,7 +1010,7 @@ export default function ChatArea({
                       ? 'online'
                       : target.lastSeen
                       ? `visto por último ${formatLastSeen(target.lastSeen)}`
-                      : 'offline (nunca acessou)'
+                      : 'offline'
                     : channelMembersText || target.desc || 'Canal de comunicação'}
                 </span>
                 <span className="text-gray-300 dark:text-gray-600">•</span>
