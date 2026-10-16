@@ -58,3 +58,41 @@ export function isChatAssignedToUser(contactOrAssignee, user) {
 
   return false;
 }
+
+/**
+ * Retorna true se o departamento/fila do colaborador for compatível com o departamento alvo.
+ * Trata variações de nomenclatura (ex: 'Comercial & Vendas' vs 'Comercial', 'Marketing & Comunicação' vs 'Marketing').
+ */
+export function matchesDepartment(collabDept, targetDept) {
+  if (!collabDept || !targetDept) return false;
+  if (targetDept === 'Todos' || collabDept === 'Todos') return true;
+
+  const c = normalizeName(collabDept);
+  const t = normalizeName(targetDept);
+
+  if (c === t) return true;
+  if (c.includes(t) || t.includes(c)) return true;
+
+  const isComercial = (s) => s.includes('comercial') || s.includes('venda') || s.includes('matricula');
+  if (isComercial(c) && isComercial(t)) return true;
+
+  const isMarketing = (s) => s.includes('marketing') || s.includes('comunic');
+  if (isMarketing(c) && isMarketing(t)) return true;
+
+  const isSecretaria = (s) => s.includes('secretaria') || s.includes('document') || s.includes('diploma');
+  if (isSecretaria(c) && isSecretaria(t)) return true;
+
+  const isTutoria = (s) => s.includes('tutoria') || s.includes('academ');
+  if (isTutoria(c) && isTutoria(t)) return true;
+
+  const isPedagogico = (s) => s.includes('pedagog') || s.includes('coordenac');
+  if (isPedagogico(c) && isPedagogico(t)) return true;
+
+  const isExpansao = (s) => s.includes('expans') || s.includes('polo') || s.includes('parceria');
+  if (isExpansao(c) && isExpansao(t)) return true;
+
+  const isDiretoria = (s) => s.includes('diretor') || s.includes('gestao') || s.includes('executiv');
+  if (isDiretoria(c) && isDiretoria(t)) return true;
+
+  return false;
+}

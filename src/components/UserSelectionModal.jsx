@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Search, UserCheck, Shield, Building2, Mail, CheckCircle2, ArrowRight, UserPlus, Edit2 } from 'lucide-react';
-import { hasFullPortfolioAccess } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, matchesDepartment } from '../lib/portfolioAccess';
 import { formatLastSeen } from '../lib/presence';
 
 export default function UserSelectionModal({
@@ -21,7 +21,7 @@ export default function UserSelectionModal({
 
   const filtered = (collaborators || []).filter((u) => {
     if (!u) return false;
-    const matchesDept = deptFilter === 'Todos' || u.department === deptFilter;
+    const matchesDept = deptFilter === 'Todos' || matchesDepartment(u.department, deptFilter);
     const cleanSearch = (search || '').toLowerCase();
     const name = (u.name || '').toLowerCase();
     const dept = (u.department || '').toLowerCase();

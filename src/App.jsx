@@ -106,7 +106,8 @@ export default function App() {
         if (Array.isArray(parsed) && parsed.length > 0) {
           const list = [...parsed];
           INITIAL_COLLABORATORS.forEach((ic) => {
-            if (!list.some((c) => c.id === ic.id)) {
+            const exists = list.some((c) => c.id === ic.id || (c.name && ic.name && c.name.trim().toLowerCase() === ic.name.trim().toLowerCase()));
+            if (!exists) {
               list.push(ic);
             }
           });
@@ -576,6 +577,34 @@ export default function App() {
           }
         });
 
+        // Busca dedicada para sys_collaborators para garantir que nenhum usuário seja omitido por limite de paginação
+        try {
+          const { data: dedicatedCollabMessages } = await supabase
+            .from('messages')
+            .select('*')
+            .eq('chat_id', 'sys_collaborators')
+            .order('created_at', { ascending: true });
+
+          if (dedicatedCollabMessages && dedicatedCollabMessages.length > 0) {
+            dedicatedCollabMessages.forEach((m) => {
+              if (m.text?.includes('<!-- COLLABORATOR_RECORD:')) {
+                const match = m.text.match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+                if (match) {
+                  try {
+                    const parsed = JSON.parse(match[1]);
+                    const alreadyExists = dbCollaborators.some((c) => c.id === parsed.id || (c.name && parsed.name && c.name.toLowerCase() === parsed.name.toLowerCase()));
+                    if (!alreadyExists) {
+                      dbCollaborators.push(parsed);
+                    }
+                  } catch {}
+                }
+              }
+            });
+          }
+        } catch (e) {
+          console.warn('Aviso ao consultar sys_collaborators dedicado:', e);
+        }
+
         if (dbCollaborators.length > 0) {
           setCollaborators((prev) => {
             const list = [...prev];
@@ -900,18 +929,35 @@ export default function App() {
       try {
         const { data: dbProfiles, error: profErr } = await supabase.from('profiles').select('*');
         if (!profErr && dbProfiles && Array.isArray(dbProfiles) && dbProfiles.length > 0) {
-          setCollaborators(dbProfiles.map((p) => ({
-            id: p.id,
-            name: p.name || p.full_name || 'Colaborador',
-            email: p.email || '',
-            role: p.role || 'Colaborador',
-            roleType: p.role_type || (p.role === 'admin' || p.role === 'diretor' ? 'diretor' : 'colaborador'),
-            avatar: p.avatar || '👤',
-            online: p.is_bot ? true : (p.online === true),
-            lastSeen: p.last_seen || null,
-            department: p.department || 'Comercial',
-            isBot: p.is_bot || false
-          })));
+          setCollaborators((prev) => {
+            const list = [...prev];
+            dbProfiles.forEach((p) => {
+              const item = {
+                id: p.id,
+                name: p.name || p.full_name || 'Colaborador',
+                email: p.email || '',
+                role: p.role || 'Colaborador',
+                roleType: p.role_type || (p.role === 'admin' || p.role === 'diretor' ? 'diretor' : 'colaborador'),
+                avatar: p.avatar || '👤',
+                online: p.is_bot ? true : (p.online === true),
+                lastSeen: p.last_seen || null,
+                department: p.department || 'Comercial',
+                isBot: p.is_bot || false
+              };
+              const existingIdx = list.findIndex(
+                (c) => c.id === item.id || (c.name && item.name && c.name.trim().toLowerCase() === item.name.trim().toLowerCase())
+              );
+              if (existingIdx !== -1) {
+                list[existingIdx] = { ...list[existingIdx], ...item };
+              } else {
+                list.push(item);
+              }
+            });
+            try {
+              localStorage.setItem('educhat_collaborators', JSON.stringify(list));
+            } catch {}
+            return list;
+          });
         }
       } catch (err) {
         // Tabela profiles ainda não criada ou RLS; mantém INITIAL_COLLABORATORS
@@ -1257,6 +1303,62 @@ export default function App() {
         { event: 'UPDATE', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
+          if (!row) return;
+
+          // Sincronização em Tempo Real de Novos Colaboradores / Atualizações (UPDATE)
+          if (row.chat_id === 'sys_collaborators') {
+            const match = (row.text || '').match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                const incomingCollab = JSON.parse(match[1]);
+                setCollaborators((prev) => {
+                  const list = [...prev];
+                  const existingIdx = list.findIndex(
+                    (c) => c.id === incomingCollab.id || (c.name && incomingCollab.name && c.name.toLowerCase() === incomingCollab.name.toLowerCase())
+                  );
+                  if (existingIdx !== -1) {
+                    list[existingIdx] = { ...list[existingIdx], ...incomingCollab };
+                  } else {
+                    list.push(incomingCollab);
+                  }
+                  try {
+                    localStorage.setItem('educhat_collaborators', JSON.stringify(list));
+                  } catch {}
+                  return list;
+                });
+              } catch {}
+            }
+            return;
+          }
+
+          // Sincronização em Tempo Real da Base de Alunos (UPDATE)
+          if (row.chat_id === 'sys_educontrol_students') {
+            const match = (row.text || '').match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
+            if (match) {
+              try {
+                const sRecord = JSON.parse(match[1]);
+                setEduControlStudents((prev) => {
+                  const studentList = [...prev];
+                  const existingIdx = studentList.findIndex((s) => {
+                    if (sRecord.cleanCPF && s.cleanCPF && sRecord.cleanCPF === s.cleanCPF) return true;
+                    if (sRecord.cleanDigits && s.cleanDigits && sRecord.cleanDigits === s.cleanDigits) return true;
+                    return false;
+                  });
+                  if (existingIdx !== -1) {
+                    studentList[existingIdx] = { ...studentList[existingIdx], ...sRecord };
+                  } else {
+                    studentList.push(sRecord);
+                  }
+                  try {
+                    localStorage.setItem('educhat_educontrol_students', JSON.stringify(studentList));
+                  } catch {}
+                  return studentList;
+                });
+              } catch {}
+            }
+            return;
+          }
+
           const cKey = normalizeChatKey(row.chat_id, currentUser.id);
 
           let cleanText = row.text || '';
@@ -1273,6 +1375,41 @@ export default function App() {
               ...prev,
               [cKey]: list.map((m) => (m.id === row.id ? { ...m, status: parsedStatus } : m))
             };
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'profiles' },
+        (payload) => {
+          const row = payload.new;
+          if (!row) return;
+          const incomingCollab = {
+            id: row.id,
+            name: row.name || row.full_name || 'Colaborador',
+            email: row.email || '',
+            role: row.role || 'Colaborador',
+            roleType: row.role_type || (row.role === 'admin' || row.role === 'diretor' ? 'diretor' : 'colaborador'),
+            avatar: row.avatar || '👤',
+            online: row.is_bot ? true : (row.online === true),
+            lastSeen: row.last_seen || null,
+            department: row.department || 'Comercial',
+            isBot: row.is_bot || false
+          };
+          setCollaborators((prev) => {
+            const list = [...prev];
+            const existingIdx = list.findIndex(
+              (c) => c.id === incomingCollab.id || (c.name && incomingCollab.name && c.name.trim().toLowerCase() === incomingCollab.name.trim().toLowerCase())
+            );
+            if (existingIdx !== -1) {
+              list[existingIdx] = { ...list[existingIdx], ...incomingCollab };
+            } else {
+              list.push(incomingCollab);
+            }
+            try {
+              localStorage.setItem('educhat_collaborators', JSON.stringify(list));
+            } catch {}
+            return list;
           });
         }
       )
@@ -2310,7 +2447,9 @@ export default function App() {
   const handleSaveCollaborator = async (newCollaborator) => {
     // 1. Atualização Instantânea no Estado Local e LocalStorage
     setCollaborators((prev) => {
-      const idx = prev.findIndex((c) => c.id === newCollaborator.id);
+      const idx = prev.findIndex(
+        (c) => c.id === newCollaborator.id || (c.name && newCollaborator.name && c.name.trim().toLowerCase() === newCollaborator.name.trim().toLowerCase())
+      );
       let updated;
       if (idx !== -1) {
         updated = [...prev];

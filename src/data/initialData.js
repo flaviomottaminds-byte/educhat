@@ -11,6 +11,8 @@ export const INITIAL_COLLABORATORS = [
   { id: 'u10', name: 'Ana Livia', email: 'analiviamarquesribeiro@gmail.com', role: 'Marketing & Comunicação', roleType: 'colaborador', avatar: '👩‍🎨', online: false, lastSeen: null, department: 'Marketing' },
   { id: 'u11', name: 'Paulo do Vale', email: 'paulos.dovale@gmail.com', role: 'Coordenação Pedagógica', roleType: 'colaborador', avatar: '👨‍🏫', online: false, lastSeen: null, department: 'Pedagógico' },
   { id: 'u12', name: 'Luiz Augusto', email: 'luizdomingues08844@gmail.com', role: 'Expansão & Parcerias de Polos', roleType: 'colaborador', avatar: '👨‍💼', online: false, lastSeen: null, department: 'Expansão' },
+  { id: 'u13', name: 'Wagner', email: 'wagner@educhat.com', role: 'Comercial & Vendas', roleType: 'colaborador', avatar: '👨‍💼', online: false, lastSeen: null, department: 'Comercial' },
+  { id: 'u14', name: 'Yasmin', email: 'yasmin@educhat.com', role: 'Marketing & Comunicação', roleType: 'colaborador', avatar: '👩‍🎨', online: false, lastSeen: null, department: 'Marketing' },
   { id: 'u_ia_copilot', name: 'Assistente IA (MEC & Processos)', email: 'ia@educhat.internal', role: 'Inteligência Artificial Institucional', roleType: 'bot', avatar: '🤖', online: true, lastSeen: new Date().toISOString(), department: 'Inteligência Artificial', isBot: true },
 ];
 

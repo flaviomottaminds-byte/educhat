@@ -31,7 +31,7 @@ import {
   BookOpen,
   Volume2
 } from 'lucide-react';
-import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, matchesDepartment } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
@@ -1798,7 +1798,7 @@ export default function ChatArea({
                   onChange={(e) => {
                     const newDept = e.target.value;
                     setSelectedDept(newDept);
-                    const deptCollab = (collaborators || []).find((c) => !c.isBot && (c.department === newDept || (newDept.startsWith('Secretaria') && c.department?.startsWith('Secretaria'))));
+                    const deptCollab = (collaborators || []).find((c) => !c.isBot && matchesDepartment(c.department, newDept));
                     if (deptCollab) setSelectedAssignee(deptCollab.name);
                   }}
                   className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-brand-500 font-medium cursor-pointer"
@@ -1824,7 +1824,7 @@ export default function ChatArea({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 border border-slate-200 dark:border-chatBorder rounded-xl bg-slate-50/50 dark:bg-chatSidebar/30">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-1 border border-slate-200 dark:border-chatBorder rounded-xl bg-slate-50/50 dark:bg-chatSidebar/30">
                   {/* Opção Fila Geral */}
                   <button
                     type="button"
@@ -1844,32 +1844,49 @@ export default function ChatArea({
                     </div>
                   </button>
 
-                  {/* Lista Completa de Colaboradores / Consultores */}
+                  {/* Lista Completa de Colaboradores / Consultores (Ordenados com prioridade para a fila selecionada) */}
                   {(collaborators || [])
                     .filter((c) => !c.isBot)
+                    .sort((a, b) => {
+                      const aMatch = matchesDepartment(a.department, selectedDept);
+                      const bMatch = matchesDepartment(b.department, selectedDept);
+                      if (aMatch && !bMatch) return -1;
+                      if (!aMatch && bMatch) return 1;
+                      return (a.name || '').localeCompare(b.name || '');
+                    })
                     .map((collab) => {
                       const isSelected = selectedAssignee === collab.name;
+                      const isDeptMatch = matchesDepartment(collab.department, selectedDept);
                       return (
                         <button
                           key={collab.id}
                           type="button"
                           onClick={() => {
                             setSelectedAssignee(collab.name);
-                            if (collab.department && (!selectedDept || selectedDept === 'Comercial')) {
+                            if (collab.department) {
                               setSelectedDept(collab.department);
                             }
                           }}
-                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
+                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer relative ${
                             isSelected
                               ? 'border-brand-500 bg-brand-50/90 dark:bg-brand-950/60 shadow-xs ring-1 ring-brand-500'
-                              : 'border-slate-200 dark:border-chatBorder bg-white dark:bg-chatCard hover:bg-slate-50 dark:hover:bg-chatPanel'
+                              : isDeptMatch
+                              ? 'border-brand-200 dark:border-brand-900/50 bg-white dark:bg-chatCard hover:bg-brand-50/40'
+                              : 'border-slate-200 dark:border-chatBorder bg-white dark:bg-chatCard hover:bg-slate-50 dark:hover:bg-chatPanel opacity-90'
                           }`}
                         >
                           <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold flex items-center justify-center text-xs shrink-0 shadow-2xs">
                             {collab.name?.charAt(0) || 'U'}
                           </div>
-                          <div className="truncate">
-                            <p className="font-bold text-chatTextTitle text-xs truncate">{collab.name}</p>
+                          <div className="truncate flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="font-bold text-chatTextTitle text-xs truncate">{collab.name}</p>
+                              {isDeptMatch && (
+                                <span className="text-[8.5px] font-bold px-1 py-0.2 rounded bg-brand-100 dark:bg-brand-900/50 text-brand-700 dark:text-brand-300 shrink-0">
+                                  Fila
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-chatTextMuted truncate">{collab.department || collab.role}</p>
                           </div>
                         </button>
