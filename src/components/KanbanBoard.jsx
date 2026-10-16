@@ -13,7 +13,6 @@ import {
   Paperclip
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import MeetNotesImportModal from './MeetNotesImportModal';
 import { normalizeText, fetchActiveCollaboratorsFromDB } from '../lib/gemini';
 
 const COLUMNS = [
@@ -122,9 +121,6 @@ export default function KanbanBoard({
 
   // Abas de isolamento do Usuário Comum ('my_and_dept' | 'my_tasks' | 'dept_tasks' | 'my_requests')
   const [collabTab, setCollabTab] = useState('my_and_dept');
-
-  // Modal de Importação de Atas do Google Meet (Gemini)
-  const [isMeetModalOpen, setIsMeetModalOpen] = useState(false);
 
   const currentUserName = normalizeText(liveCurrentUser?.name);
   const currentUserFirst = currentUserName.split(' ')[0];
@@ -247,7 +243,7 @@ export default function KanbanBoard({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#f0f2f5] dark:bg-chatBg p-4 sm:p-6 overflow-y-auto transition-colors">
-      {/* Header do Kanban com Nível de Acesso e Botão de Importar Ata do Meet */}
+      {/* Header do Kanban com Nível de Acesso */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4 shrink-0">
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
@@ -266,7 +262,7 @@ export default function KanbanBoard({
           </div>
           <p className="text-xs text-chatTextMuted">
             {isDirector
-              ? 'Controle executivo integrado com Atas do Google Meet (gemini-notes@google.com).'
+              ? 'Visão Global Administrativa: todos os cartões de todos os setores e colaboradores.'
               : 'Exibindo cartões atribuídos a você ou ao seu setor. Você pode transferir tarefas entre departamentos ao clicar em qualquer card.'}
           </p>
         </div>
@@ -358,16 +354,6 @@ export default function KanbanBoard({
               </button>
             </div>
           )}
-
-          {/* Botão: Importar Ata do Meet (Gemini) */}
-          <button
-            type="button"
-            onClick={() => setIsMeetModalOpen(true)}
-            className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-          >
-            <Sparkles size={15} className="text-yellow-300" />
-            <span>✨ Importar Ata do Meet (Gemini)</span>
-          </button>
 
           <button
             type="button"
@@ -536,15 +522,6 @@ export default function KanbanBoard({
           );
         })}
       </div>
-
-      {/* Modal de Importação de Atas do Google Meet via Gemini */}
-      <MeetNotesImportModal
-        isOpen={isMeetModalOpen}
-        onClose={() => setIsMeetModalOpen(false)}
-        collaborators={liveCollaborators}
-        onCreateTasksBatch={onCreateTasksBatch}
-        onOpenAIMemory={onOpenAIMemory}
-      />
     </div>
   );
 }

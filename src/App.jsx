@@ -59,6 +59,7 @@ import {
   loadLocalHeartbeats,
   saveLocalHeartbeat
 } from './lib/presence';
+import { toWhatsAppNumber, sendWhatsAppText, ensureEvolutionWebhook, getEvolutionState } from './lib/evolution';
 import { extractAttachmentFromText } from './lib/attachmentParser';
 
 const INITIAL_VIP_CLIENTS = [
@@ -194,6 +195,25 @@ export default function App() {
     };
     refreshProfilesPresence();
     const id = setInterval(refreshProfilesPresence, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+  // Religamento forçado do WhatsApp (Evolution API): ao abrir força o webhook -> Supabase e revalida a cada 5 min
+  useEffect(() => {
+    let cancelled = false;
+    const check = async (force) => {
+      const state = await getEvolutionState();
+      if (cancelled) return;
+      if (state === 'open') {
+        await ensureEvolutionWebhook({ force });
+      } else {
+        console.warn('[WhatsApp] Evolution API não está conectada (state: ' + state + '). Abra o painel de conexão para ler o QR Code.');
+      }
+    };
+    check(true);
+    const id = setInterval(() => check(false), 5 * 60 * 1000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -1954,16 +1974,53 @@ export default function App() {
     }
     payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
-    supabase.from('messages').insert([{
-      id: newMsg.id,
-      chat_id: currentChatKey,
-      sender_id: newMsg.senderId,
-      sender_name: newMsg.senderName,
-      text: payloadText,
-      timestamp: newMsg.timestamp
-    }]).then(({ error }) => {
-      if (error) console.warn('Erro ao salvar msg no Supabase:', error);
-    });
+    const saveOutgoingRow = (rowId) =>
+      supabase.from('messages').insert([{
+        id: rowId,
+        chat_id: currentChatKey,
+        sender_id: newMsg.senderId,
+        sender_name: newMsg.senderName,
+        text: payloadText,
+        timestamp: newMsg.timestamp
+      }]).then(({ error }) => {
+        if (error && !String(error.message || '').toLowerCase().includes('duplicate')) {
+          console.warn('Erro ao salvar msg no Supabase:', error);
+        }
+      });
+
+    // Conversas de WhatsApp: envia de verdade pela Evolution API (texto) e grava com o ID real da mensagem
+    const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
+    const waNumber = toWhatsAppNumber(waContact?.phone || currentChatKey.replace(/^wa-/, ''));
+    const isWhatsAppSend =
+      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!waNumber;
+
+    if (isWhatsAppSend) {
+      sendWhatsAppText(waNumber, text).then((result) => {
+        if (result.ok && result.messageId) {
+          const realId = 'wa_' + result.messageId;
+          setMessages((prev) => {
+            const list = prev[currentChatKey] || [];
+            const hasReal = list.some((m) => m.id === realId);
+            const next = hasReal
+              ? list.filter((m) => m.id !== newMsg.id)
+              : list.map((m) => (m.id === newMsg.id ? { ...m, id: realId, status: 'sent' } : m));
+            return { ...prev, [currentChatKey]: next };
+          });
+          saveOutgoingRow(realId);
+        } else {
+          console.warn('Falha ao enviar WhatsApp via Evolution API:', result.error);
+          setMessages((prev) => ({
+            ...prev,
+            [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+              m.id === newMsg.id ? { ...m, status: 'failed', sendError: result.error } : m
+            )
+          }));
+          saveOutgoingRow(newMsg.id);
+        }
+      });
+    } else {
+      saveOutgoingRow(newMsg.id);
+    }
 
     // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot
     const isIAChat = (activeChat?.type === 'dm' && activeChat?.id === 'u_ia_copilot');
