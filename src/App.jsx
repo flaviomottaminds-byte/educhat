@@ -261,6 +261,15 @@ export default function App() {
     currentUserRef.current = currentUser;
   }, [currentUser]);
 
+  const assignmentsCacheRef = useRef({});
+  useEffect(() => {
+    try {
+      assignmentsCacheRef.current = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+    } catch {
+      assignmentsCacheRef.current = {};
+    }
+  }, []);
+
   // Modo da IA Autônoma (Se ativo, cria o card sozinho ao detectar intenção de tarefa)
   const [aiAutonomous, setAiAutonomous] = useState(true);
 
@@ -1039,10 +1048,6 @@ export default function App() {
   useEffect(() => {
     fetchSupabaseData(false);
 
-    const syncInterval = setInterval(() => {
-      fetchSupabaseData(true);
-    }, 120000);
-
     const channelListener = supabase
       .channel('educhat_realtime_channel')
       .on(
@@ -1146,11 +1151,7 @@ export default function App() {
               } catch {}
             }
 
-            let cachedAsgn = null;
-            try {
-              const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-              cachedAsgn = stored[cKey];
-            } catch {}
+            const cachedAsgn = assignmentsCacheRef.current[cKey] || null;
 
             const existingContact = whatsAppContacts.find((c) => c.id === cKey);
             const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === cKey);
@@ -1292,9 +1293,14 @@ export default function App() {
             if (asgnMatch) {
               try {
                 asgnData = JSON.parse(asgnMatch[1]);
-                const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-                stored[cKey] = asgnData;
-                localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
+                assignmentsCacheRef.current[cKey] = asgnData;
+                setTimeout(() => {
+                  try {
+                    const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
+                    stored[cKey] = asgnData;
+                    localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
+                  } catch {}
+                }, 0);
               } catch {}
             }
 
@@ -1325,11 +1331,7 @@ export default function App() {
                 const rawDigits = cKey.replace('wa-', '');
                 const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
 
-                let cachedAsgn = null;
-                try {
-                  const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-                  cachedAsgn = stored[cKey];
-                } catch {}
+                const cachedAsgn = assignmentsCacheRef.current[cKey] || null;
 
                 const matchedStudent = matchStudentByPhone(cKey, eduControlStudents);
 
@@ -1627,13 +1629,14 @@ export default function App() {
           setRealtimeStatus('connected');
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           setRealtimeStatus('error');
+          // Contingência de auto-recuperação: busca dados caso a conexão caia
+          fetchSupabaseData(true);
         } else {
           setRealtimeStatus('connecting');
         }
       });
 
     return () => {
-      clearInterval(syncInterval);
       supabase.removeChannel(channelListener);
     };
   }, [currentUser?.id]);
@@ -1768,6 +1771,20 @@ export default function App() {
       ...prev,
       [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
     }));
+
+    if (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) {
+      setWhatsAppContacts((prev) => {
+        const existing = prev.find((c) => c.id === currentChatKey);
+        if (!existing) return prev;
+        const updatedContact = {
+          ...existing,
+          lastInteraction: timeStr,
+          lastMessageAt: new Date().toISOString()
+        };
+        const remaining = prev.filter((c) => c.id !== currentChatKey);
+        return [updatedContact, ...remaining];
+      });
+    }
 
     let payloadText = text || '';
     if (attachment) {
@@ -3056,8 +3073,7 @@ export default function App() {
 
     // 3. Persistir no localStorage para retenção offline e recarregamento instantâneo
     try {
-      const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
-      stored[chatId] = {
+      const asgnObj = {
         department,
         assignee,
         status: status || 'carteira_ativa',
@@ -3065,6 +3081,8 @@ export default function App() {
         updatedBy: currentUser?.name || 'Gestão',
         updatedAt: new Date().toISOString()
       };
+      stored[chatId] = asgnObj;
+      assignmentsCacheRef.current[chatId] = asgnObj;
       localStorage.setItem('educhat_chat_assignments', JSON.stringify(stored));
     } catch (e) {
       console.warn('Erro ao salvar no localStorage:', e);

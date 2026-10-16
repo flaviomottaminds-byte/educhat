@@ -573,6 +573,7 @@ export default function ChatArea({
   const timerIntervalRef = useRef(null);
 
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
 
   const isWhatsApp = chatMeta?.type === 'whatsapp';
@@ -636,13 +637,17 @@ export default function ChatArea({
     setIsAssignmentOpen(false);
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (instant = true) => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    } else if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: instant ? 'auto' : 'smooth' });
+    }
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [messages, chatMeta]);
+    scrollToBottom(true);
+  }, [messages?.length, chatMeta?.data?.id || chatMeta?.id]);
 
   // Limpeza de recursos ao desmontar
   useEffect(() => {
@@ -661,12 +666,19 @@ export default function ChatArea({
     e?.preventDefault();
     if (!inputText.trim() && !pendingAttachment) return;
 
-    onSendMessage(inputText, pendingAttachment, {
-      replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null
-    });
+    const textToSend = inputText;
+    const attachmentToSend = pendingAttachment;
+    const replyingToSend = replyingTo;
+
     setInputText('');
     setPendingAttachment(null);
     setReplyingTo(null);
+
+    onSendMessage(textToSend, attachmentToSend, {
+      replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null
+    });
+
+    requestAnimationFrame(() => scrollToBottom(true));
   };
 
   // Iniciar Gravação de Áudio Nativa (Item 2)
@@ -1150,7 +1162,7 @@ export default function ChatArea({
       )}
 
       {/* Área de Mensagens com Textura Oficial do WhatsApp */}
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2.5 whatsapp-bg">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2.5 whatsapp-bg">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-[#667781]">
             <div className="bg-white/85 dark:bg-chatCard/90 backdrop-blur-xs p-5 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-sm shadow-sm space-y-2">
