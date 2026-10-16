@@ -204,8 +204,8 @@ export default function App() {
                   matricula: matched.matricula,
                   academicStatus: matched.academicStatus,
                   statusLabel: `${matched.academicStatus} • ${matched.course}`,
-                  assignee: matched.assignee || found.assignee,
-                  department: matched.department || found.department
+                  assignee: found.assignee || matched.assignee,
+                  department: found.department || matched.department
                 }
               : found;
           }
@@ -2312,7 +2312,30 @@ export default function App() {
       ];
     });
 
-    // 2. Persistir no localStorage para retenção offline e recarregamento instantâneo
+    // 2. Atualizar também a base de alunos reconhecidos (se este contato for aluno EduControl)
+    setEduControlStudents((prev) => {
+      let matched = false;
+      const updated = prev.map((s) => {
+        const sWaId = s.waId || `wa-${s.cleanDigits}`;
+        if (s.id === chatId || sWaId === chatId || (s.cleanDigits && chatId.includes(s.cleanDigits))) {
+          matched = true;
+          return {
+            ...s,
+            assignee: assignee || s.assignee,
+            department: department || s.department
+          };
+        }
+        return s;
+      });
+      if (matched) {
+        try {
+          localStorage.setItem('educhat_educontrol_students', JSON.stringify(updated));
+        } catch {}
+      }
+      return updated;
+    });
+
+    // 3. Persistir no localStorage para retenção offline e recarregamento instantâneo
     try {
       const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
       stored[chatId] = {

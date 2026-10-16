@@ -481,7 +481,7 @@ export default function ChatArea({
     <section className="flex-1 flex flex-col h-full bg-[#efeae2] dark:bg-chatBg relative transition-colors">
       {/* Header do Chat - Estilo Exato WhatsApp Web */}
       <div className="h-16 px-4 bg-chatPanel border-b border-chatBorder flex items-center justify-between shrink-0 shadow-xs z-10">
-        <div className="flex items-center gap-3 truncate">
+        <div className="flex items-center gap-3 min-w-0">
           {isWhatsApp ? (
             <div className="relative text-3xl shrink-0">
               <span>{target.avatar || '👤'}</span>
@@ -502,7 +502,7 @@ export default function ChatArea({
             </div>
           )}
 
-          <div className="truncate">
+          <div className="min-w-0">
             <h2 className="text-chatTextTitle font-semibold text-sm leading-tight flex items-center gap-2 truncate">
               <span className="truncate">{matchedStudent?.name || target.name}</span>
               {isWhatsApp ? (
@@ -556,149 +556,27 @@ export default function ChatArea({
                 )}
                 <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
 
-                {/* Seletor Interativo de Fila & Responsável (Item 1) */}
-                <div className="relative inline-block" ref={assignmentPopoverRef}>
-                  <button
-                    type="button"
-                    onClick={() => setIsAssignmentOpen(!isAssignmentOpen)}
-                    className="group inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-white/90 dark:bg-chatCard hover:bg-white dark:hover:bg-chatPanel border border-slate-300/80 dark:border-chatBorder shadow-2xs hover:shadow-xs transition text-chatTextTitle cursor-pointer"
-                    title="Clique para reatribuir a fila de atendimento e o consultor deste chat"
-                  >
-                    <span className="text-[10.5px]">
-                      Fila: <strong className="text-brand-700 dark:text-brand-400 font-bold">{target.department || 'Geral'}</strong>
-                    </span>
-                    <span className="text-slate-300 dark:text-slate-600">•</span>
-                    <span className="text-[10.5px]">
-                      Resp: <strong className="font-bold text-chatTextTitle">{target.assignee || 'Aguardando'}</strong>
-                    </span>
-                    <ChevronDown size={11} className={`text-chatTextMuted group-hover:text-brand-600 transition-transform duration-200 ${isAssignmentOpen ? 'rotate-180' : ''}`} />
-                  </button>
-
-                  {/* Popover Dropdown de Reatribuição */}
-                  {isAssignmentOpen && (
-                    <div className="absolute left-0 top-full mt-1.5 w-84 bg-white dark:bg-chatCard rounded-2xl shadow-2xl border border-slate-200 dark:border-chatBorder p-4 z-50 animate-in fade-in zoom-in-95 duration-150">
-                      <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-100 dark:border-chatBorder">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-lg bg-brand-50 dark:bg-brand-950/40 text-brand-600 dark:text-brand-400 flex items-center justify-center">
-                            <UserCheck size={15} />
-                          </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-chatTextTitle leading-tight">
-                              Reatribuir Fila & Consultor
-                            </h4>
-                            <p className="text-[10px] text-chatTextMuted">
-                              Defina o setor e o atendente responsável
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setIsAssignmentOpen(false)}
-                          className="p-1 rounded-full text-chatTextMuted hover:text-chatTextTitle hover:bg-slate-100 dark:hover:bg-chatPanel transition cursor-pointer"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-
-                      <div className="space-y-3">
-                        {/* Fila / Departamento */}
-                        <div>
-                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
-                            Fila de Atendimento (Setor)
-                          </label>
-                          <select
-                            value={selectedDept}
-                            onChange={(e) => {
-                              const newDept = e.target.value;
-                              setSelectedDept(newDept);
-                              const deptCollab = (collaborators || []).find((c) => !c.isBot && c.department === newDept);
-                              if (deptCollab) setSelectedAssignee(deptCollab.name);
-                            }}
-                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
-                          >
-                            <option value="Comercial">🎯 Comercial (Matrículas & Vendas)</option>
-                            <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
-                            <option value="Secretaria">📋 Secretaria Acadêmica</option>
-                            <option value="Tutoria">🎓 Tutoria & Apoio Pedagógico</option>
-                            <option value="Financeiro">💰 Financeiro & Splits Asaas</option>
-                            <option value="Suporte a Polos">🛠️ Suporte a Polos & eAula</option>
-                            <option value="Pedagógico">👨‍🏫 Coordenação Pedagógica</option>
-                            <option value="Marketing">👩‍🎨 Marketing & Captação</option>
-                            <option value="Diretoria">👑 Diretoria Executiva</option>
-                          </select>
-                        </div>
-
-                        {/* Consultor Responsável */}
-                        <div>
-                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
-                            Consultor Responsável
-                          </label>
-                          <select
-                            value={selectedAssignee}
-                            onChange={(e) => setSelectedAssignee(e.target.value)}
-                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
-                          >
-                            <option value="">-- Aguardando Atribuição (Fila Geral) --</option>
-                            {(collaborators || [])
-                              .filter((c) => !c.isBot)
-                              .map((collab) => (
-                                <option key={collab.id} value={collab.name}>
-                                  {collab.name} ({collab.department || collab.role})
-                                </option>
-                              ))}
-                          </select>
-                        </div>
-
-                        {/* Tipo de Carteira */}
-                        <div>
-                          <label className="block text-[10.5px] font-bold uppercase tracking-wider text-chatTextMuted mb-1">
-                            Regra de Carteira
-                          </label>
-                          <select
-                            value={selectedStatus}
-                            onChange={(e) => setSelectedStatus(e.target.value)}
-                            className="w-full text-xs p-2 rounded-xl bg-slate-50 dark:bg-chatPanel border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-1 focus:ring-brand-500 font-medium cursor-pointer"
-                          >
-                            <option value="carteira_ativa">💼 Carteira Ativa (Permanência Contínua)</option>
-                            <option value="lead_instagram">🎯 Lead Instagram - Expansão</option>
-                            <option value="veterano_retencao">🎓 Aluno Veterano (Retenção)</option>
-                            <option value="ura_inedito">🤖 Triagem URA (Autoatendimento)</option>
-                          </select>
-                        </div>
-
-                        {/* Banner de Permanência de Carteira */}
-                        <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/20 text-[10.5px] text-emerald-900 dark:text-emerald-200 space-y-0.5">
-                          <p className="font-bold flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                            Regra de Permanência (Sticky Assignment):
-                          </p>
-                          <p className="text-[10px] text-emerald-800 dark:text-emerald-300 leading-tight">
-                            As próximas mensagens e rechamadas deste contato serão mantidas diretamente com o consultor selecionado.
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Ações */}
-                      <div className="mt-4 pt-2.5 border-t border-slate-100 dark:border-chatBorder flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setIsAssignmentOpen(false)}
-                          className="px-3 py-1.5 text-xs text-chatTextMuted hover:text-chatTextTitle font-medium transition cursor-pointer"
-                        >
-                          Cancelar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={handleSaveAssignment}
-                          className="px-3.5 py-1.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1 cursor-pointer"
-                        >
-                          <Check size={13} />
-                          Salvar Atribuição
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                {/* Seletor Interativo de Fila & Responsável (Totalmente Clicável com Modal) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDept(target.department || 'Comercial');
+                    setSelectedAssignee(target.assignee || '');
+                    setSelectedStatus(target.status || 'carteira_ativa');
+                    setIsAssignmentOpen(true);
+                  }}
+                  className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/95 dark:bg-chatCard hover:bg-brand-50 dark:hover:bg-brand-950/50 border border-slate-300 dark:border-chatBorder hover:border-brand-500 shadow-2xs hover:shadow-xs transition text-chatTextTitle cursor-pointer select-none shrink-0"
+                  title="Clique para abrir o seletor de Fila e Consultor Responsável deste atendimento"
+                >
+                  <span className="text-[11px] leading-tight">
+                    Fila: <strong className="text-brand-700 dark:text-brand-400 font-bold">{target.department || 'Comercial'}</strong>
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span className="text-[11px] leading-tight">
+                    Resp: <strong className="font-bold text-chatTextTitle">{target.assignee || 'Aguardando'}</strong>
+                  </span>
+                  <ChevronDown size={12} className="text-brand-600 dark:text-brand-400 group-hover:translate-y-0.5 transition-transform" />
+                </button>
 
                 <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
                 {realtimeStatus === 'connected' ? (
@@ -1473,6 +1351,208 @@ export default function ChatArea({
         onClose={() => setIsStudentDossierOpen(false)}
         student={matchedStudent}
       />
+
+      {/* Modal Interativo de Reatribuição de Fila & Consultor Responsável (Sticky Assignment) */}
+      {isAssignmentOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in"
+          onClick={() => setIsAssignmentOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-chatPanel w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 dark:border-chatBorder flex flex-col overflow-hidden animate-in zoom-in-95 max-h-[92vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Cabeçalho do Modal */}
+            <div className="p-4 sm:px-5 bg-gradient-to-r from-brand-700 to-indigo-800 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-white/10 backdrop-blur-xs flex items-center justify-center text-yellow-300 border border-white/20">
+                  <UserCheck size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-sm leading-tight text-white">
+                      Reatribuir Fila & Consultor
+                    </h3>
+                    <span className="text-[9.5px] bg-white/20 px-2 py-0.2 rounded-full font-semibold border border-white/20">
+                      Permanência Ativa
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-white/80 mt-0.5 truncate max-w-xs sm:max-w-md">
+                    {matchedStudent?.name || target.name || 'Contato WhatsApp'} • {target.phone || ''}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAssignmentOpen(false)}
+                className="p-1.5 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Conteúdo com Scroll */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs">
+              
+              {/* Informações Atuais */}
+              <div className="p-3 bg-slate-50 dark:bg-chatCard rounded-xl border border-slate-200 dark:border-chatBorder grid grid-cols-2 gap-3 text-slate-700 dark:text-slate-300">
+                <div>
+                  <span className="text-[10px] font-bold text-chatTextMuted uppercase block">Fila Atual</span>
+                  <span className="font-bold text-brand-700 dark:text-brand-400 text-xs">{target.department || 'Comercial'}</span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-chatTextMuted uppercase block">Consultor Atual</span>
+                  <span className="font-bold text-chatTextTitle text-xs">{target.assignee || 'Aguardando Atribuição'}</span>
+                </div>
+              </div>
+
+              {/* 1. Seleção de Fila / Departamento da Faculdade */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1.5">
+                  1. Fila de Atendimento (Departamento da Faculdade):
+                </label>
+                <select
+                  value={selectedDept}
+                  onChange={(e) => {
+                    const newDept = e.target.value;
+                    setSelectedDept(newDept);
+                    const deptCollab = (collaborators || []).find((c) => !c.isBot && c.department === newDept);
+                    if (deptCollab) setSelectedAssignee(deptCollab.name);
+                  }}
+                  className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-brand-500 font-medium cursor-pointer"
+                >
+                  <option value="Comercial">🎯 Comercial (Matrículas & Vendas)</option>
+                  <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
+                  <option value="Secretaria Acadêmica">📋 Secretaria Acadêmica</option>
+                  <option value="Tutoria">🎓 Tutoria & Apoio Pedagógico</option>
+                  <option value="Financeiro">💰 Financeiro & Splits Asaas</option>
+                  <option value="Suporte a Polos">🛠️ Suporte a Polos & eAula</option>
+                  <option value="Coordenação Pedagógica">👨‍🏫 Coordenação Pedagógica</option>
+                  <option value="Marketing">👩‍🎨 Marketing & Captação</option>
+                  <option value="Diretoria">👑 Diretoria Executiva</option>
+                </select>
+              </div>
+
+              {/* 2. Seleção de Consultor Responsável */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-chatTextMuted">
+                    2. Consultor Responsável:
+                  </label>
+                  <span className="text-[10.5px] text-brand-600 dark:text-brand-400 font-bold">
+                    {selectedAssignee ? `Selecionado: ${selectedAssignee}` : 'Fila Geral'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 border border-slate-200 dark:border-chatBorder rounded-xl bg-slate-50/50 dark:bg-chatSidebar/30">
+                  {/* Opção Fila Geral */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAssignee('')}
+                    className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2 cursor-pointer ${
+                      !selectedAssignee
+                        ? 'border-brand-500 bg-brand-50/90 dark:bg-brand-950/60 shadow-xs ring-1 ring-brand-500'
+                        : 'border-slate-200 dark:border-chatBorder bg-white dark:bg-chatCard hover:bg-slate-50 dark:hover:bg-chatPanel'
+                    }`}
+                  >
+                    <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-chatSidebar flex items-center justify-center text-sm shrink-0">
+                      👥
+                    </div>
+                    <div className="truncate">
+                      <p className="font-bold text-chatTextTitle text-xs truncate">Fila Geral</p>
+                      <p className="text-[10px] text-chatTextMuted truncate">Sem atendente fixo</p>
+                    </div>
+                  </button>
+
+                  {/* Lista Completa de Colaboradores / Consultores */}
+                  {(collaborators || [])
+                    .filter((c) => !c.isBot)
+                    .map((collab) => {
+                      const isSelected = selectedAssignee === collab.name;
+                      return (
+                        <button
+                          key={collab.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedAssignee(collab.name);
+                            if (collab.department && (!selectedDept || selectedDept === 'Comercial')) {
+                              setSelectedDept(collab.department);
+                            }
+                          }}
+                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
+                            isSelected
+                              ? 'border-brand-500 bg-brand-50/90 dark:bg-brand-950/60 shadow-xs ring-1 ring-brand-500'
+                              : 'border-slate-200 dark:border-chatBorder bg-white dark:bg-chatCard hover:bg-slate-50 dark:hover:bg-chatPanel'
+                          }`}
+                        >
+                          <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold flex items-center justify-center text-xs shrink-0 shadow-2xs">
+                            {collab.name?.charAt(0) || 'U'}
+                          </div>
+                          <div className="truncate">
+                            <p className="font-bold text-chatTextTitle text-xs truncate">{collab.name}</p>
+                            <p className="text-[10px] text-chatTextMuted truncate">{collab.department || collab.role}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                </div>
+              </div>
+
+              {/* 3. Tipo de Carteira */}
+              <div>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1.5">
+                  3. Tipo de Carteira:
+                </label>
+                <select
+                  value={selectedStatus}
+                  onChange={(e) => setSelectedStatus(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-brand-500 font-medium cursor-pointer"
+                >
+                  <option value="carteira_ativa">💼 Carteira Ativa (Permanência Contínua)</option>
+                  <option value="lead_instagram">🎯 Lead Instagram - Expansão</option>
+                  <option value="veterano_retencao">🎓 Aluno Veterano (Retenção)</option>
+                  <option value="ura_inedito">🤖 Triagem URA (Autoatendimento)</option>
+                </select>
+              </div>
+
+              {/* Banner de Permanência de Carteira (Sticky Assignment) */}
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-500/20 text-emerald-900 dark:text-emerald-200 space-y-1">
+                <p className="font-bold flex items-center gap-1.5 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Regra de Permanência de Carteira (Sticky Assignment):
+                </p>
+                <p className="text-[11px] text-emerald-800 dark:text-emerald-300 leading-relaxed">
+                  Ao salvar, a alteração é gravada imediatamente no Supabase e distribuída via Realtime para toda a equipe. Todas as próximas mensagens e rechamadas deste contato serão mantidas diretamente com o consultor selecionado.
+                </p>
+              </div>
+            </div>
+
+            {/* Rodapé de Ações */}
+            <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-slate-200 dark:border-chatBorder flex items-center justify-between">
+              <span className="text-[11px] text-chatTextMuted">
+                {selectedAssignee ? `Atribuindo a ${selectedAssignee}` : 'Atribuindo para Fila Geral'}
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsAssignmentOpen(false)}
+                  className="px-4 py-2 text-xs text-chatTextMuted hover:text-chatTextTitle font-semibold transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAssignment}
+                  className="px-5 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Check size={14} />
+                  Salvar e Atribuir
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
