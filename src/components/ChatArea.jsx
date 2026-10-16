@@ -38,6 +38,7 @@ import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
 import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
+import { processAudioSource, playDecodedAudioBuffer } from '../lib/audioStreamHelper';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -177,79 +178,48 @@ function parseMessageContent(m) {
   };
 }
 
-// Helper para sintetizar tom de voz suave via Web Audio API caso o arquivo de áudio falhe
-function playSyntheticVoiceNote(durationSec = 5, onEnd = () => {}) {
-  try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) {
-      setTimeout(onEnd, durationSec * 1000);
-      return;
-    }
-    const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'sine';
-    const now = ctx.currentTime;
-    osc.frequency.setValueAtTime(220, now);
-    osc.frequency.linearRampToValueAtTime(320, now + Math.min(1, durationSec * 0.3));
-    osc.frequency.linearRampToValueAtTime(260, now + Math.min(2, durationSec * 0.7));
-    osc.frequency.linearRampToValueAtTime(196, now + durationSec);
-
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.1);
-    gain.gain.setValueAtTime(0.08, now + Math.max(0.2, durationSec - 0.2));
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start(now);
-    osc.stop(now + durationSec);
-
-    setTimeout(() => {
-      try {
-        ctx.close();
-      } catch {}
-      onEnd();
-    }, durationSec * 1000);
-  } catch (e) {
-    console.warn('Web Audio synthesis error:', e);
-    setTimeout(onEnd, (durationSec || 2) * 1000);
-  }
-}
-
-// Player interativo e robusto de áudio do WhatsApp com suporte a áudio nativo e customizado
+// Player interativo e de alta fidelidade para áudios do WhatsApp com suporte a codecs Opus/OGG e WebM
 function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState('0:00');
   const [playbackRate, setPlaybackRate] = useState(1);
-  const [showNativePlayer, setShowNativePlayer] = useState(false);
   const [audioError, setAudioError] = useState(false);
   const audioRef = useRef(null);
+  const webAudioHandleRef = useRef(null);
 
-  // Normaliza e limpa a URL do áudio (suporta Data URLs, HTTPS, Blobs e Base64 cru da Evolution API)
-  const resolvedUrl = React.useMemo(() => {
-    if (!audioUrl || typeof audioUrl !== 'string') return '';
-    const trimmed = audioUrl.trim();
-    if (trimmed.startsWith('data:')) {
-      return trimmed.replace(/[\r\n]/g, '');
-    }
-    if (
-      trimmed.startsWith('blob:') ||
-      trimmed.startsWith('http://') ||
-      trimmed.startsWith('https://')
-    ) {
-      return trimmed;
-    }
-    // Tratamento de Base64 cru enviado pela Evolution API / WhatsApp
-    const cleanBase64 = trimmed.replace(/\s+/g, '');
-    if (/^[A-Za-z0-9+/=]+$/.test(cleanBase64.slice(0, 60))) {
-      return `data:audio/ogg;codecs=opus;base64,${cleanBase64}`;
-    }
-    return trimmed;
+  // Converte fluxos (Base64, Data URLs ou HTTPS) em Blobs estáveis e detecta MIME / codecs exatos
+  const audioSource = React.useMemo(() => {
+    return processAudioSource(audioUrl);
   }, [audioUrl]);
+
+  // Libera a URL do Blob criada quando o componente desmontar ou audioUrl mudar
+  useEffect(() => {
+    return () => {
+      if (audioSource?.blobUrl && audioSource.blobUrl.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(audioSource.blobUrl);
+        } catch {}
+      }
+      if (webAudioHandleRef.current) {
+        try {
+          webAudioHandleRef.current.stop();
+        } catch {}
+      }
+    };
+  }, [audioSource]);
+
+  // Recarrega o elemento <audio> nativo quando a fonte ou blob mudar
+  useEffect(() => {
+    if (audioRef.current && audioSource.blobUrl) {
+      try {
+        audioRef.current.load();
+        setAudioError(false);
+      } catch (err) {
+        console.warn('Erro ao carregar fontes de áudio no elemento <audio>:', err);
+      }
+    }
+  }, [audioSource.blobUrl]);
 
   // Duração em segundos calculada
   const parsedDurationSec = React.useMemo(() => {
@@ -261,12 +231,40 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     return 14;
   }, [duration]);
 
-  // Fallback acústico/fala que garante áudio audível real mesmo se o arquivo binário falhar
-  const triggerFallbackPlay = () => {
+  const stopWebAudio = () => {
+    if (webAudioHandleRef.current) {
+      try {
+        webAudioHandleRef.current.stop();
+      } catch {}
+      webAudioHandleRef.current = null;
+    }
+  };
+
+  // Fallback acústico limpo de voz real: Web Audio PCM ou síntese de fala
+  const triggerFallbackPlay = async () => {
     setIsPlaying(true);
     setProgress(0);
 
-    // Se há transcrição e suporte a SpeechSynthesis (fala a transcrição em voz pt-BR)
+    // 1. Tenta decodificar o fluxo PCM real via Web Audio API caso haja arrayBuffer
+    if (audioSource.arrayBuffer) {
+      try {
+        stopWebAudio();
+        const handle = await playDecodedAudioBuffer(audioSource.arrayBuffer, playbackRate, () => {
+          setIsPlaying(false);
+          setProgress(0);
+          setCurrentTime('0:00');
+          webAudioHandleRef.current = null;
+        });
+        if (handle) {
+          webAudioHandleRef.current = handle;
+          return;
+        }
+      } catch (err) {
+        console.warn('Fallback Web Audio PCM falhou:', err);
+      }
+    }
+
+    // 2. Se há transcrição e suporte a SpeechSynthesis (fala a transcrição em voz pt-BR)
     if ('speechSynthesis' in window && transcription) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(transcription);
@@ -279,30 +277,24 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
         setCurrentTime('0:00');
       };
       utterance.onerror = () => {
-        playSyntheticVoiceNote(parsedDurationSec, () => {
-          setIsPlaying(false);
-          setProgress(0);
-          setCurrentTime('0:00');
-        });
+        setIsPlaying(false);
+        setProgress(0);
+        setCurrentTime('0:00');
       };
 
       window.speechSynthesis.speak(utterance);
     } else {
-      // Tom acústico de voz simulada via Web Audio API
-      playSyntheticVoiceNote(parsedDurationSec, () => {
-        setIsPlaying(false);
-        setProgress(0);
-        setCurrentTime('0:00');
-      });
+      setIsPlaying(false);
     }
   };
 
-  // Alterna Reprodução e Pausa com Fallback Inteligente
-  const togglePlay = () => {
+  // Alterna Reprodução e Pausa com Priorização Nativa e Fallback Decodificado
+  const togglePlay = async () => {
     if (isPlaying) {
       if (audioRef.current) {
         audioRef.current.pause();
       }
+      stopWebAudio();
       if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
         window.speechSynthesis.cancel();
       }
@@ -310,28 +302,28 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
       return;
     }
 
-    if (resolvedUrl && audioRef.current) {
+    // 1. Tenta reproduzir pelo elemento nativo com <source> tags
+    if (audioRef.current && audioSource.blobUrl && !audioError) {
       audioRef.current.playbackRate = playbackRate;
-      audioRef.current
-        .play()
-        .then(() => {
-          setIsPlaying(true);
-          setAudioError(false);
-        })
-        .catch((err) => {
-          console.warn('HTML5 Audio play falhou, ativando fallback audível de voz/tom:', err);
-          setAudioError(true);
-          triggerFallbackPlay();
-        });
-    } else {
-      triggerFallbackPlay();
+      try {
+        await audioRef.current.play();
+        setIsPlaying(true);
+        setAudioError(false);
+        return;
+      } catch (err) {
+        console.warn('HTML5 Audio play falhou, recorrendo a Web Audio PCM:', err);
+        setAudioError(true);
+      }
     }
+
+    // 2. Se elemento nativo falhar, aciona reprodução decodificada sem ruídos
+    await triggerFallbackPlay();
   };
 
-  // Atualização de progresso durante simulação/fala
+  // Atualização de progresso durante simulação/fala ou reprodução Web Audio
   useEffect(() => {
     let interval = null;
-    if (isPlaying && (!resolvedUrl || audioError || !audioRef.current)) {
+    if (isPlaying && (audioError || webAudioHandleRef.current || !audioRef.current)) {
       const stepMs = 200;
       const totalSteps = (parsedDurationSec * 1000) / (stepMs * playbackRate);
       interval = setInterval(() => {
@@ -351,11 +343,11 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
       }, stepMs);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, resolvedUrl, audioError, parsedDurationSec, playbackRate, duration]);
+  }, [isPlaying, audioError, parsedDurationSec, playbackRate, duration]);
 
   // Manipuladores de Eventos do Elemento <audio> Nativo
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
+    if (audioRef.current && !webAudioHandleRef.current) {
       const current = audioRef.current.currentTime;
       const total = audioRef.current.duration || parsedDurationSec || 1;
       setProgress((current / total) * 100);
@@ -378,7 +370,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     const clickPercent = Math.max(0, Math.min(1, clickX / rect.width));
     setProgress(clickPercent * 100);
 
-    if (audioRef.current && audioRef.current.duration) {
+    if (audioRef.current && audioRef.current.duration && !audioError) {
       audioRef.current.currentTime = clickPercent * audioRef.current.duration;
     } else {
       const curSecs = Math.floor(clickPercent * parsedDurationSec);
@@ -400,29 +392,46 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
   return (
     <div className="space-y-1.5 max-w-sm sm:max-w-md my-1">
       {/* Elemento de Player de Áudio Nativo do Navegador (<audio controls ... />) */}
-      {resolvedUrl ? (
+      {audioSource.blobUrl ? (
         <div className="w-full max-w-xs">
           <audio
             ref={audioRef}
             controls
-            src={resolvedUrl}
             preload="metadata"
             className="w-full max-w-xs my-1 rounded-lg block accent-emerald-600 dark:accent-emerald-400"
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onTimeUpdate={handleTimeUpdate}
             onEnded={handleEnded}
-            onError={() => setAudioError(true)}
-          />
+            onError={() => {
+              console.warn('HTML5 Audio elemento onError disparado');
+              setAudioError(true);
+            }}
+          >
+            {audioSource.mimeType && (
+              <source src={audioSource.blobUrl} type={audioSource.mimeType} />
+            )}
+            <source src={audioSource.blobUrl} type="audio/ogg; codecs=opus" />
+            <source src={audioSource.blobUrl} type="audio/ogg" />
+            <source src={audioSource.blobUrl} type="audio/webm; codecs=opus" />
+            <source src={audioSource.blobUrl} type="audio/webm" />
+            <source src={audioSource.blobUrl} type="audio/mp4" />
+            <source src={audioSource.blobUrl} type="audio/mpeg" />
+            <source src={audioSource.blobUrl} />
+          </audio>
         </div>
       ) : (
         <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between text-xs">
           <span className="text-chatTextMuted">🎙️ Mensagem de voz WhatsApp</span>
-          <button
-            type="button"
-            onClick={triggerFallbackPlay}
-            className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[11px]"
-          >
-            Ouvir Leitura
-          </button>
+          {transcription && (
+            <button
+              type="button"
+              onClick={triggerFallbackPlay}
+              className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[11px]"
+            >
+              Ouvir Leitura
+            </button>
+          )}
         </div>
       )}
 
@@ -486,10 +495,10 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
           </div>
 
           {/* Botão de Download */}
-          {resolvedUrl && (
+          {audioSource.blobUrl && (
             <a
-              href={resolvedUrl}
-              download="audio_whatsapp.ogg"
+              href={audioSource.blobUrl}
+              download={audioSource.mimeType?.includes('webm') ? 'audio_whatsapp.webm' : 'audio_whatsapp.ogg'}
               className="p-2 text-slate-500 hover:text-emerald-600 transition rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
               title="Baixar arquivo de áudio para o computador"
             >
