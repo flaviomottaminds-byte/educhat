@@ -3,7 +3,14 @@ const DEFAULT_URL = 'https://evolution-api-production-3fb2.up.railway.app';
 const DEFAULT_KEY = 'e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f';
 const DEFAULT_INSTANCE = 'EduChat-Matriz-01';
 export const EVOLUTION_WEBHOOK_URL = 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook';
-const WEBHOOK_EVENTS = ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE'];
+const WEBHOOK_EVENTS = [
+  'MESSAGES_UPSERT',
+  'MESSAGES_UPDATE',
+  'MESSAGES_SET',
+  'SEND_MESSAGE',
+  'CONNECTION_UPDATE',
+  'QRCODE_UPDATED'
+];
 
 export function getEvolutionConfig() {
   let url = DEFAULT_URL;
@@ -23,14 +30,20 @@ export function getEvolutionConfig() {
   return { url, key, instance };
 }
 
-async function evoFetch(path, options = {}, timeoutMs = 10000) {
+async function evoFetch(path, options = {}, timeoutMs = 12000) {
   const { url, key } = getEvolutionConfig();
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(`${url}${path}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', apikey: key, ...(options.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': key,
+        'apiKey': key,
+        'Authorization': `Bearer ${key}`,
+        ...(options.headers || {})
+      },
       signal: controller.signal
     });
   } finally {
@@ -44,7 +57,7 @@ export async function getEvolutionState() {
   try {
     const res = await evoFetch(`/instance/connectionState/${instance}`, { method: 'GET' }, 8000);
     if (!res.ok) return 'unreachable';
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     return data?.instance?.state || data?.state || 'close';
   } catch {
     return 'unreachable';
@@ -58,20 +71,34 @@ export async function ensureEvolutionWebhook({ force = false } = {}) {
     if (!force) {
       const res = await evoFetch(`/webhook/find/${instance}`, { method: 'GET' }, 8000);
       if (res.ok) {
-        const d = await res.json();
+        const d = await res.json().catch(() => ({}));
         const w = d?.webhook || d;
         if (w?.enabled && w?.url === EVOLUTION_WEBHOOK_URL && (w?.events || []).includes('MESSAGES_UPSERT')) {
           return true;
         }
       }
     }
+    // Suporte universal a Evolution API v1.x e v2.x (Railway)
+    const webhookPayload = {
+      enabled: true,
+      url: EVOLUTION_WEBHOOK_URL,
+      webhook_by_events: false,
+      byEvents: false,
+      base64: false,
+      events: WEBHOOK_EVENTS,
+      webhook: {
+        enabled: true,
+        url: EVOLUTION_WEBHOOK_URL,
+        byEvents: false,
+        base64: false,
+        events: WEBHOOK_EVENTS
+      }
+    };
     const set = await evoFetch(
       `/webhook/set/${instance}`,
       {
         method: 'POST',
-        body: JSON.stringify({
-          webhook: { enabled: true, url: EVOLUTION_WEBHOOK_URL, byEvents: false, base64: false, events: WEBHOOK_EVENTS }
-        })
+        body: JSON.stringify(webhookPayload)
       },
       10000
     );
@@ -95,14 +122,38 @@ export async function sendWhatsAppText(number, text) {
   const to = toWhatsAppNumber(number);
   if (!to) return { ok: false, error: 'Número inválido' };
   try {
+    const payload = {
+      number: to,
+      text: text,
+      textMessage: {
+        text: text
+      },
+      options: {
+        delay: 1200,
+        presence: 'composing',
+        linkPreview: false
+      }
+    };
+
     const res = await evoFetch(
       `/message/sendText/${instance}`,
-      { method: 'POST', body: JSON.stringify({ number: to, text }) },
+      { method: 'POST', body: JSON.stringify(payload) },
       15000
     );
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data?.response?.message?.[0] || data?.message || `HTTP ${res.status}` };
-    return { ok: true, messageId: data?.key?.id || null };
+    if (!res.ok) {
+      return {
+        ok: false,
+        error: data?.response?.message?.[0] || data?.message || `HTTP ${res.status}`
+      };
+    }
+    const messageId =
+      data?.key?.id ||
+      data?.id ||
+      data?.messageId ||
+      data?.[0]?.key?.id ||
+      `wa_${Date.now()}`;
+    return { ok: true, messageId, data };
   } catch (e) {
     return { ok: false, error: e.message };
   }

@@ -203,12 +203,15 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const check = async (force) => {
+      try {
+        await ensureEvolutionWebhook({ force });
+      } catch (err) {
+        console.warn('[WhatsApp Webhook] Erro ao sincronizar webhook:', err);
+      }
       const state = await getEvolutionState();
       if (cancelled) return;
-      if (state === 'open') {
-        await ensureEvolutionWebhook({ force });
-      } else {
-        console.warn('[WhatsApp] Evolution API não está conectada (state: ' + state + '). Abra o painel de conexão para ler o QR Code.');
+      if (state !== 'open') {
+        console.warn('[WhatsApp] Evolution API estado atual: ' + state);
       }
     };
     check(true);
@@ -770,12 +773,23 @@ export default function App() {
     const targetChatKey = getChatKey(activeChat, activeUserId);
     const rawId = activeChat.id;
 
-    supabase
-      .from('messages')
-      .select('*')
-      .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
-      .order('created_at', { ascending: true })
-      .then(({ data: fetchedDbMessages }) => {
+    const queryActiveChatMessages = async () => {
+      try {
+        let { data: fetchedDbMessages, error } = await supabase
+          .from('messages')
+          .select('*')
+          .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
+          .order('created_at', { ascending: true });
+
+        if (error) {
+          const fallbackRes = await supabase
+            .from('messages')
+            .select('*')
+            .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
+            .limit(100);
+          fetchedDbMessages = fallbackRes.data;
+        }
+
         if (fetchedDbMessages && fetchedDbMessages.length > 0) {
           const parsedList = fetchedDbMessages.map((m) =>
             parseDatabaseMessage(m, { stripHeavyAttachments: false })
@@ -808,7 +822,11 @@ export default function App() {
             };
           });
         }
-      });
+      } catch (err) {
+        console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
+      }
+    };
+    queryActiveChatMessages();
   }, [activeChat?.id, activeChat?.type]);
 
   // Limpa notificações quando a janela/aba do navegador ganha foco
@@ -972,12 +990,28 @@ export default function App() {
       }
 
       // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
-      const { data: recentDbMessages } = await supabase
-        .from('messages')
-        .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
-        .not('chat_id', 'like', 'sys_%')
-        .order('created_at', { ascending: false })
-        .limit(1000);
+      let recentDbMessages = null;
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+          .not('chat_id', 'like', 'sys_%')
+          .order('created_at', { ascending: false })
+          .limit(1000);
+        if (!error && Array.isArray(data)) {
+          recentDbMessages = data;
+        } else if (error) {
+          console.warn('[Supabase] Erro na consulta com created_at, executando fallback:', error);
+          const { data: fallbackData } = await supabase
+            .from('messages')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp')
+            .not('chat_id', 'like', 'sys_%')
+            .limit(500);
+          if (Array.isArray(fallbackData)) recentDbMessages = fallbackData;
+        }
+      } catch (err) {
+        console.warn('[Supabase] Falha ao consultar histórico de mensagens:', err);
+      }
 
       const dbMessages = Array.isArray(recentDbMessages) ? [...recentDbMessages].reverse() : [];
 
@@ -1253,12 +1287,19 @@ export default function App() {
   // REGRA 1 & 2: CONEXÃO ÚNICA E ESTÁVEL DO SUPABASE REALTIME (SEM STALE CLOSURES)
   // =========================================================================
   useEffect(() => {
+    let cancelled = false;
     fetchSupabaseData();
 
     const initialUser = currentUserRef.current;
     if (initialUser?.id) {
       const initialHb = saveLocalHeartbeat(initialUser.id);
       setHeartbeats(initialHb);
+    }
+
+    const existingChannels = supabase.getChannels();
+    const prevChannel = existingChannels.find((c) => c.topic === 'realtime:educhat_global_realtime');
+    if (prevChannel) {
+      supabase.removeChannel(prevChannel);
     }
 
     const channel = supabase.channel('educhat_global_realtime', {
@@ -1887,17 +1928,73 @@ export default function App() {
         // Recalcula a partir do estado real do canal (evita remover quem ainda tem outra aba aberta)
         syncPresence();
       })
-      .subscribe(async (status) => {
+      .subscribe(async (status, err) => {
         if (status === 'SUBSCRIBED') {
           setRealtimeStatus('connected');
           presenceChannelRef.current = channel;
           await trackMyPresence();
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn('[Realtime Supabase] Status do canal:', status, err);
           setRealtimeStatus('error');
+          if (!cancelled) {
+            setTimeout(() => {
+              if (!cancelled) {
+                console.log('[Realtime Supabase] Tentando reconectar canal...');
+                try {
+                  channel.subscribe();
+                } catch {}
+              }
+            }, 4000);
+          }
         } else {
           setRealtimeStatus('connecting');
         }
       });
+
+    // Sincronização periódica ativa (Fallback Realtime): garante que novas mensagens internas e de WhatsApp
+    // apareçam imediatamente na tela sem precisar recarregar a página, mesmo sob instabilidade do WebSocket
+    let lastPolledTimestamp = new Date(Date.now() - 60000).toISOString();
+    const pollLatestMessages = async () => {
+      try {
+        const { data: latestRows, error } = await supabase
+          .from('messages')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+          .not('chat_id', 'like', 'sys_%')
+          .gt('created_at', lastPolledTimestamp)
+          .order('created_at', { ascending: true })
+          .limit(40);
+
+        if (!error && Array.isArray(latestRows) && latestRows.length > 0) {
+          lastPolledTimestamp = latestRows[latestRows.length - 1].created_at || new Date().toISOString();
+          const activeUser = currentUserRef.current || { id: 'u1', roleType: 'diretor' };
+          const currentUserId = activeUser.id || 'u1';
+          const currentActiveKey = getChatKey(activeChatRef.current, currentUserId);
+
+          latestRows.forEach((row) => {
+            if (!row || !row.chat_id) return;
+            const cKey = normalizeChatKey(row.chat_id, currentUserId);
+            const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
+
+            setMessages((prev) => {
+              const prevList = prev[cKey] || [];
+              if (prevList.some((m) => m.id === incoming.id)) return prev;
+              return {
+                ...prev,
+                [cKey]: [...prevList, incoming]
+              };
+            });
+
+            if (row.sender_id !== currentUserId && row.sender_id !== 'system') {
+              if (cKey !== currentActiveKey || document.hidden) {
+                handleIncomingNotification(incoming, cKey);
+              }
+            }
+          });
+        }
+      } catch {}
+    };
+
+    const pollInterval = setInterval(pollLatestMessages, 4000);
 
     // Heartbeat: renova presença no Realtime e grava last_seen em profiles (visível para toda a equipe)
     const hbInterval = setInterval(() => {
@@ -1907,11 +2004,15 @@ export default function App() {
     persistMyHeartbeat();
 
     return () => {
+      cancelled = true;
       clearInterval(hbInterval);
+      clearInterval(pollInterval);
       window.removeEventListener('pagehide', markMyselfOffline);
       document.removeEventListener('visibilitychange', onVisible);
       presenceChannelRef.current = null;
-      supabase.removeChannel(channel);
+      try {
+        supabase.removeChannel(channel);
+      } catch {}
     };
   }, []);
 

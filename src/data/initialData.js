@@ -36,7 +36,185 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Equipe, sejam todos muito bem-vindos ao EduChat! 🎉\n\nA partir de hoje, todas as nossas comunicações internas, alinhamentos intersetoriais e demandas no quadro Kanban serão centralizados aqui. O WhatsApp continuará sendo utilizado apenas para o atendimento aos nossos alunos e polos externos.\n\nConto com a colaboração e o empenho de todos para uma gestão mais ágil e transparente!',
       timestamp: '09:00',
-      actionExtracted: false,
+      actionExtracted: false
+    },
+    {
+      id: 'msg_geral_2',
+      senderId: 'u7',
+      senderName: 'Ana Paula',
+      text: 'Excelente iniciativa, Flávio! O time da Secretaria já está operando 100% alinhado por aqui.',
+      timestamp: '09:15',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_geral_3',
+      senderId: 'u2',
+      senderName: 'Tatiane Salatinos',
+      text: 'Comercial a postos! Vamos manter os encaminhamentos das matrículas e pendências registradas diretamente no Kanban.',
+      timestamp: '09:20',
+      actionExtracted: false
+    }
+  ],
+  'c-comercial': [
+    {
+      id: 'msg_com_1',
+      senderId: 'u3',
+      senderName: 'Gabriel Carvalho',
+      text: 'Bom dia time! Hoje temos 45 leads de MBA e Graduação na esteira de negociação. Vamos focar nos contatos de ontem com retorno pendente.',
+      timestamp: '08:45',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_com_2',
+      senderId: 'u2',
+      senderName: 'Tatiane Salatinos',
+      text: 'Perfeito, Gabriel! Estou em contato com a aluna Mariana Costa para Pedagogia EAD. Já apresentei a matriz e condições especiais.',
+      timestamp: '08:52',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_com_3',
+      senderId: 'u4',
+      senderName: 'Michele Cristina',
+      text: 'Estou atendendo os novos polos e leads corporativos vindos da campanha de pós-graduação.',
+      timestamp: '09:05',
+      actionExtracted: false
+    }
+  ],
+  'c-secretaria': [
+    {
+      id: 'msg_sec_1',
+      senderId: 'u7',
+      senderName: 'Ana Paula',
+      text: 'Meninas, concluímos a validação dos 28 históricos do Polo Campinas. Todos aptos para certificação.',
+      timestamp: '09:10',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_sec_2',
+      senderId: 'u9',
+      senderName: 'Gislaine Santos',
+      text: 'Perfeito, Ana! Já estou emitindo as declarações de conclusão e atualizando o status dos alunos no EduControl.',
+      timestamp: '09:18',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_sec_3',
+      senderId: 'u8',
+      senderName: 'Larissa Machado',
+      text: 'Lembrando que os chamados de 2ª via de diploma com prazo de 48h foram todos protocolados no sistema.',
+      timestamp: '09:30',
+      actionExtracted: false
+    }
+  ],
+  'c-tutoria': [
+    {
+      id: 'msg_tut_1',
+      senderId: 'u6',
+      senderName: 'Raquel Lopes',
+      text: 'Plantão de tutoria aberto! Alunos com dúvidas no TCC de Gestão e nos exercícios de Pedagogia já estão sendo respondidos no AVA.',
+      timestamp: '08:30',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_tut_2',
+      senderId: 'u11',
+      senderName: 'Paulo do Vale',
+      text: 'Excelente, Raquel! Os materiais complementares do módulo 3 foram disponibilizados na biblioteca virtual.',
+      timestamp: '08:45',
+      actionExtracted: false
+    }
+  ],
+  'c-marketing': [
+    {
+      id: 'msg_mkt_1',
+      senderId: 'u10',
+      senderName: 'Ana Livia',
+      text: 'Criativos da campanha de inverno aprovados pela diretoria. Iniciaremos a veiculação no Meta Ads e Google Ads hoje às 14h.',
+      timestamp: '10:00',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_mkt_2',
+      senderId: 'u14',
+      senderName: 'Yasmin',
+      text: 'Métricas da semana: CPL reduziu 18% na campanha de MBA Executivo. O volume de leads qualificados subiu para 68/dia.',
+      timestamp: '10:15',
+      actionExtracted: false
+    }
+  ],
+  'c-pedagogico': [
+    {
+      id: 'msg_ped_1',
+      senderId: 'u11',
+      senderName: 'Paulo do Vale',
+      text: 'Revisão das ementas dos cursos de pós concluída de acordo com as novas diretrizes do MEC.',
+      timestamp: '09:40',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_ped_2',
+      senderId: 'u15',
+      senderName: 'Lindomar',
+      text: 'Agendamos o alinhamento com os coordenadores de polo para quinta-feira às 15h.',
+      timestamp: '09:55',
+      actionExtracted: false
+    }
+  ],
+  'c-expansao': [
+    {
+      id: 'msg_exp_1',
+      senderId: 'u12',
+      senderName: 'Luiz Augusto',
+      text: 'Alinhamento com o Polo Salvador e parceiros do Nordeste em andamento. Contratos do Plano Fixo em fase de assinatura.',
+      timestamp: '10:30',
+      actionExtracted: false
+    }
+  ],
+  'c-diretoria': [
+    {
+      id: 'msg_dir_1',
+      senderId: 'u1',
+      senderName: 'Flávio Motta',
+      text: 'Pauta da semana: monitoramento diário da esteira de conversão e acompanhamento das metas de retenção e atendimento WhatsApp.',
+      timestamp: '08:00',
+      actionExtracted: false
+    }
+  ],
+  'dm-u1-u2': [
+    {
+      id: 'msg_dm_tati_1',
+      senderId: 'u2',
+      senderName: 'Tatiane Salatinos',
+      text: 'Flávio, bom dia! Conseguiu avaliar a solicitação de desconto especial para o fechamento corporativo da Fama?',
+      timestamp: '09:12',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_dm_tati_2',
+      senderId: 'u1',
+      senderName: 'Flávio Motta',
+      text: 'Bom dia, Tatiane! Aprovado com 25% de margem. Pode fechar o contrato com eles hoje.',
+      timestamp: '09:14',
+      actionExtracted: false
+    }
+  ],
+  'dm-u1-u3': [
+    {
+      id: 'msg_dm_gabriel_1',
+      senderId: 'u3',
+      senderName: 'Gabriel Carvalho',
+      text: 'Flávio, o lead Lucas Mendes do MBA fechou a matrícula à vista! Já criei a demanda no Kanban para a Secretaria.',
+      timestamp: '13:20',
+      actionExtracted: false
+    },
+    {
+      id: 'msg_dm_gabriel_2',
+      senderId: 'u1',
+      senderName: 'Flávio Motta',
+      text: 'Excelente trabalho, Gabriel! Mantenha a atenção aos demais contatos da carteira.',
+      timestamp: '13:25',
+      actionExtracted: false
     }
   ]
 };
