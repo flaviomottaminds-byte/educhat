@@ -932,11 +932,11 @@ export default function ChatArea({
           {matchedStudent && (
             <button
               onClick={() => setIsStudentDossierOpen(true)}
-              title="Abrir Dossiê Acadêmico e Histórico do Aluno no EduControl"
+              title="Abrir Dossiê Acadêmico e Histórico do Aluno"
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-50 to-indigo-50 dark:from-purple-950/40 dark:to-indigo-950/40 text-purple-700 dark:text-purple-300 hover:from-purple-100 hover:to-indigo-100 border border-purple-200 dark:border-purple-500/30 text-xs font-bold shadow-xs transition cursor-pointer"
             >
               <GraduationCap size={14} className="text-purple-600 dark:text-purple-400" />
-              <span className="hidden sm:inline">Dossiê EduControl</span>
+              <span className="hidden sm:inline">Dossiê do Aluno</span>
               <span className="sm:hidden">Dossiê</span>
             </button>
           )}
@@ -954,13 +954,13 @@ export default function ChatArea({
         </div>
       </div>
 
-      {/* Banner Sticky de Reconhecimento Automático do Aluno EduControl */}
+      {/* Banner Sticky de Reconhecimento Automático do Aluno */}
       {isWhatsApp && matchedStudent && (
         <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 dark:from-purple-950/40 dark:via-indigo-950/30 dark:to-blue-950/40 border-b border-purple-200 dark:border-purple-500/20 px-4 py-2 flex items-center justify-between text-xs text-purple-950 dark:text-purple-200 shrink-0">
           <div className="flex items-center gap-2 truncate">
             <span className="font-bold flex items-center gap-1.5 shrink-0 text-purple-700 dark:text-purple-300">
               <GraduationCap size={15} />
-              Aluno Reconhecido EduControl (Base44):
+              Aluno Reconhecido na Base:
             </span>
             <span className="font-semibold truncate">
               {matchedStudent.name} {matchedStudent.cpf ? `(CPF: ${matchedStudent.cpf})` : ''} • <strong>{matchedStudent.course}</strong> • {matchedStudent.polo}

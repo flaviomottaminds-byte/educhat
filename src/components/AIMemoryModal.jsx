@@ -180,7 +180,7 @@ export default function AIMemoryModal({
             await onSyncStudents(parsed);
           }
           triggerFeedback(
-            `🎓 Base de Alunos EduControl sincronizada! ${parsed.length} aluno(s) reconhecido(s) via CPF/Telefone com Sticky Assignment.`,
+            `🎓 Base de Alunos sincronizada! ${parsed.length} aluno(s) reconhecido(s) via CPF/Telefone com Sticky Assignment.`,
             `Arquivo: ${fileName} • Anti-duplicidade CPF ativa no Supabase`
           );
         } else if (activeTab === 'docs') {
@@ -237,7 +237,7 @@ export default function AIMemoryModal({
 Beatriz Oliveira;123.456.789-01;+55 (11) 97766-5544;beatriz@escola.com.br;MBA em Gestão Escolar;Ativo;Polo São Paulo Matriz;EC-2024-5501;Gabriel Carvalho
 Lucas Fagundes;234.567.890-12;+55 (19) 98877-1122;lucas.fagundes@clinica.com.br;Pós em Neuropsicopedagogia;Certificado;Polo Campinas;EC-2023-3321;Tatiane
 Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formação Pedagógica em Letras;Veterano;Polo Rio de Janeiro;EC-2022-7711;Luiz Augusto`;
-      triggerFileDownload(sampleBase44, 'modelo_alunos_educontrol_base44.csv');
+      triggerFileDownload(sampleBase44, 'modelo_base_alunos.csv');
     } else if (activeTab === 'docs') {
       triggerFileDownload(getSampleMemorandoTxt(), 'modelo_memorando_diretrizes.txt', 'text/plain;charset=utf-8;');
     }
@@ -406,7 +406,7 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
             }`}
           >
             <Database size={14} className="text-purple-600 dark:text-purple-400" />
-            <span>Alunos EduControl ({eduControlStudents.length})</span>
+            <span>Base de Alunos ({eduControlStudents.length})</span>
           </button>
 
           <button
@@ -873,11 +873,11 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
           )}
 
           {/* ========================================================================= */}
-          {/* ABA 4: BASE DE ALUNOS (EduControl / Base44) */}
+          {/* ABA 4: BASE DE ALUNOS (.CSV / .TXT) */}
           {/* ========================================================================= */}
           {activeTab === 'students' && (
             <div className="space-y-4">
-              {/* Dropzone Limpo para Alunos EduControl */}
+              {/* Dropzone Limpo para Base de Alunos */}
               <div
                 onClick={() => fileInputRef.current?.click()}
                 className="border-2 border-dashed border-purple-400/80 dark:border-purple-500/40 hover:border-purple-500 bg-purple-50/40 dark:bg-purple-950/15 rounded-2xl p-6 text-center cursor-pointer transition group hover:shadow-xs"
@@ -886,10 +886,10 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
                   <Database size={22} />
                 </div>
                 <h4 className="font-bold text-slate-800 dark:text-chatTextTitle text-sm">
-                  Arrastar e soltar arquivo da Base de Alunos EduControl (.CSV ou .TXT)
+                  Arrastar e soltar arquivo da Base de Alunos (.CSV ou .TXT)
                 </h4>
                 <p className="text-xs text-chatTextMuted mt-1 max-w-lg mx-auto">
-                  Processamento blindado no <strong>Padrão Base44</strong> com os 4 campos essenciais: <strong>Nome Completo, CPF, Telefone e E-mail</strong>.
+                  Processamento blindado com os 4 campos essenciais: <strong>Nome Completo, CPF, Telefone e E-mail</strong>.
                 </p>
                 <div className="mt-3 flex items-center justify-center gap-2 text-[10px] text-purple-800 dark:text-purple-300 font-semibold">
                   <span className="bg-white dark:bg-chatCard px-2 py-0.5 rounded border border-purple-300 dark:border-purple-600/40 flex items-center gap-1">
@@ -910,7 +910,7 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
 
                 {filteredStudents.length === 0 ? (
                   <div className="p-6 text-center border border-dashed border-slate-200 dark:border-chatBorder rounded-xl text-chatTextMuted">
-                    Nenhum aluno localizado. Arraste ou selecione uma planilha Base44 exportada do EduControl.
+                    Nenhum aluno localizado. Arraste ou selecione um arquivo de base de alunos (.csv ou .txt).
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[360px] overflow-y-auto pr-1">

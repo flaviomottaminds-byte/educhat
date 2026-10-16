@@ -65,7 +65,7 @@ export default function StudentDossierModal({
               <p className="text-xs text-purple-200 mt-0.5 flex items-center gap-2">
                 <span>Matrícula: <strong>{student.matricula}</strong></span>
                 <span>•</span>
-                <span>Base EduControl (Base44)</span>
+                <span>Base de Alunos</span>
               </p>
             </div>
           </div>
@@ -119,7 +119,7 @@ export default function StudentDossierModal({
           {/* Dados Pessoais e Cadastrais Essenciais (Padrão Base44) */}
           <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder space-y-3 text-xs">
             <span className="font-bold text-chatTextMuted uppercase tracking-wider block text-[10.5px]">
-              Dados Cadastrais Oficiais (EduControl Base44)
+              Dados Cadastrais Oficiais
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-chatTextTitle">
               
@@ -220,7 +220,7 @@ export default function StudentDossierModal({
             <div className="leading-relaxed">
               <p className="font-bold">Validação Regulatória & Certificação MEC:</p>
               <p className="text-[11px] text-emerald-800 dark:text-emerald-300">
-                Aluno devidamente matriculado pela Faculdade Olavo Bilac / Grupo EstudeMais. Histórico de notas, carga horária e emissão de diplomas vinculados ao sistema EduControl.
+                Aluno devidamente matriculado pela Faculdade Olavo Bilac / Grupo EstudeMais. Histórico de notas, carga horária e emissão de diplomas vinculados ao sistema acadêmico oficial.
               </p>
             </div>
           </div>
@@ -230,7 +230,7 @@ export default function StudentDossierModal({
         {/* Rodapé com Ações */}
         <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-slate-200 dark:border-chatBorder flex items-center justify-between">
           <span className="text-[11px] text-chatTextMuted">
-            Origem: {student.origin || 'EduControl (Base44)'}
+            Origem: {student.origin && !student.origin.includes('EduControl') ? student.origin : 'Base de Dados Oficial'}
           </span>
           <div className="flex items-center gap-2">
             <button

@@ -95,7 +95,7 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', 'modelo_alunos_educontrol_base44.csv');
+    link.setAttribute('download', 'modelo_base_alunos.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -165,10 +165,10 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-bold text-slate-800 dark:text-slate-100 text-base leading-tight">
-                  Sincronização de Alunos EduControl
+                  Upload de Bases de Dados & Alunos
                 </h3>
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/70 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800/40">
-                  Padrão Base44
+                  Padrão CSV / TXT
                 </span>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/40 hidden sm:inline-block">
                   Anti-duplicidade CPF Ativa
@@ -213,7 +213,7 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
               }`}
             >
               <FileSpreadsheet size={14} />
-              Colar Texto EduControl
+              Colar Texto / Planilha
             </button>
             <button
               type="button"
@@ -233,9 +233,9 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
             type="button"
             onClick={handleDownloadSample}
             className="text-[11px] text-purple-700 dark:text-purple-400 hover:underline flex items-center gap-1 font-semibold pb-2"
-            title="Baixar modelo com os 4 campos do EduControl (Nome, CPF, Telefone, E-mail)"
+            title="Baixar modelo com os 4 campos essenciais (Nome, CPF, Telefone, E-mail)"
           >
-            <Download size={13} /> Baixar Modelo Base44
+            <Download size={13} /> Baixar Modelo CSV
           </button>
         </div>
 
@@ -271,7 +271,7 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
                   <Upload size={22} />
                 </div>
                 <h4 className="text-sm font-bold text-slate-800 dark:text-slate-100 mb-1">
-                  Arraste ou clique para selecionar o CSV exportado do EduControl
+                  Arraste ou clique para selecionar o arquivo (.CSV ou .TXT)
                 </h4>
                 <p className="text-xs text-chatTextMuted max-w-md mx-auto">
                   Suporta arquivos .CSV e .TXT codificados em UTF-8 com separadores por vírgula (,) ou ponto e vírgula (;), aspas e quebras de linha.
@@ -290,7 +290,7 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
           {activeTab === 'paste' && (
             <div className="space-y-2">
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                Copie e cole a listagem exportada do EduControl (com cabeçalho):
+                Copie e cole a listagem de dados (com cabeçalho):
               </label>
               <textarea
                 value={fileContent}
@@ -302,7 +302,7 @@ Vanessa Lima;567.890.123-45;+55 (41) 98443-6677;vanessa@oab.org.br;Pós em Direi
               <p className="text-[11px] text-chatTextMuted">
                 {parsedStudents.length > 0
                   ? `✅ ${parsedStudents.length} aluno(s) identificado(s) no texto colado.`
-                  : 'Cole as colunas de Nome, CPF, Telefone e E-mail diretamente da planilha do EduControl.'}
+                  : 'Cole as colunas de Nome, CPF, Telefone e E-mail diretamente da sua planilha ou arquivo.'}
               </p>
             </div>
           )}

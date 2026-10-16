@@ -196,11 +196,19 @@ export default function Sidebar({
           </div>
         </div>
 
-        {/* Botões de Ação: Conexão WhatsApp, Importar Leads, IA & Base de Conhecimento */}
+        {/* Botões de Ação Centralizados no Topo: Upload de Bases, Importar Leads, Conexão WhatsApp, IA & Base de Conhecimento */}
         <div className="flex items-center gap-1.5">
           <button
+            onClick={onOpenEduControlSync}
+            title="Upload de Bases / Importação de Arquivos (.csv ou .txt)"
+            className="p-1.5 rounded-full text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition flex items-center gap-1 cursor-pointer"
+          >
+            <Database size={18} />
+          </button>
+
+          <button
             onClick={onOpenInstagramImport}
-            title="Importar Leads (Instagram Ads) para a Expansão"
+            title="Importar Leads (.csv) para a Expansão"
             className="p-1.5 rounded-full text-pink-600 dark:text-pink-400 hover:bg-pink-50 dark:hover:bg-pink-950/40 transition flex items-center gap-1 cursor-pointer"
           >
             <Upload size={18} />
@@ -209,7 +217,7 @@ export default function Sidebar({
           <button
             onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
             title="Conexão WhatsApp & QR Code Oficial"
-            className="p-1.5 rounded-full text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition flex items-center gap-1"
+            className="p-1.5 rounded-full text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 transition flex items-center gap-1 cursor-pointer"
           >
             <Smartphone size={18} />
           </button>
@@ -217,8 +225,8 @@ export default function Sidebar({
           {isDirector && (
             <button
               onClick={onOpenAIMemory}
-              title="Base de Conhecimento da IA (Clientes VIP, SLAs e POPs)"
-              className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
+              title="Upload de Documentos & Regras da IA"
+              className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition cursor-pointer"
             >
               <Brain size={18} className="text-yellow-600 dark:text-yellow-400" />
             </button>
@@ -227,14 +235,14 @@ export default function Sidebar({
           <button
             onClick={onOpenAICopilot}
             title="Copiloto de IA & Diagnóstico"
-            className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition"
+            className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition cursor-pointer"
           >
             <Sparkles size={18} className="text-purple-600 dark:text-purple-400" />
           </button>
         </div>
       </div>
 
-      {/* Navegação Principal das Visões (Chat, Kanban, Gestão) */}
+      {/* Navegação Principal das Visões (Apenas Conversas e Kanban) */}
       <div className="p-2 border-b border-chatBorder flex gap-1 bg-chatSidebar">
         <button
           onClick={() => setActiveView('chat')}
@@ -257,18 +265,6 @@ export default function Sidebar({
         >
           <CheckSquare size={15} />
           Kanban
-        </button>
-        <button
-          onClick={() => setActiveView('gestao')}
-          className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
-            activeView === 'gestao'
-              ? 'bg-brand-600 text-white shadow-sm'
-              : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
-          }`}
-        >
-          <BarChart3 size={15} />
-          Gestão
-          {!isDirector && <Lock size={10} className="text-chatTextMuted ml-0.5" />}
         </button>
       </div>
 
@@ -324,68 +320,6 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Painel de Status WhatsApp & Teste Rápido (Exibido na aba WhatsApp) */}
-      {sidebarTab === 'whatsapp' && (
-        <div className="px-3 pt-2">
-          <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-500/20 rounded-lg p-2 flex items-center justify-between">
-            <div className="flex items-center gap-2 truncate">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <div className="truncate">
-                <p className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 leading-tight truncate">
-                  Gateway WhatsApp Ativo
-                </p>
-                <p
-                  className="text-[9px] text-emerald-700 dark:text-emerald-400 truncate"
-                  title={`${officialWhatsAppNumber} • ${institutionName} (${portfolioLabel})`}
-                >
-                  {officialWhatsAppNumber} • {portfolioLabel}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                type="button"
-                onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('simulator')}
-                title="Abrir Simulador de Webhook & Carteira"
-                className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-semibold flex items-center gap-1 shadow-2xs transition"
-              >
-                <Zap size={11} /> Testar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modo IA Autônoma (Exibido na aba Interna) */}
-      {sidebarTab === 'internal' && (
-        <div className="px-3 pt-2">
-          <div className="bg-[#f0f2f5] dark:bg-purple-950/20 border border-slate-200 dark:border-purple-500/20 rounded-lg p-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot size={15} className={aiAutonomous ? 'text-brand-600 dark:text-yellow-400 animate-pulse' : 'text-chatTextMuted'} />
-              <div>
-                <p className="text-[11px] font-bold text-chatTextTitle">IA Criar Card Sozinha</p>
-                <p className="text-[9px] text-chatTextMuted">
-                  {aiAutonomous ? 'Detecta tarefas automaticamente' : 'Manual / Sob comando'}
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setAiAutonomous(!aiAutonomous)}
-              className={`w-8 h-4.5 rounded-full p-0.5 transition-colors ${
-                aiAutonomous ? 'bg-brand-600' : 'bg-slate-300 dark:bg-chatPanel'
-              }`}
-            >
-              <div
-                className={`w-3.5 h-3.5 rounded-full bg-white shadow-sm transition-transform ${
-                  aiAutonomous ? 'translate-x-3.5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Lista de Conversas: WhatsApp Alunos OU Canais/DMs Internas */}
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
         {sidebarTab === 'whatsapp' ? (
@@ -397,33 +331,6 @@ export default function Sidebar({
                   ? `Atendimento WhatsApp (${filteredWhatsAppContacts.length})`
                   : `Minha Carteira (${filteredWhatsAppContacts.length})`}
               </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onOpenEduControlSync}
-                  className="text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold cursor-pointer"
-                  title="Sincronizar base de alunos do EduControl (.csv / .txt)"
-                >
-                  <Database size={12} /> EduControl
-                </button>
-                <button
-                  type="button"
-                  onClick={onOpenInstagramImport}
-                  className="text-pink-600 dark:text-pink-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold cursor-pointer"
-                  title="Importar leads em CSV do Instagram Ads diretamente para a Expansão"
-                >
-                  <Upload size={12} /> Leads Ads
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenWhatsAppConnection && onOpenWhatsAppConnection('qrcode')}
-                  className="text-emerald-600 dark:text-emerald-400 hover:underline flex items-center gap-1 text-[10px] normal-case font-bold"
-                  title="Conexão Railway ativa em background. Clique para ver status da instância."
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-                  <QrCode size={12} /> Conectar
-                </button>
-              </div>
             </div>
 
             {/* Identificador de Carteira Exclusiva para Consultores */}

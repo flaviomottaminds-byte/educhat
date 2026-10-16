@@ -25,10 +25,10 @@ export default function GestaoDashboard({ tasks, channels, collaborators, onOpen
               type="button"
               onClick={onOpenEduControlSync}
               className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold rounded-xl shadow-md transition flex items-center gap-2 cursor-pointer shrink-0"
-              title="Sincronizar base de alunos do EduControl (.csv / .txt)"
+              title="Upload de Base de Alunos (.csv / .txt)"
             >
               <GraduationCap size={16} />
-              <span>Base EduControl</span>
+              <span>Upload de Bases</span>
             </button>
           )}
           {onOpenInstagramImport && (

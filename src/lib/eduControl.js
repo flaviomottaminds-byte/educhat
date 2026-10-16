@@ -310,7 +310,7 @@ export function parseEduControlFile(fileContent) {
         ? 'Secretaria Acadêmica'
         : 'Comercial',
       financialStatus: academicStatus === 'Inadimplente' ? 'Mensalidade Pendente' : 'Adimplente (Asaas OK)',
-      origin: 'EduControl (Base44)',
+      origin: 'Base de Alunos',
       importedAt: new Date().toISOString()
     });
   }
@@ -340,7 +340,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Adimplente (Split Asaas OK)',
     progress: '78%',
     avgGrade: '9.4',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   },
   {
@@ -362,7 +362,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Quadro Concluído • Diploma Emitido',
     progress: '100%',
     avgGrade: '9.8',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   },
   {
@@ -384,7 +384,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Adimplente (Contrato Renovado)',
     progress: '85%',
     avgGrade: '8.7',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   },
   {
@@ -406,7 +406,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Adimplente',
     progress: '45%',
     avgGrade: '9.1',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   },
   {
@@ -428,7 +428,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Certificado Emitido e Registrado MEC',
     progress: '100%',
     avgGrade: '9.6',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   },
   {
@@ -450,7 +450,7 @@ export const INITIAL_EDUCONTROL_STUDENTS = [
     financialStatus: 'Adimplente',
     progress: '92%',
     avgGrade: '9.0',
-    origin: 'EduControl (Base44)',
+    origin: 'Base de Alunos',
     importedAt: '2026-10-15T00:00:00Z'
   }
 ];

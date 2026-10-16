@@ -2410,7 +2410,7 @@ export default function App() {
               ? 'veterano_retencao'
               : 'carteira_ativa',
             statusLabel: `${s.academicStatus} • ${s.course}`,
-            lastInteraction: existing.lastInteraction || 'Sincronizado EduControl (Base44)',
+            lastInteraction: existing.lastInteraction || 'Sincronizado via Arquivo / Base',
             triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • CPF ${s.cpf || '-'} • Matrícula ${s.matricula}`
           };
         } else {
@@ -2430,7 +2430,7 @@ export default function App() {
               : 'carteira_ativa',
             statusLabel: `${s.academicStatus} • ${s.course}`,
             aiActive: false,
-            lastInteraction: 'Sincronizado EduControl (Base44)',
+            lastInteraction: 'Sincronizado via Arquivo / Base',
             triageContext: `Aluno ${s.academicStatus} (${s.course} • ${s.polo}) • CPF ${s.cpf || '-'} • Matrícula ${s.matricula}`
           });
         }
@@ -2450,7 +2450,7 @@ export default function App() {
           id: recordKey,
           chat_id: 'sys_educontrol_students',
           sender_id: 'educontrol_sync',
-          sender_name: 'EduControl (Base44)',
+          sender_name: 'Upload de Bases',
           text: `<!-- STUDENT_RECORD:${JSON.stringify(s)} -->`,
           timestamp: timeStr
         };
@@ -2463,12 +2463,12 @@ export default function App() {
       }
 
       // Notificação de sistema no canal #geral
-      const noticeText = `🎓 **Base de Alunos EduControl (Base44) Sincronizada!**\n\nForam processados e atualizados **${newStudents.length} alunos** via CPF e Telefone (Anti-duplicidade e Sticky Assignment ativos).\nO reconhecimento em tempo real e os dossiês 360º já estão atualizados no EduChat.`;
+      const noticeText = `🎓 **Base de Alunos Sincronizada!**\n\nForam processados e atualizados **${newStudents.length} alunos** via CPF e Telefone (Anti-duplicidade e Sticky Assignment ativos).\nO reconhecimento em tempo real e os dossiês 360º já estão atualizados no EduChat.`;
       await supabase.from('messages').insert([{
         id: `ec_sync_notif_${Date.now()}`,
         chat_id: 'c-geral',
         sender_id: 'system',
-        sender_name: 'EduControl (Base44)',
+        sender_name: 'Upload de Bases',
         text: noticeText,
         timestamp: timeStr
       }]);
