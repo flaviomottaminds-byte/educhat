@@ -560,6 +560,10 @@ export default function App() {
           let linkedTaskId = null;
           let parsedReplyTo = null;
           let parsedStatus = 'sent';
+          let isAudio = false;
+          let audioUrl = null;
+          let audioTranscription = null;
+          let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
@@ -568,6 +572,41 @@ export default function App() {
                 parsedAttachment = JSON.parse(match[1]);
                 cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
               } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- AUDIO_URL:')) {
+            const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+            if (match) {
+              audioUrl = match[1].trim();
+              cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
+            }
+          }
+
+          if (cleanText.includes('<!-- IS_AUDIO:true -->')) {
+            isAudio = true;
+            cleanText = cleanText.replace(/<!-- IS_AUDIO:true -->/, '').trim();
+          }
+
+          if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+            const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
+            if (match) {
+              audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
+            }
+            isAudio = true;
+          }
+
+          if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
+            isAudio = true;
+            const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
+            if (durMatch) duration = durMatch[1];
+          }
+
+          if (parsedAttachment) {
+            if (parsedAttachment.type?.startsWith('audio/') || parsedAttachment.isAudio || parsedAttachment.name?.includes('audio')) {
+              isAudio = true;
+              if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+              if (parsedAttachment.duration) duration = parsedAttachment.duration;
             }
           }
 
@@ -607,7 +646,11 @@ export default function App() {
             replyTo: parsedReplyTo,
             status: parsedStatus,
             taskId: linkedTaskId,
-            actionExtracted: false
+            actionExtracted: false,
+            isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
+            audioUrl: audioUrl || parsedAttachment?.dataUrl || parsedAttachment?.url || null,
+            audioTranscription: audioTranscription || null,
+            duration: duration || parsedAttachment?.duration || '0:14'
           });
         });
 
@@ -912,6 +955,10 @@ export default function App() {
           let linkedTaskId = null;
           let parsedReplyTo = null;
           let parsedStatus = 'sent';
+          let isAudio = false;
+          let audioUrl = null;
+          let audioTranscription = null;
+          let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
             const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]$/);
@@ -920,6 +967,41 @@ export default function App() {
                 parsedAttachment = JSON.parse(match[1]);
                 cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]$/, '').trim();
               } catch {}
+            }
+          }
+
+          if (cleanText.includes('<!-- AUDIO_URL:')) {
+            const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+            if (match) {
+              audioUrl = match[1].trim();
+              cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
+            }
+          }
+
+          if (cleanText.includes('<!-- IS_AUDIO:true -->')) {
+            isAudio = true;
+            cleanText = cleanText.replace(/<!-- IS_AUDIO:true -->/, '').trim();
+          }
+
+          if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+            const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
+            if (match) {
+              audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
+            }
+            isAudio = true;
+          }
+
+          if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
+            isAudio = true;
+            const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
+            if (durMatch) duration = durMatch[1];
+          }
+
+          if (parsedAttachment) {
+            if (parsedAttachment.type?.startsWith('audio/') || parsedAttachment.isAudio || parsedAttachment.name?.includes('audio')) {
+              isAudio = true;
+              if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+              if (parsedAttachment.duration) duration = parsedAttachment.duration;
             }
           }
 
@@ -959,7 +1041,11 @@ export default function App() {
             replyTo: parsedReplyTo,
             status: parsedStatus,
             taskId: linkedTaskId,
-            actionExtracted: false
+            actionExtracted: false,
+            isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
+            audioUrl: audioUrl || parsedAttachment?.dataUrl || parsedAttachment?.url || null,
+            audioTranscription: audioTranscription || null,
+            duration: duration || parsedAttachment?.duration || '0:14'
           };
 
           setMessages((prev) => {
@@ -1740,7 +1826,7 @@ export default function App() {
   };
 
   // Processador Central do Webhook de WhatsApp (Simulador & Produção)
-  const handleWhatsAppWebhookEvent = ({ fromPhone, senderName, messageText, isAudio, audioTranscription, contactId }) => {
+  const handleWhatsAppWebhookEvent = ({ fromPhone, senderName, messageText, isAudio, audioTranscription, contactId, audioUrl, duration }) => {
     const routingResult = routeIncomingWhatsAppWebhook({
       fromPhone,
       senderName,
@@ -1753,6 +1839,14 @@ export default function App() {
     const targetChatId = contactId || (whatsAppContacts.find(c => c.phone.replace(/\D/g, '') === fromPhone.replace(/\D/g, ''))?.id) || 'wa-carlos-eduardo';
     const timeStr = getSaoPauloTime();
 
+    let finalAudioUrl = audioUrl || null;
+    let finalDuration = duration || '0:14';
+    if (!finalAudioUrl && messageText) {
+      const match = messageText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+      if (match) finalAudioUrl = match[1].trim();
+    }
+    const isAudioMsg = !!isAudio || messageText.includes('🎙️') || !!finalAudioUrl;
+
     const incomingMsg = {
       id: 'wa_in_' + Date.now(),
       senderId: targetChatId,
@@ -1761,7 +1855,9 @@ export default function App() {
       timestamp: timeStr,
       isWhatsApp: true,
       fromStudent: true,
-      isAudio: !!isAudio,
+      isAudio: isAudioMsg,
+      audioUrl: finalAudioUrl,
+      duration: finalDuration,
       audioTranscription: audioTranscription || null
     };
 

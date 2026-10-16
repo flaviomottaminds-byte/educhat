@@ -28,7 +28,8 @@ import {
   Check,
   GraduationCap,
   Award,
-  BookOpen
+  BookOpen,
+  Volume2
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
@@ -67,47 +68,184 @@ function FormattedMessageText({ text }) {
   );
 }
 
-// Player interativo de áudio com reprodução real e barra de onda (Item 2)
-function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription }) {
+// Helper para sintetizar tom de voz suave via Web Audio API caso o arquivo de áudio falhe
+function playSyntheticVoiceNote(durationSec = 5, onEnd = () => {}) {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) {
+      setTimeout(onEnd, durationSec * 1000);
+      return;
+    }
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    const now = ctx.currentTime;
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.linearRampToValueAtTime(320, now + Math.min(1, durationSec * 0.3));
+    osc.frequency.linearRampToValueAtTime(260, now + Math.min(2, durationSec * 0.7));
+    osc.frequency.linearRampToValueAtTime(196, now + durationSec);
+
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.1);
+    gain.gain.setValueAtTime(0.08, now + Math.max(0.2, durationSec - 0.2));
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + durationSec);
+
+    setTimeout(() => {
+      try {
+        ctx.close();
+      } catch {}
+      onEnd();
+    }, durationSec * 1000);
+  } catch (e) {
+    console.warn('Web Audio synthesis error:', e);
+    setTimeout(onEnd, (durationSec || 2) * 1000);
+  }
+}
+
+// Player interativo e robusto de áudio do WhatsApp com suporte a áudio nativo e customizado
+function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState('0:00');
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [showNativePlayer, setShowNativePlayer] = useState(false);
+  const [audioError, setAudioError] = useState(false);
   const audioRef = useRef(null);
 
-  const togglePlay = () => {
-    if (audioRef.current && audioUrl) {
-      if (isPlaying) {
-        audioRef.current.pause();
+  // Normaliza e limpa a URL do áudio (suporta Data URLs, HTTPS, Blobs e Base64 cru da Evolution API)
+  const resolvedUrl = React.useMemo(() => {
+    if (!audioUrl || typeof audioUrl !== 'string') return '';
+    const trimmed = audioUrl.trim();
+    if (
+      trimmed.startsWith('data:') ||
+      trimmed.startsWith('blob:') ||
+      trimmed.startsWith('http://') ||
+      trimmed.startsWith('https://')
+    ) {
+      return trimmed;
+    }
+    // Tratamento de Base64 cru enviado pela Evolution API / WhatsApp
+    if (/^[A-Za-z0-9+/=]+$/.test(trimmed.slice(0, 60))) {
+      return `data:audio/ogg;codecs=opus;base64,${trimmed}`;
+    }
+    return trimmed;
+  }, [audioUrl]);
+
+  // Duração em segundos calculada
+  const parsedDurationSec = React.useMemo(() => {
+    if (typeof duration === 'number') return duration;
+    if (typeof duration === 'string' && duration.includes(':')) {
+      const [m, s] = duration.split(':').map(Number);
+      return (m || 0) * 60 + (s || 14);
+    }
+    return 14;
+  }, [duration]);
+
+  // Fallback acústico/fala que garante áudio audível real mesmo se o arquivo binário falhar
+  const triggerFallbackPlay = () => {
+    setIsPlaying(true);
+    setProgress(0);
+
+    // Se há transcrição e suporte a SpeechSynthesis (fala a transcrição em voz pt-BR)
+    if ('speechSynthesis' in window && transcription) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(transcription);
+      utterance.lang = 'pt-BR';
+      utterance.rate = playbackRate;
+
+      utterance.onend = () => {
         setIsPlaying(false);
-      } else {
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
-      }
+        setProgress(0);
+        setCurrentTime('0:00');
+      };
+      utterance.onerror = () => {
+        playSyntheticVoiceNote(parsedDurationSec, () => {
+          setIsPlaying(false);
+          setProgress(0);
+          setCurrentTime('0:00');
+        });
+      };
+
+      window.speechSynthesis.speak(utterance);
     } else {
-      // Simulação visual quando não há stream binário
-      setIsPlaying((prev) => !prev);
+      // Tom acústico de voz simulada via Web Audio API
+      playSyntheticVoiceNote(parsedDurationSec, () => {
+        setIsPlaying(false);
+        setProgress(0);
+        setCurrentTime('0:00');
+      });
     }
   };
 
+  // Alterna Reprodução e Pausa com Fallback Inteligente
+  const togglePlay = () => {
+    if (isPlaying) {
+      if (audioRef.current) {
+        audioRef.current.pause();
+      }
+      if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      setIsPlaying(false);
+      return;
+    }
+
+    if (resolvedUrl && audioRef.current) {
+      audioRef.current.playbackRate = playbackRate;
+      audioRef.current
+        .play()
+        .then(() => {
+          setIsPlaying(true);
+          setAudioError(false);
+        })
+        .catch((err) => {
+          console.warn('HTML5 Audio play falhou, ativando fallback audível de voz/tom:', err);
+          setAudioError(true);
+          triggerFallbackPlay();
+        });
+    } else {
+      triggerFallbackPlay();
+    }
+  };
+
+  // Atualização de progresso durante simulação/fala
   useEffect(() => {
     let interval = null;
-    if (isPlaying && (!audioUrl || !audioRef.current)) {
+    if (isPlaying && (!resolvedUrl || audioError || !audioRef.current)) {
+      const stepMs = 200;
+      const totalSteps = (parsedDurationSec * 1000) / (stepMs * playbackRate);
       interval = setInterval(() => {
         setProgress((prev) => {
-          if (prev >= 100) {
+          const next = prev + (100 / totalSteps);
+          if (next >= 100) {
             setIsPlaying(false);
-            return 0;
+            setCurrentTime(duration);
+            return 100;
           }
-          return prev + 5;
+          const curSecs = Math.floor((next / 100) * parsedDurationSec);
+          const mins = Math.floor(curSecs / 60);
+          const secs = curSecs % 60;
+          setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+          return next;
         });
-      }, 500);
+      }, stepMs);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, audioUrl]);
+  }, [isPlaying, resolvedUrl, audioError, parsedDurationSec, playbackRate, duration]);
 
+  // Manipuladores de Eventos do Elemento <audio> Nativo
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       const current = audioRef.current.currentTime;
-      const total = audioRef.current.duration || 1;
+      const total = audioRef.current.duration || parsedDurationSec || 1;
       setProgress((current / total) * 100);
       const mins = Math.floor(current / 60);
       const secs = Math.floor(current % 60);
@@ -121,61 +259,178 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription }) {
     setCurrentTime('0:00');
   };
 
+  const handleSeek = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickPercent = Math.max(0, Math.min(1, clickX / rect.width));
+    setProgress(clickPercent * 100);
+
+    if (audioRef.current && audioRef.current.duration) {
+      audioRef.current.currentTime = clickPercent * audioRef.current.duration;
+    } else {
+      const curSecs = Math.floor(clickPercent * parsedDurationSec);
+      const mins = Math.floor(curSecs / 60);
+      const secs = curSecs % 60;
+      setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
+    }
+  };
+
+  const cycleSpeed = (e) => {
+    e.stopPropagation();
+    const nextRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
+    setPlaybackRate(nextRate);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = nextRate;
+    }
+  };
+
   return (
-    <div className="space-y-2 max-w-sm">
-      {audioUrl && (
+    <div className="space-y-2 max-w-sm sm:max-w-md">
+      {/* Elemento <audio> Nativo HTML5 */}
+      {resolvedUrl && (
         <audio
           ref={audioRef}
-          src={audioUrl}
+          src={resolvedUrl}
+          preload="metadata"
           onTimeUpdate={handleTimeUpdate}
           onEnded={handleEnded}
+          onError={() => setAudioError(true)}
           className="hidden"
         />
       )}
-      <div className="flex items-center gap-3 p-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10">
-        <button
-          type="button"
-          onClick={togglePlay}
-          className="w-9 h-9 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs hover:scale-105 transition"
-          title={isPlaying ? "Pausar áudio" : "Reproduzir áudio"}
-        >
-          {isPlaying ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
-        </button>
-        <div className="flex-1 space-y-1">
-          <div
-            className="relative flex items-center gap-1 h-5 items-end cursor-pointer"
+
+      {/* Card do Player Estilo WhatsApp com Barra de Ondas */}
+      <div className={`p-2.5 rounded-2xl border transition-all ${
+        isOutgoing
+          ? 'bg-emerald-500/10 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-700/40'
+          : 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10'
+      }`}>
+        <div className="flex items-center gap-3">
+          {/* Botão Play / Pause */}
+          <button
+            type="button"
             onClick={togglePlay}
-            title="Clique para reproduzir"
+            className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-md hover:scale-105 active:scale-95 transition"
+            title={isPlaying ? "Pausar áudio" : "Reproduzir áudio"}
           >
-            {[40, 75, 30, 90, 60, 100, 50, 80, 45, 95, 60, 30, 85, 50, 70, 40].map((h, idx) => {
-              const barPercent = (idx / 16) * 100;
-              const isActive = progress >= barPercent;
-              return (
-                <div
-                  key={idx}
-                  className={`flex-1 rounded-full transition-colors ${
-                    isActive
-                      ? 'bg-emerald-600 dark:bg-emerald-400'
-                      : 'bg-emerald-600/30 dark:bg-emerald-400/30'
-                  }`}
-                  style={{ height: `${h}%` }}
-                />
-              );
-            })}
+            {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
+          </button>
+
+          {/* Área de Barra de Onda Interativa (Waveform) */}
+          <div className="flex-1 space-y-1">
+            <div
+              className="relative flex items-center gap-0.5 sm:gap-1 h-6 items-end cursor-pointer py-1"
+              onClick={handleSeek}
+              title="Clique em qualquer ponto para avançar ou retroceder o áudio"
+            >
+              {[35, 70, 45, 85, 55, 100, 40, 80, 60, 95, 50, 75, 90, 40, 65, 85, 50, 70, 95, 60, 40, 80, 55, 30].map((h, idx) => {
+                const barPercent = (idx / 24) * 100;
+                const isActive = progress >= barPercent;
+                return (
+                  <div
+                    key={idx}
+                    className={`flex-1 rounded-full transition-all duration-75 ${
+                      isActive
+                        ? 'bg-emerald-600 dark:bg-emerald-400'
+                        : 'bg-emerald-600/30 dark:bg-emerald-400/30 hover:bg-emerald-500/50'
+                    }`}
+                    style={{ height: `${h}%` }}
+                  />
+                );
+              })}
+            </div>
+
+            {/* Tempo e Metadados */}
+            <div className="flex items-center justify-between text-[10px] opacity-75 font-medium">
+              <span>{isPlaying ? currentTime : duration}</span>
+              <div className="flex items-center gap-2">
+                {/* Botão de Velocidade (1x / 1.5x / 2x) */}
+                <button
+                  type="button"
+                  onClick={cycleSpeed}
+                  className="px-1.5 py-0.2 rounded-full bg-black/10 dark:bg-white/10 hover:bg-emerald-600 hover:text-white transition font-bold text-[9px]"
+                  title="Alterar velocidade de reprodução"
+                >
+                  {playbackRate}x
+                </button>
+                <span>Voz WhatsApp</span>
+              </div>
+            </div>
           </div>
-          <div className="flex items-center justify-between text-[10px] opacity-70">
-            <span>{isPlaying ? currentTime : duration}</span>
-            <span>Mensagem de Voz</span>
-          </div>
+
+          {/* Botão de Download */}
+          {resolvedUrl && (
+            <a
+              href={resolvedUrl}
+              download="audio_whatsapp.ogg"
+              className="p-2 text-slate-500 hover:text-emerald-600 transition rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
+              title="Baixar arquivo de áudio para o computador"
+            >
+              <Download size={15} />
+            </a>
+          )}
         </div>
+
+        {/* Player Nativo HTML5 Opcional/Alternável */}
+        <div className="mt-1.5 pt-1.5 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-[10px]">
+          <button
+            type="button"
+            onClick={() => setShowNativePlayer(!showNativePlayer)}
+            className="text-emerald-700 dark:text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
+          >
+            {showNativePlayer ? '▲ Ocultar Player Nativo' : '▼ Exibir Player Nativo do Navegador'}
+          </button>
+          {isPlaying && (
+            <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Reproduzindo...
+            </span>
+          )}
+        </div>
+
+        {showNativePlayer && (
+          <div className="mt-2 p-1.5 bg-white dark:bg-chatCard rounded-lg border border-black/10 dark:border-white/10 animate-in fade-in slide-in-from-top-1">
+            {resolvedUrl ? (
+              <audio
+                controls
+                src={resolvedUrl}
+                className="w-full h-8"
+                preload="metadata"
+              />
+            ) : (
+              <div className="p-1 flex items-center justify-between text-[11px] text-chatTextMuted">
+                <span>Áudio recebido via WhatsApp (Voz/PTT).</span>
+                <button
+                  type="button"
+                  onClick={triggerFallbackPlay}
+                  className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[10px]"
+                >
+                  Ouvir Leitura
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
+      {/* Transcrição Speech-to-Text */}
       {transcription && (
-        <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs">
-          <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 mb-1">
-            <Headphones size={12} /> Transcrição Speech-to-Text:
+        <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+              <Headphones size={13} />
+              <span>Transcrição Speech-to-Text:</span>
+            </div>
+            <button
+              type="button"
+              onClick={triggerFallbackPlay}
+              className="text-[10px] text-emerald-700 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-0.5"
+              title="Ouvir leitura em voz alta"
+            >
+              <Volume2 size={11} /> Ouvir Leitura
+            </button>
           </div>
-          <p className="italic text-chatTextTitle leading-relaxed">
+          <p className="italic text-chatTextTitle leading-relaxed text-[11px]">
             "{transcription}"
           </p>
         </div>
@@ -886,7 +1141,7 @@ export default function ChatArea({
                               </a>
                             </div>
                           </div>
-                        ) : !m.attachment.type?.startsWith('audio/') ? (
+                        ) : !m.attachment.type?.startsWith('audio/') && !m.attachment.isAudio && !m.attachment.name?.toLowerCase().endsWith('.ogg') && !m.attachment.name?.toLowerCase().endsWith('.mp3') && !m.attachment.name?.toLowerCase().endsWith('.opus') && !m.attachment.name?.toLowerCase().endsWith('.wav') && !m.attachment.name?.toLowerCase().endsWith('.m4a') ? (
                           <div className="p-2.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between gap-3 max-w-sm">
                             <div className="flex items-center gap-2 truncate">
                               <FileText size={24} className="text-rose-500 shrink-0" />
@@ -914,19 +1169,52 @@ export default function ChatArea({
 
                     {/* Renderização de Áudio WhatsApp / Voz Nativa (Item 2) */}
                     {(() => {
-                      const isAudioMessage = m.isAudio || m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:') || m.attachment?.type?.startsWith('audio/');
-                      let transcription = m.audioTranscription || '';
-                      if (!transcription && m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
-                        const match = m.text.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/);
-                        if (match) transcription = match[1];
-                      }
+                      const isAudioMessage =
+                        m.isAudio ||
+                        Boolean(m.audioUrl) ||
+                        m.attachment?.type?.startsWith('audio/') ||
+                        m.attachment?.isAudio ||
+                        m.attachment?.name?.toLowerCase().endsWith('.ogg') ||
+                        m.attachment?.name?.toLowerCase().endsWith('.mp3') ||
+                        m.attachment?.name?.toLowerCase().endsWith('.opus') ||
+                        m.attachment?.name?.toLowerCase().endsWith('.wav') ||
+                        m.attachment?.name?.toLowerCase().endsWith('.m4a') ||
+                        m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:') ||
+                        m.text?.includes('<!-- IS_AUDIO:true -->') ||
+                        m.text?.includes('<!-- AUDIO_URL:') ||
+                        m.text?.includes('🎙️ [Áudio recebido via WhatsApp]') ||
+                        (m.text?.includes('🎙️') && (m.text?.includes('Áudio') || m.text?.includes('Mensagem de voz'))) ||
+                        m.text?.toLowerCase().includes('áudio recebido via whatsapp');
 
                       if (isAudioMessage) {
+                        let transcription = m.audioTranscription || '';
+                        if (!transcription && m.text?.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+                          const match = m.text.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || m.text.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
+                          if (match) transcription = match[1].replace(/^["']|["']$/g, '');
+                        }
+
+                        let resolvedAudioUrl = m.audioUrl || m.attachment?.dataUrl || m.attachment?.url;
+                        if (!resolvedAudioUrl && m.text?.includes('<!-- AUDIO_URL:')) {
+                          const match = m.text.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+                          if (match) resolvedAudioUrl = match[1].trim();
+                        }
+
+                        let resolvedDuration = m.duration || m.attachment?.duration;
+                        if (!resolvedDuration && m.text?.includes('<!-- DURATION:')) {
+                          const match = m.text.match(/<!-- DURATION:([\s\S]+?) -->/);
+                          if (match) resolvedDuration = match[1].trim();
+                        }
+                        if (!resolvedDuration && m.text) {
+                          const durMatch = m.text.match(/\((\d{1,2}:\d{2})\)/);
+                          if (durMatch) resolvedDuration = durMatch[1];
+                        }
+
                         return (
                           <AudioMessagePlayer
-                            audioUrl={m.attachment?.dataUrl || m.audioUrl}
-                            duration={m.attachment?.duration || m.duration || '0:14'}
+                            audioUrl={resolvedAudioUrl}
+                            duration={resolvedDuration || '0:14'}
                             transcription={transcription}
+                            isOutgoing={isMe}
                           />
                         );
                       }

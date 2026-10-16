@@ -534,8 +534,9 @@ export default function WhatsAppConnectionModal({
       payload = {
         fromPhone: '+55 11 98765-4321',
         senderName: 'Lucas Mendes',
-        messageText: '🎙️ [ÁUDIO_TRANSCRIÇÃO: "Olá Gabriel! Te mandei esse áudio só para confirmar se o pagamento pode ser parcelado no boleto bancário sem juros, ok? Fico no aguardo!"]',
+        messageText: '🎙️ Mensagem de voz (0:18)\n[ÁUDIO_TRANSCRIÇÃO: "Olá Gabriel! Te mandei esse áudio só para confirmar se o pagamento pode ser parcelado no boleto bancário sem juros, ok? Fico no aguardo!"]',
         isAudio: true,
+        duration: '0:18',
         audioTranscription: 'Olá Gabriel! Te mandei esse áudio só para confirmar se o pagamento pode ser parcelado no boleto bancário sem juros, ok? Fico no aguardo!',
         contactId: 'wa-lucas-mendes'
       };

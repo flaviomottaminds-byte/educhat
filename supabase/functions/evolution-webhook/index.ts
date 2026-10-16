@@ -129,56 +129,106 @@ function extractRawMessages(body: any): any[] {
 }
 
 // Extrator universal de conteúdo textual e mídia do WhatsApp
-function extractMessageContent(msg: any): { text: string; isAudio: boolean; isMedia: boolean } {
-  if (!msg) return { text: "Mensagem vazia", isAudio: false, isMedia: false };
+function extractMessageContent(msg: any, rawItem?: any): { text: string; isAudio: boolean; isMedia: boolean; audioUrl?: string; duration?: string } {
+  if (!msg && !rawItem) return { text: "Mensagem vazia", isAudio: false, isMedia: false };
 
   // 1. Mensagem de texto simples
-  if (typeof msg.conversation === "string" && msg.conversation.trim()) {
+  if (typeof msg?.conversation === "string" && msg.conversation.trim()) {
     return { text: msg.conversation.trim(), isAudio: false, isMedia: false };
   }
 
   // 2. Mensagem de texto estendida
-  if (typeof msg.extendedTextMessage?.text === "string" && msg.extendedTextMessage.text.trim()) {
+  if (typeof msg?.extendedTextMessage?.text === "string" && msg.extendedTextMessage.text.trim()) {
     return { text: msg.extendedTextMessage.text.trim(), isAudio: false, isMedia: false };
   }
 
   // 3. Áudio (Push-to-Talk ou arquivo de áudio)
-  if (msg.audioMessage) {
+  const isAudioType = Boolean(msg?.audioMessage || rawItem?.messageType === "audioMessage" || rawItem?.mediaType === "audio");
+  if (isAudioType) {
+    const audio = msg?.audioMessage || {};
+    const rawAudioUrl = audio.url || audio.mediaUrl || rawItem?.mediaUrl || rawItem?.url || "";
+    const rawBase64 = audio.base64 || rawItem?.base64 || "";
+    const mimetype = audio.mimetype || "audio/ogg; codecs=opus";
+    const seconds = Number(audio.seconds || 14);
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    const duration = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+
+    let dataUrl = "";
+    if (rawBase64) {
+      dataUrl = rawBase64.startsWith("data:") ? rawBase64 : `data:${mimetype};base64,${rawBase64}`;
+    } else if (rawAudioUrl) {
+      dataUrl = rawAudioUrl;
+    }
+
+    let messageText = `🎙️ Mensagem de voz (${duration})`;
+    if (dataUrl) {
+      const attachmentPayload = JSON.stringify({
+        name: `audio_${Date.now()}.ogg`,
+        type: mimetype,
+        dataUrl: dataUrl,
+        duration: duration,
+        isAudio: true
+      });
+      messageText += `\n[ARQUIVO_ANEXO:${attachmentPayload}]`;
+      messageText += `\n<!-- AUDIO_URL:${dataUrl} -->`;
+    }
+    messageText += `\n<!-- IS_AUDIO:true -->`;
+
+    const transcription = audio.transcription || audio.transcript || rawItem?.transcription || "";
+    if (transcription) {
+      messageText += `\n[ÁUDIO_TRANSCRIÇÃO: "${transcription}"]`;
+    }
+
     return {
-      text: "🎙️ [Áudio recebido via WhatsApp]",
+      text: messageText,
       isAudio: true,
       isMedia: true,
+      audioUrl: dataUrl,
+      duration: duration
     };
   }
 
   // 4. Imagem
-  if (msg.imageMessage) {
-    const caption = (msg.imageMessage.caption || "").trim();
-    return {
-      text: caption ? "📷 " + caption : "📷 [Imagem recebida]",
-      isAudio: false,
-      isMedia: true,
-    };
+  if (msg?.imageMessage || rawItem?.messageType === "imageMessage") {
+    const img = msg?.imageMessage || {};
+    const imgUrl = img.url || img.mediaUrl || rawItem?.mediaUrl || "";
+    const base64 = img.base64 || rawItem?.base64 || "";
+    const mimetype = img.mimetype || "image/jpeg";
+    const caption = (img.caption || "").trim();
+    let dataUrl = imgUrl;
+    if (base64) {
+      dataUrl = base64.startsWith("data:") ? base64 : `data:${mimetype};base64,${base64}`;
+    }
+    let text = caption ? "📷 " + caption : "📷 [Imagem recebida]";
+    if (dataUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "imagem.jpg", type: mimetype, dataUrl })}]`;
+    }
+    return { text, isAudio: false, isMedia: true };
   }
 
   // 5. Vídeo
-  if (msg.videoMessage) {
-    const caption = (msg.videoMessage.caption || "").trim();
-    return {
-      text: caption ? "🎥 " + caption : "🎥 [Vídeo recebido]",
-      isAudio: false,
-      isMedia: true,
-    };
+  if (msg?.videoMessage || rawItem?.messageType === "videoMessage") {
+    const vid = msg?.videoMessage || {};
+    const caption = (vid.caption || "").trim();
+    const vidUrl = vid.url || vid.mediaUrl || rawItem?.mediaUrl || "";
+    let text = caption ? "🎥 " + caption : "🎥 [Vídeo recebido]";
+    if (vidUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "video.mp4", type: vid.mimetype || "video/mp4", dataUrl: vidUrl })}]`;
+    }
+    return { text, isAudio: false, isMedia: true };
   }
 
   // 6. Documento
-  if (msg.documentMessage) {
-    const fileName = msg.documentMessage.fileName || msg.documentMessage.title || "arquivo";
-    return {
-      text: "📄 [Documento: " + fileName + "]",
-      isAudio: false,
-      isMedia: true,
-    };
+  if (msg?.documentMessage || rawItem?.messageType === "documentMessage") {
+    const doc = msg?.documentMessage || {};
+    const fileName = doc.fileName || doc.title || "arquivo";
+    const docUrl = doc.url || doc.mediaUrl || rawItem?.mediaUrl || "";
+    let text = "📄 [Documento: " + fileName + "]";
+    if (docUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName, type: doc.mimetype || "application/pdf", dataUrl: docUrl })}]`;
+    }
+    return { text, isAudio: false, isMedia: true };
   }
 
   // 7. Contato Compartilhado
@@ -335,7 +385,7 @@ Deno.serve(async (req: Request) => {
       }
 
       // Conteúdo da mensagem
-      const content = extractMessageContent(m?.message || m);
+      const content = extractMessageContent(m?.message || m, m);
       const messageText = content.text;
 
       // Horário formatado estritamente no fuso oficial de São Paulo (America/Sao_Paulo)
