@@ -36,6 +36,8 @@ import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
+import FileAttachmentCard from './FileAttachmentCard';
+import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -43,8 +45,9 @@ function FormattedMessageText({ text }) {
   // Remove comentários de controle interno e tags de anexo/áudio que não devem ser expostas como texto bruto
   const cleanText = text
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/g, '')
-    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/g, '')
+    .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+    .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
     .trim();
 
   if (!cleanText) return null;
@@ -82,40 +85,32 @@ function parseMessageContent(m) {
 
   const rawText = m.text || '';
   let extractedAttachment = m.attachment || null;
-  let extractedAudioUrl = m.audioUrl || (m.attachment?.type?.startsWith('audio/') ? m.attachment.dataUrl : null);
+
+  // 1. Extração robusta de [ARQUIVO_ANEXO:{...}]
+  const { attachment: parsedFromText, cleanText: sanitizedText } = extractAttachmentFromText(rawText);
+  if (!extractedAttachment && parsedFromText) {
+    extractedAttachment = parsedFromText;
+  }
+
+  let extractedAudioUrl = m.audioUrl || (extractedAttachment?.type?.startsWith('audio/') ? extractedAttachment.dataUrl : null);
   let isAudio = Boolean(m.isAudio || extractedAudioUrl);
-  let duration = m.duration || m.attachment?.duration || null;
+  let duration = m.duration || extractedAttachment?.duration || null;
   let transcription = m.audioTranscription || null;
 
-  // 1. Intercepta e extrai tags [ARQUIVO_ANEXO:{...}]
-  if (rawText.includes('[ARQUIVO_ANEXO:')) {
-    const attachmentRegex = /\[ARQUIVO_ANEXO:([\s\S]+?)\]/g;
-    let match;
-    while ((match = attachmentRegex.exec(rawText)) !== null) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed) {
-          if (!extractedAttachment) {
-            extractedAttachment = parsed;
-          }
-          const isAudioType =
-            parsed.type?.startsWith('audio/') ||
-            parsed.isAudio ||
-            parsed.name?.toLowerCase().includes('audio') ||
-            /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsed.name || '');
+  if (extractedAttachment) {
+    const isAudioType =
+      extractedAttachment.type?.startsWith('audio/') ||
+      extractedAttachment.isAudio ||
+      extractedAttachment.name?.toLowerCase().includes('audio') ||
+      /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(extractedAttachment.name || '');
 
-          if (isAudioType) {
-            isAudio = true;
-            if (!extractedAudioUrl) {
-              extractedAudioUrl = parsed.dataUrl || parsed.url || parsed.base64;
-            }
-            if (parsed.duration && !duration) {
-              duration = parsed.duration;
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Erro ao processar JSON de [ARQUIVO_ANEXO]:', err);
+    if (isAudioType) {
+      isAudio = true;
+      if (!extractedAudioUrl) {
+        extractedAudioUrl = extractedAttachment.dataUrl || extractedAttachment.url || extractedAttachment.base64;
+      }
+      if (extractedAttachment.duration && !duration) {
+        duration = extractedAttachment.duration;
       }
     }
   }
@@ -144,10 +139,11 @@ function parseMessageContent(m) {
   }
 
   // 3. Limpa tags e metadados de controle do texto de exibição
-  let cleanText = rawText
+  let cleanText = sanitizedText
     .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '')
-    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]+?\]/g, '')
+    .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+    .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
     .trim();
 
   // 4. Se o texto tiver indicador de áudio
@@ -161,24 +157,6 @@ function parseMessageContent(m) {
     if (!duration) {
       const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
       if (durMatch) duration = durMatch[1];
-    }
-  }
-
-  // Se extractedAttachment for de áudio
-  if (extractedAttachment) {
-    if (
-      extractedAttachment.type?.startsWith('audio/') ||
-      extractedAttachment.isAudio ||
-      extractedAttachment.name?.toLowerCase().includes('audio') ||
-      /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(extractedAttachment.name || '')
-    ) {
-      isAudio = true;
-      if (!extractedAudioUrl) {
-        extractedAudioUrl = extractedAttachment.dataUrl || extractedAttachment.url || extractedAttachment.base64;
-      }
-      if (extractedAttachment.duration && !duration) {
-        duration = extractedAttachment.duration;
-      }
     }
   }
 
@@ -1188,7 +1166,9 @@ export default function ChatArea({
               return (
                 <div key={m.id} className="flex justify-center my-2 animate-in fade-in">
                   <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
-                    <span className="leading-tight">{m.text?.replace(/<!--[\s\S]*?-->/g, '').trim()}</span>
+                    <span className="leading-tight">
+                      {m.text?.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').trim()}
+                    </span>
                     <span className="text-[9.5px] opacity-75 font-mono shrink-0">{getSaoPauloTime(m.timestamp || m.created_at)}</span>
                   </div>
                 </div>
@@ -1228,7 +1208,7 @@ export default function ChatArea({
                         </span>
                         <p className="text-chatTextMuted truncate text-[11.5px] line-clamp-2">
                           {m.replyTo.text
-                            ? m.replyTo.text.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/g, '').replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/g, '').trim() || '🎙️ Mensagem de voz'
+                            ? m.replyTo.text.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '').trim() || '🎙️ Mensagem de voz'
                             : (m.replyTo.attachment ? `[Arquivo] ${m.replyTo.attachment.name}` : 'Mensagem')}
                         </p>
                       </div>
@@ -1249,52 +1229,33 @@ export default function ChatArea({
                           {/* 1. Imagem anexada */}
                           {parsed.attachment && isImageAttachment && (
                             <div className="mb-2">
-                              <div className="rounded-lg overflow-hidden border border-black/10 dark:border-white/10 max-w-sm">
+                              <div className="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 max-w-sm shadow-xs">
                                 <img
                                   src={parsed.attachment.dataUrl || parsed.attachment.url}
                                   alt={parsed.attachment.name || 'Imagem'}
                                   className="w-full max-h-64 object-cover cursor-pointer hover:opacity-95 transition"
-                                  onClick={() => window.open(parsed.attachment.dataUrl || parsed.attachment.url, '_blank')}
+                                  onClick={() => openDocument(parsed.attachment)}
                                 />
-                                <div className="p-1.5 bg-black/5 dark:bg-white/5 flex items-center justify-between text-[11px]">
-                                  <span className="truncate">{parsed.attachment.name}</span>
-                                  <a
-                                    href={parsed.attachment.dataUrl || parsed.attachment.url}
-                                    download={parsed.attachment.name || 'imagem'}
-                                    className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-semibold shrink-0 ml-2"
+                                <div className="p-2 bg-black/5 dark:bg-white/5 flex items-center justify-between text-[11.5px]">
+                                  <span className="truncate font-medium">{parsed.attachment.name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => downloadDocument(parsed.attachment)}
+                                    className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-semibold shrink-0 ml-2 cursor-pointer"
                                   >
-                                    <Download size={12} /> Baixar
-                                  </a>
+                                    <Download size={13} /> Baixar
+                                  </button>
                                 </div>
                               </div>
                             </div>
                           )}
 
-                          {/* 2. Arquivo comum anexado (PDF, DOC, ZIP, etc. - não áudio e não imagem) */}
+                          {/* 2. Arquivo/Documento anexado (PDF, DOCX, XLSX, etc.) */}
                           {parsed.attachment && !isImageAttachment && !isAudioAttachment && (
-                            <div className="mb-2">
-                              <div className="p-2.5 rounded-lg bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between gap-3 max-w-sm">
-                                <div className="flex items-center gap-2 truncate">
-                                  <FileText size={24} className="text-rose-500 shrink-0" />
-                                  <div className="truncate">
-                                    <p className="text-xs font-semibold truncate leading-tight">
-                                      {parsed.attachment.name}
-                                    </p>
-                                    <span className="text-[10px] opacity-70">
-                                      {parsed.attachment.size}
-                                    </span>
-                                  </div>
-                                </div>
-                                <a
-                                  href={parsed.attachment.dataUrl || parsed.attachment.url}
-                                  download={parsed.attachment.name}
-                                  className="p-1.5 rounded-full bg-brand-600 text-white hover:bg-brand-500 transition shrink-0"
-                                  title="Baixar arquivo"
-                                >
-                                  <Download size={14} />
-                                </a>
-                              </div>
-                            </div>
+                            <FileAttachmentCard
+                              attachment={parsed.attachment}
+                              isOutgoing={isMe}
+                            />
                           )}
 
                           {/* 3. Player de Áudio Nativo / Voz WhatsApp */}
@@ -1577,7 +1538,7 @@ export default function ChatArea({
                   ? (replyingTo.attachment.type?.startsWith('audio/') || replyingTo.attachment.isAudio
                       ? '🎙️ Mensagem de voz'
                       : `[Arquivo] ${replyingTo.attachment.name}`)
-                  : (replyingTo.text?.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/g, '').replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/g, '').trim() || '🎙️ Mensagem de voz')}
+                  : (replyingTo.text?.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '').trim() || '🎙️ Mensagem de voz')}
               </span>
             </div>
             <button

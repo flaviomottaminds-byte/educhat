@@ -50,6 +50,7 @@ import {
   loadLocalHeartbeats,
   saveLocalHeartbeat
 } from './lib/presence';
+import { extractAttachmentFromText } from './lib/attachmentParser';
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -667,13 +668,11 @@ export default function App() {
           let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
-            if (match) {
-              try {
-                parsedAttachment = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
-              } catch {}
+            const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
+            if (extracted) {
+              parsedAttachment = extracted;
             }
+            cleanText = sanitized;
           }
 
           if (cleanText.includes('<!-- AUDIO_URL:')) {
@@ -1111,13 +1110,11 @@ export default function App() {
           let duration = '0:14';
 
           if (cleanText.includes('[ARQUIVO_ANEXO:')) {
-            const match = cleanText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
-            if (match) {
-              try {
-                parsedAttachment = JSON.parse(match[1]);
-                cleanText = cleanText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
-              } catch {}
+            const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
+            if (extracted) {
+              parsedAttachment = extracted;
             }
+            cleanText = sanitized;
           }
 
           if (cleanText.includes('<!-- AUDIO_URL:')) {
@@ -2189,19 +2186,17 @@ export default function App() {
     let parsedAttachment = null;
 
     if (cleanMessageText.includes('[ARQUIVO_ANEXO:')) {
-      const match = cleanMessageText.match(/\[ARQUIVO_ANEXO:([\s\S]+?)\]/);
-      if (match) {
-        try {
-          parsedAttachment = JSON.parse(match[1]);
-          if (!finalAudioUrl && (parsedAttachment.dataUrl || parsedAttachment.url)) {
-            finalAudioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
-          }
-          if (parsedAttachment.duration) {
-            finalDuration = parsedAttachment.duration;
-          }
-          cleanMessageText = cleanMessageText.replace(/\[ARQUIVO_ANEXO:[\s\S]+?\]/g, '').trim();
-        } catch {}
+      const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanMessageText);
+      if (extracted) {
+        parsedAttachment = extracted;
+        if (!finalAudioUrl && (parsedAttachment.dataUrl || parsedAttachment.url)) {
+          finalAudioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+        }
+        if (parsedAttachment.duration) {
+          finalDuration = parsedAttachment.duration;
+        }
       }
+      cleanMessageText = sanitized;
     }
 
     if (!finalAudioUrl && cleanMessageText) {
