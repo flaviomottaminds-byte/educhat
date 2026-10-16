@@ -98,78 +98,280 @@ export function normalizeDepartmentName(rawDept = '') {
 }
 
 /**
- * Vinculação Automática de Usuário (Requisito 2):
- * Cruza o nome extraído na ata ou o departamento com os usuários reais cadastrados no EduChat.
+ * Busca dinamicamente todos os usuários/colaboradores ativos diretamente no Supabase
+ * (tabelas `profiles`, `users` e registros sincronizados em `sys_collaborators`),
+ * mesclando em tempo real sem depender de listas estáticas.
  */
-export function matchCollaboratorToTask(responsavelNome = '', departamentoRaw = '', collaborators = []) {
-  const activeUsers = (collaborators || []).filter((c) => !c.isBot && c.roleType !== 'bot');
-  const normName = normalizeText(responsavelNome);
-  const normDept = normalizeDepartmentName(departamentoRaw);
+export async function fetchActiveCollaboratorsFromDB(fallbackCollaborators = []) {
+  const mergedMap = new Map();
 
-  // 1. Mapeamento de apelidos e nomes executivos frequentes nas reuniões do Google Meet
-  const aliasRules = [
-    { match: ['ana livia', 'ana lívia', 'livia'], targetName: 'Ana Livia', defaultDept: 'Marketing' },
-    { match: ['yasmin'], targetName: 'Yasmin', defaultDept: 'Marketing' },
-    { match: ['tati', 'tati salatinos', 'tatiane', 'tatiane salatinos'], targetName: 'Tatiane Salatinos', defaultDept: 'Comercial' },
-    { match: ['gabriel', 'gabriel carvalho'], targetName: 'Gabriel Carvalho', defaultDept: 'Comercial' },
-    { match: ['wagner'], targetName: 'Wagner', defaultDept: 'Comercial' },
-    { match: ['michele', 'michele cristina'], targetName: 'Michele Cristina', defaultDept: 'Comercial' },
-    { match: ['clarice', 'clarice oliveira'], targetName: 'Clarice Oliveira', defaultDept: 'Comercial' },
-    { match: ['luiz', 'luiz augusto', 'terapia educacional'], targetName: 'Luiz Augusto', defaultDept: 'Expansão' },
-    { match: ['gislaine', 'giih', 'gislaine santos'], targetName: 'Gislaine Santos', defaultDept: 'Secretaria' },
-    { match: ['ana paula', 'paula'], targetName: 'Ana Paula', defaultDept: 'Secretaria' },
-    { match: ['larissa', 'larissa machado'], targetName: 'Larissa Machado', defaultDept: 'Secretaria' },
-    { match: ['lindomar'], targetName: 'Lindomar', defaultDept: 'Pedagógico' },
-    { match: ['paulo', 'paulo do vale'], targetName: 'Paulo do Vale', defaultDept: 'Pedagógico' },
-    { match: ['raquel', 'raquel lopes'], targetName: 'Raquel Lopes', defaultDept: 'Tutoria' },
-    { match: ['flavio', 'flavio motta'], targetName: 'Flávio Motta', defaultDept: 'Diretoria' }
-  ];
+  const addOrMergeUser = (raw) => {
+    if (!raw) return;
+    const isBot = Boolean(raw.isBot || raw.is_bot || raw.roleType === 'bot' || raw.role_type === 'bot');
+    if (isBot) return;
+    if (raw.active === false || raw.is_active === false) return;
 
-  if (normName) {
-    // Tenta correspondência direta ou parcial na lista dinâmica de colaboradores do Supabase
-    const directMatch = activeUsers.find((u) => {
-      const uNorm = normalizeText(u.name);
-      const firstToken = uNorm.split(' ')[0];
-      return uNorm === normName || uNorm.includes(normName) || normName.includes(uNorm) || (firstToken.length >= 3 && normName.includes(firstToken));
+    const name = String(raw.name || raw.full_name || raw.username || '').trim();
+    if (!name) return;
+
+    const email = String(raw.email || '').trim();
+    const id = raw.id || `u_${normalizeText(email || name).replace(/[^a-z0-9]/g, '_')}`;
+    const role = raw.role || raw.cargo || 'Colaborador';
+    const roleType =
+      raw.roleType ||
+      raw.role_type ||
+      (normalizeText(role).includes('diretor') || normalizeText(role).includes('admin') || normalizeText(role).includes('gestor')
+        ? 'diretor'
+        : 'colaborador');
+    const department = normalizeDepartmentName(raw.department || raw.setor || raw.fila || 'Geral');
+    const avatar = raw.avatar || '👤';
+
+    const key = normalizeText(email || name || id);
+    const existing = mergedMap.get(key) || {};
+    mergedMap.set(key, {
+      ...existing,
+      id: raw.id || existing.id || id,
+      name,
+      email: email || existing.email || '',
+      role: role || existing.role || 'Colaborador',
+      roleType: roleType || existing.roleType || 'colaborador',
+      department: department !== 'Geral' ? department : (existing.department || 'Geral'),
+      avatar: avatar !== '👤' ? avatar : (existing.avatar || '👤'),
+      online: Boolean(raw.online ?? existing.online ?? false),
+      lastSeen: raw.lastSeen || raw.last_seen || existing.lastSeen || null,
+      isBot: false
     });
+  };
 
-    if (directMatch) {
-      return {
-        assigneeId: directMatch.id,
-        assignee: directMatch.name,
-        assigneeEmail: directMatch.email || '',
-        assigneeAvatar: directMatch.avatar || '👤',
-        department: normDept !== 'Geral' ? normDept : (directMatch.department || 'Geral')
-      };
-    }
+  // 1. Semente inicial com os colaboradores já carregados em memória / localStorage
+  (fallbackCollaborators || []).forEach(addOrMergeUser);
+  if (typeof window !== 'undefined') {
+    try {
+      const localList = JSON.parse(localStorage.getItem('educhat_collaborators') || '[]');
+      if (Array.isArray(localList)) localList.forEach(addOrMergeUser);
+    } catch {}
+  }
 
-    // Tenta pelas regras de apelidos
-    for (const rule of aliasRules) {
-      if (rule.match.some((alias) => normName.includes(alias))) {
-        const foundInCollab = activeUsers.find((u) => normalizeText(u.name).includes(normalizeText(rule.targetName)));
-        if (foundInCollab) {
-          return {
-            assigneeId: foundInCollab.id,
-            assignee: foundInCollab.name,
-            assigneeEmail: foundInCollab.email || '',
-            assigneeAvatar: foundInCollab.avatar || '👤',
-            department: normDept !== 'Geral' ? normDept : (foundInCollab.department || rule.defaultDept)
-          };
-        }
-        return {
-          assigneeId: null,
-          assignee: rule.targetName,
-          assigneeEmail: '',
-          assigneeAvatar: '👤',
-          department: normDept !== 'Geral' ? normDept : rule.defaultDept
-        };
+  // 2. Busca em tempo real nas tabelas do Supabase (`profiles`, `users` e `sys_collaborators`)
+  if (supabase) {
+    try {
+      const { data: profilesData, error: profilesErr } = await supabase.from('profiles').select('*');
+      if (!profilesErr && Array.isArray(profilesData)) {
+        profilesData.forEach(addOrMergeUser);
       }
+    } catch {}
+
+    try {
+      const { data: usersData, error: usersErr } = await supabase.from('users').select('*');
+      if (!usersErr && Array.isArray(usersData)) {
+        usersData.forEach(addOrMergeUser);
+      }
+    } catch {}
+
+    try {
+      const { data: sysCollabData, error: sysErr } = await supabase
+        .from('messages')
+        .select('text')
+        .eq('chat_id', 'sys_collaborators');
+      if (!sysErr && Array.isArray(sysCollabData)) {
+        sysCollabData.forEach((row) => {
+          const match = (row.text || '').match(/<!-- COLLABORATOR_RECORD:([\s\S]*?) -->/);
+          if (match) {
+            try {
+              addOrMergeUser(JSON.parse(match[1]));
+            } catch {}
+          }
+        });
+      }
+    } catch {}
+  }
+
+  return Array.from(mergedMap.values());
+}
+
+/**
+ * Calcula a distância de edição (Levenshtein) normalizada entre duas strings (0.0 a 1.0)
+ */
+function calculateStringSimilarity(a = '', b = '') {
+  const s1 = normalizeText(a);
+  const s2 = normalizeText(b);
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1;
+
+  const len1 = s1.length;
+  const len2 = s2.length;
+  const maxLen = Math.max(len1, len2);
+  if (maxLen === 0) return 1;
+
+  const matrix = Array.from({ length: len1 + 1 }, () => new Array(len2 + 1).fill(0));
+  for (let i = 0; i <= len1; i++) matrix[i][0] = i;
+  for (let j = 0; j <= len2; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= len1; i++) {
+    for (let j = 1; j <= len2; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
     }
   }
 
-  // 2. Se não identificou pelo nome, vincula ao especialista titular do departamento
+  const distance = matrix[len1][len2];
+  return Math.max(0, (maxLen - distance) / maxLen);
+}
+
+/**
+ * Calcula o score de proximidade entre o nome/e-mail extraído da ata e um usuário real do banco
+ */
+function scoreCollaboratorMatch(queryName = '', targetDept = '', user = {}) {
+  const qNorm = normalizeText(queryName);
+  const uName = normalizeText(user.name || '');
+  const uEmail = normalizeText(user.email || '');
+  const uEmailLocal = uEmail.split('@')[0] || '';
+  const uDept = normalizeDepartmentName(user.department || '');
+
+  if (!qNorm || !uName) return 0;
+
+  let score = 0;
+
+  // 1. Match exato de nome completo ou e-mail
+  if (uName === qNorm || (uEmail && uEmail === qNorm) || (uEmailLocal && uEmailLocal === qNorm)) {
+    score = 1.0;
+  } else if (uName.includes(qNorm) || qNorm.includes(uName)) {
+    // 2. Substring direta (ex: "Ana Livia" dentro de "Ana Livia Marques")
+    score = 0.92;
+  } else {
+    // 3. Comparação por tokens de nome (primeiro nome, sobrenome, apelido por prefixo ou similaridade Levenshtein)
+    const stopWords = new Set(['de', 'da', 'do', 'dos', 'das', 'e']);
+    const qTokens = qNorm.split(/\s+/).filter((t) => t.length >= 2 && !stopWords.has(t));
+    const uTokens = uName.split(/\s+/).filter((t) => t.length >= 2 && !stopWords.has(t));
+
+    let bestTokenScore = 0;
+    let matchedTokensCount = 0;
+
+    for (const qt of qTokens) {
+      let maxForThisQt = 0;
+      for (const ut of uTokens) {
+        if (qt === ut) {
+          maxForThisQt = Math.max(maxForThisQt, 0.88);
+        } else if (qt.length >= 3 && (ut.startsWith(qt) || qt.startsWith(ut))) {
+          // Prefixo de apelido dinâmico (ex: "tati" <-> "tatiane", "gabi" <-> "gabriel")
+          maxForThisQt = Math.max(maxForThisQt, 0.80);
+        } else {
+          const sim = calculateStringSimilarity(qt, ut);
+          if (sim >= 0.72) {
+            maxForThisQt = Math.max(maxForThisQt, sim * 0.85);
+          }
+        }
+      }
+      // Também compara o token com o prefixo do e-mail cadastrado no banco
+      if (uEmailLocal && qt.length >= 3 && uEmailLocal.includes(qt)) {
+        maxForThisQt = Math.max(maxForThisQt, 0.78);
+      }
+
+      if (maxForThisQt >= 0.65) {
+        matchedTokensCount += 1;
+      }
+      if (maxForThisQt > bestTokenScore) {
+        bestTokenScore = maxForThisQt;
+      }
+    }
+
+    score = bestTokenScore + (matchedTokensCount > 1 ? 0.08 : 0);
+  }
+
+  // Bônus de desempate se o setor extraído da tarefa coincide com o departamento do usuário no banco
+  if (targetDept && targetDept !== 'Geral' && normalizeText(uDept) === normalizeText(targetDept)) {
+    score += 0.07;
+  }
+
+  return Math.min(1.0, score);
+}
+
+/**
+ * Retorna o Administrador Padrão da organização a partir da lista real de usuários do banco
+ */
+export function getDefaultAdminCollaborator(activeUsers = []) {
+  const adminUser =
+    activeUsers.find(
+      (u) =>
+        u.roleType === 'diretor' ||
+        u.role === 'admin' ||
+        normalizeText(u.role).includes('diretor') ||
+        normalizeText(u.role).includes('admin') ||
+        normalizeText(u.department) === 'diretoria'
+    ) || activeUsers[0];
+
+  if (adminUser) {
+    return {
+      assigneeId: adminUser.id,
+      assignee: adminUser.name,
+      assigneeEmail: adminUser.email || '',
+      assigneeAvatar: adminUser.avatar || '👨‍💼',
+      department: adminUser.department || 'Diretoria'
+    };
+  }
+
+  return {
+    assigneeId: 'u1',
+    assignee: 'Administrador Padrão',
+    assigneeEmail: '',
+    assigneeAvatar: '👨‍💼',
+    department: 'Diretoria'
+  };
+}
+
+/**
+ * Vinculação Automática e 100% Dinâmica de Usuário:
+ * Compara dinamicamente o nome ou e-mail citado na ata (`responsavelNome`) com os usuários reais
+ * cadastrados no banco (`collaborators`). Se não encontrar correspondência exata, faz match inteligente
+ * por proximidade de nome ou atribui ao Administrador Padrão, evitando falhas de vínculo.
+ */
+export function matchCollaboratorToTask(responsavelNome = '', departamentoRaw = '', collaborators = []) {
+  const activeUsers = (collaborators || []).filter((c) => !c.isBot && c.roleType !== 'bot');
+  const normDept = normalizeDepartmentName(departamentoRaw);
+
+  if (activeUsers.length === 0) {
+    return {
+      assigneeId: 'u1',
+      assignee: responsavelNome || 'Administrador Padrão',
+      assigneeEmail: '',
+      assigneeAvatar: '👨‍💼',
+      department: normDept || 'Diretoria'
+    };
+  }
+
+  // 1. Match dinâmico por nome/e-mail ou proximidade fonética/textual nos usuários reais do banco
+  if (responsavelNome && normalizeText(responsavelNome)) {
+    let bestUser = null;
+    let bestScore = 0;
+
+    for (const user of activeUsers) {
+      const currentScore = scoreCollaboratorMatch(responsavelNome, normDept, user);
+      if (currentScore > bestScore) {
+        bestScore = currentScore;
+        bestUser = user;
+      }
+    }
+
+    if (bestUser && bestScore >= 0.62) {
+      return {
+        assigneeId: bestUser.id,
+        assignee: bestUser.name,
+        assigneeEmail: bestUser.email || '',
+        assigneeAvatar: bestUser.avatar || '👤',
+        department: normDept !== 'Geral' ? normDept : (bestUser.department || 'Geral')
+      };
+    }
+  }
+
+  // 2. Se o nome não teve proximidade suficiente, tenta vincular a um titular ativo do departamento citado
   if (normDept && normDept !== 'Geral') {
-    const deptUser = activeUsers.find((u) => normalizeText(u.department) === normalizeText(normDept));
+    const deptUser = activeUsers.find(
+      (u) => normalizeText(u.department) === normalizeText(normDept)
+    );
     if (deptUser) {
       return {
         assigneeId: deptUser.id,
@@ -181,12 +383,11 @@ export function matchCollaboratorToTask(responsavelNome = '', departamentoRaw = 
     }
   }
 
+  // 3. Fallback garantido: atribui ao Administrador Padrão cadastrado no banco (zero falha de vínculo)
+  const defaultAdmin = getDefaultAdminCollaborator(activeUsers);
   return {
-    assigneeId: null,
-    assignee: responsavelNome || 'Equipe Responsável',
-    assigneeEmail: '',
-    assigneeAvatar: '👤',
-    department: normDept || 'Geral'
+    ...defaultAdmin,
+    department: normDept !== 'Geral' ? normDept : defaultAdmin.department
   };
 }
 
@@ -417,33 +618,35 @@ export async function extractTasksFromMeetNotes({
     );
   }
 
-  const teamRoster = (collaborators || [])
-    .filter((c) => !c.isBot)
-    .map((c) => `- ${c.name} (Setor: ${c.department || 'Geral'} | Cargo: ${c.role || 'Colaborador'} | Email: ${c.email || ''})`)
+  // Busca obrigatoriamente os usuários ativos reais diretamente do Supabase (profiles / users / sys_collaborators)
+  const liveCollaborators = await fetchActiveCollaboratorsFromDB(collaborators);
+  const defaultAdmin = getDefaultAdminCollaborator(liveCollaborators);
+
+  const teamRoster = liveCollaborators
+    .map(
+      (c) =>
+        `- Nome: "${c.name}" | E-mail: "${c.email || '-'}" | Setor/Departamento: "${c.department || 'Geral'}" | Cargo: "${c.role || 'Colaborador'}"`
+    )
     .join('\n');
 
   const systemInstruction = `Você é o Motor de Automação Executiva do EduChat.
 Sua função é ler atas e anotações de reuniões do Google Meet (enviadas por gemini-notes@google.com ou coladas pelo usuário), focar com máxima atenção na seção "Próximas etapas" (ou "Action Items" / "Encaminhamentos" / "Tarefas") e extrair TODAS as tarefas acionáveis.
 
-EQUIPE OFICIAL CADASTRADA NO SISTEMA:
-${teamRoster}
+USUÁRIOS REAIS ATIVOS CADASTRADOS NO BANCO DE DADOS DO EDUCHAT (TABELA PROFILES):
+${teamRoster || `- Nome: "${defaultAdmin.assignee}" | Setor: "${defaultAdmin.department}"`}
 
-REGRAS DE VINCULAÇÃO DE NOMES E DEPARTAMENTOS:
-- Ana Lívia / Ana Livia / Yasmin -> departamento: "Marketing"
-- Tatiane Salatinos / Tati Salatinos / Gabriel Carvalho / Wagner / Michele / Clarice -> departamento: "Comercial"
-- Luiz Augusto / Terapia Educacional / Polos / Expansão -> departamento: "Expansão"
-- Gislaine Santos / Ana Paula / Larissa Machado -> departamento: "Secretaria"
-- Lindomar / Paulo do Vale -> departamento: "Pedagógico"
-- Raquel Lopes -> departamento: "Tutoria"
-- Flávio Motta -> departamento: "Diretoria"
+DIRETRIZES DINÂMICAS DE VINCULAÇÃO:
+1. Para cada tarefa extraída na ata, compare dinamicamente o nome ou e-mail citado na ata com a lista de USUÁRIOS REAIS ATIVOS acima.
+2. Caso o nome citado na ata seja um primeiro nome, apelido ou variação próxima de um usuário cadastrado na lista acima, preencha "responsavel_nome" com o Nome Exato daquele usuário cadastrado no banco e "departamento" com o Setor correspondente dele.
+3. Se nenhum colaborador específico for citado ou não houver correspondência aproximada na lista, atribua ao Administrador Padrão ("${defaultAdmin.assignee}").
 
 Retorne ESTRITAMENTE um array JSON válido (sem blocos markdown ao redor), onde cada objeto possui exatamente as chaves:
 [
   {
-    "departamento": "Marketing | Comercial | Expansão | Secretaria | Pedagógico | Tutoria | Financeiro | Diretoria",
+    "departamento": "Setor correspondente do colaborador cadastrado no banco",
     "titulo_curto": "Título objetivo da ação (máx 70 caracteres)",
     "descricao_tarefa": "Descrição completa e clara da tarefa extraída da ata",
-    "responsavel_nome": "Nome exato do colaborador responsável identificado na ata",
+    "responsavel_nome": "Nome ou e-mail do colaborador responsável identificado",
     "prioridade": "alta | media | baixa | vip",
     "prazo_sugerido": "Prazo citado na ata ou 'Em até 48h'"
   }
@@ -478,7 +681,7 @@ Retorne ESTRITAMENTE um array JSON válido (sem blocos markdown ao redor), onde 
     const matched = matchCollaboratorToTask(
       item.responsavel_nome || item.responsavel || '',
       item.departamento || '',
-      collaborators
+      liveCollaborators
     );
     return {
       id: `t_meet_${Date.now()}_${idx}`,

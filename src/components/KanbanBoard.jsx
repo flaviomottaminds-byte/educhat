@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Plus,
   Clock,
@@ -15,7 +15,7 @@ import {
 import confetti from 'canvas-confetti';
 import ExecutiveBriefingBanner from './ExecutiveBriefingBanner';
 import MeetNotesImportModal from './MeetNotesImportModal';
-import { normalizeText } from '../lib/gemini';
+import { normalizeText, fetchActiveCollaboratorsFromDB } from '../lib/gemini';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Pendente / A Fazer', color: 'border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-500/10' },
@@ -24,7 +24,7 @@ const COLUMNS = [
   { id: 'done', title: 'Concluído', color: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10' },
 ];
 
-const KANBAN_DEPARTMENTS = [
+const BASE_DEPARTMENTS = [
   'Todos',
   'Marketing',
   'Comercial',
@@ -48,10 +48,74 @@ export default function KanbanBoard({
   slas = [],
   onOpenAIMemory
 }) {
-  const isDirector =
-    currentUser?.roleType === 'diretor' ||
-    currentUser?.role === 'admin' ||
-    currentUser?.id === 'u1';
+  // Sincronização em tempo real dos colaboradores cadastrados no banco (profiles / users / sys_collaborators)
+  const [dbCollaborators, setDbCollaborators] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchActiveCollaboratorsFromDB(collaborators)
+      .then((liveUsers) => {
+        if (mounted && Array.isArray(liveUsers) && liveUsers.length > 0) {
+          setDbCollaborators(liveUsers);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [collaborators]);
+
+  const liveCollaborators = useMemo(() => {
+    const mergedMap = new Map();
+    const put = (u) => {
+      if (!u || u.isBot || u.roleType === 'bot') return;
+      const key = normalizeText(u.email || u.name || u.id);
+      if (!key) return;
+      mergedMap.set(key, { ...(mergedMap.get(key) || {}), ...u });
+    };
+    (collaborators || []).forEach(put);
+    (dbCollaborators || []).forEach(put);
+    return Array.from(mergedMap.values());
+  }, [collaborators, dbCollaborators]);
+
+  // Sincroniza permissões, cargo e departamento do usuário logado com o registro real do banco
+  const liveCurrentUser = useMemo(() => {
+    if (!currentUser) return null;
+    const found = liveCollaborators.find(
+      (u) =>
+        (currentUser.id && u.id === currentUser.id) ||
+        (currentUser.email && u.email && normalizeText(u.email) === normalizeText(currentUser.email)) ||
+        (currentUser.name && normalizeText(u.name) === normalizeText(currentUser.name))
+    );
+    return found ? { ...currentUser, ...found } : currentUser;
+  }, [currentUser, liveCollaborators]);
+
+  const isDirector = useMemo(() => {
+    const u = liveCurrentUser || currentUser;
+    if (!u) return false;
+    const roleNorm = normalizeText(u.role || '');
+    const roleTypeNorm = normalizeText(u.roleType || '');
+    return (
+      u.id === 'u1' ||
+      roleTypeNorm === 'diretor' ||
+      roleTypeNorm === 'admin' ||
+      roleNorm === 'admin' ||
+      roleNorm.includes('diretor') ||
+      roleNorm.includes('administrador') ||
+      roleNorm.includes('gestor geral')
+    );
+  }, [liveCurrentUser, currentUser]);
+
+  // Lista dinâmica de setores refletindo todos os departamentos reais cadastrados nos perfis do banco
+  const dynamicDepartments = useMemo(() => {
+    const set = new Set(BASE_DEPARTMENTS);
+    liveCollaborators.forEach((u) => {
+      if (u.department && u.department.trim() && u.department !== 'Inteligência Artificial') {
+        set.add(u.department.trim());
+      }
+    });
+    return Array.from(set);
+  }, [liveCollaborators]);
 
   // Filtros rápidos da Visão do Admin (Por Setor e Por Colaborador)
   const [filterDepartment, setFilterDepartment] = useState('Todos');
@@ -63,10 +127,10 @@ export default function KanbanBoard({
   // Modal de Importação de Atas do Google Meet (Gemini)
   const [isMeetModalOpen, setIsMeetModalOpen] = useState(false);
 
-  const currentUserName = normalizeText(currentUser?.name);
+  const currentUserName = normalizeText(liveCurrentUser?.name);
   const currentUserFirst = currentUserName.split(' ')[0];
-  const currentUserEmail = normalizeText(currentUser?.email);
-  const currentUserId = currentUser?.id;
+  const currentUserEmail = normalizeText(liveCurrentUser?.email);
+  const currentUserId = liveCurrentUser?.id;
 
   // 1. Verifica se o cartão está vinculado ao user_id, email ou nome do colaborador logado
   const isAssignedToMe = (t) => {
@@ -87,7 +151,7 @@ export default function KanbanBoard({
   // 3. Verifica se pertence ao meu departamento
   const isMyDepartment = (t) => {
     const d = normalizeText(t.department);
-    const userDept = normalizeText(currentUser?.department);
+    const userDept = normalizeText(liveCurrentUser?.department);
     return Boolean(d && userDept && d === userDept);
   };
 
@@ -101,9 +165,21 @@ export default function KanbanBoard({
           }
         }
         if (filterAssignee !== 'todos') {
-          const normFilter = normalizeText(filterAssignee);
+          const selectedCollab = liveCollaborators.find(
+            (u) => u.id === filterAssignee || normalizeText(u.name) === normalizeText(filterAssignee)
+          );
+          const normFilterName = normalizeText(selectedCollab?.name || filterAssignee);
           const normAssignee = normalizeText(t.assignee);
-          if (normAssignee !== normFilter && !normAssignee.includes(normFilter.split(' ')[0])) {
+          const idMatches = selectedCollab?.id && t.assigneeId && t.assigneeId === selectedCollab.id;
+          const emailMatches =
+            selectedCollab?.email &&
+            t.assigneeEmail &&
+            normalizeText(t.assigneeEmail) === normalizeText(selectedCollab.email);
+          const nameMatches =
+            normAssignee === normFilterName ||
+            (normFilterName.split(' ')[0]?.length >= 3 && normAssignee.includes(normFilterName.split(' ')[0]));
+
+          if (!idMatches && !emailMatches && !nameMatches) {
             return false;
           }
         }
@@ -125,7 +201,7 @@ export default function KanbanBoard({
         return false;
       }
     });
-  }, [tasks, isDirector, filterDepartment, filterAssignee, collabTab, currentUser]);
+  }, [tasks, isDirector, filterDepartment, filterAssignee, collabTab, liveCurrentUser, liveCollaborators]);
 
   const myTasksCount = tasks.filter(isAssignedToMe).length;
   const deptTasksCount = tasks.filter(isMyDepartment).length;
@@ -139,9 +215,9 @@ export default function KanbanBoard({
       setFilterAssignee('todos');
       return;
     }
-    if (block.id === 'DEMANDA_PAULO' || block.id === 'LINDOMAR') {
-      setFilterDepartment('Pedagógico');
-      setFilterAssignee(block.assigneeMatch);
+    if (block.assigneeFilter) {
+      setFilterDepartment(block.department || 'Todos');
+      setFilterAssignee(block.assigneeFilter);
       return;
     }
     setFilterDepartment(block.department || 'Todos');
@@ -197,11 +273,11 @@ export default function KanbanBoard({
             </h2>
             {isDirector ? (
               <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
-                <Shield size={12} /> Visão Global Admin (Todos os Setores)
+                <Shield size={12} /> Visão Global Admin ({liveCurrentUser?.role || 'Diretoria'})
               </span>
             ) : (
               <span className="text-[11px] font-semibold bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-purple-200 dark:border-purple-500/30">
-                <Lock size={12} /> Visão Isolada: {currentUser?.name} ({currentUser?.department})
+                <Lock size={12} /> Visão Isolada: {liveCurrentUser?.name} ({liveCurrentUser?.department} • {liveCurrentUser?.role})
               </span>
             )}
           </div>
@@ -224,7 +300,7 @@ export default function KanbanBoard({
                   onChange={(e) => setFilterDepartment(e.target.value)}
                   className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
                 >
-                  {KANBAN_DEPARTMENTS.map((dept) => (
+                  {dynamicDepartments.map((dept) => (
                     <option key={dept} value={dept}>
                       {dept === 'Todos' ? '🏢 Todos os Setores' : `🏢 ${dept}`}
                     </option>
@@ -232,7 +308,7 @@ export default function KanbanBoard({
                 </select>
               </div>
 
-              {/* Filtro Rápido por Colaborador */}
+              {/* Filtro Rápido por Colaborador (Sincronizado com o Banco em Tempo Real) */}
               <div className="flex items-center gap-1.5">
                 <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
                 <select
@@ -240,14 +316,14 @@ export default function KanbanBoard({
                   onChange={(e) => setFilterAssignee(e.target.value)}
                   className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
                 >
-                  <option value="todos">🌐 Toda a Equipe ({tasks.length})</option>
-                  {collaborators
-                    .filter((c) => !c.isBot)
-                    .map((c) => (
-                      <option key={c.id} value={c.name}>
-                        {c.name} ({c.department})
-                      </option>
-                    ))}
+                  <option value="todos">
+                    🌐 Toda a Equipe ({liveCollaborators.length} usuários • {tasks.length} cards)
+                  </option>
+                  {liveCollaborators.map((c) => (
+                    <option key={c.id} value={c.name}>
+                      {c.avatar || '👤'} {c.name} — {c.department || 'Geral'} ({c.role || 'Colaborador'})
+                    </option>
+                  ))}
                 </select>
               </div>
             </>
@@ -284,7 +360,7 @@ export default function KanbanBoard({
                 }`}
               >
                 <Building2 size={13} />
-                <span>Setor {currentUser?.department} ({deptTasksCount})</span>
+                <span>Setor {liveCurrentUser?.department} ({deptTasksCount})</span>
               </button>
               <button
                 onClick={() => setCollabTab('my_requests')}
@@ -324,8 +400,9 @@ export default function KanbanBoard({
       {/* REQUISITO 4: Briefing Executivo Automático Sincronizado com a Agenda (Topo do Kanban) */}
       <ExecutiveBriefingBanner
         tasks={isDirector ? tasks : filteredTasks}
-        activeDepartment={isDirector ? filterDepartment : currentUser?.department || 'Todos'}
+        activeDepartment={isDirector ? filterDepartment : liveCurrentUser?.department || 'Todos'}
         activeCollaborator={filterAssignee}
+        collaborators={liveCollaborators}
         onSelectAgendaBlock={handleSelectAgendaBlock}
         vipClients={vipClients}
         slas={slas}
@@ -422,7 +499,7 @@ export default function KanbanBoard({
                       {t.requester && (
                         <div className="bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-500/30 px-2 py-1 rounded text-[11px] text-brand-800 dark:text-brand-300 flex items-center justify-between">
                           <span className="truncate">
-                            📌 Solicitado por: <strong>{t.requester === currentUser?.name ? 'Você' : t.requester}</strong>
+                            📌 Solicitado por: <strong>{t.requester === liveCurrentUser?.name ? 'Você' : t.requester}</strong>
                           </span>
                           {t.requesterDept && (
                             <span className="text-[10px] bg-brand-100 dark:bg-brand-900/60 px-1.5 py-0.2 rounded font-semibold text-brand-700 dark:text-brand-300">
@@ -447,7 +524,7 @@ export default function KanbanBoard({
                         <div className="flex items-center gap-1.5" title={`Responsável: ${t.assignee}`}>
                           <span className="text-sm">{t.assigneeAvatar || '👤'}</span>
                           <span className="text-[11px] font-medium text-chatTextBody truncate w-28">
-                            {t.assignee === currentUser?.name ? '👉 Você' : t.assignee}
+                            {t.assignee === liveCurrentUser?.name ? '👉 Você' : t.assignee}
                           </span>
                         </div>
 
@@ -492,7 +569,7 @@ export default function KanbanBoard({
       <MeetNotesImportModal
         isOpen={isMeetModalOpen}
         onClose={() => setIsMeetModalOpen(false)}
-        collaborators={collaborators}
+        collaborators={liveCollaborators}
         onCreateTasksBatch={onCreateTasksBatch}
         onOpenAIMemory={onOpenAIMemory}
       />

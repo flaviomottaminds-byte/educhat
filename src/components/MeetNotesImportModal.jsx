@@ -1,9 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   X,
   Sparkles,
   FileText,
-  Check,
   Loader2,
   UserCheck,
   Building2,
@@ -13,7 +12,11 @@ import {
   Trash2,
   PlusCircle
 } from 'lucide-react';
-import { extractTasksFromMeetNotes, matchCollaboratorToTask } from '../lib/gemini';
+import {
+  extractTasksFromMeetNotes,
+  matchCollaboratorToTask,
+  fetchActiveCollaboratorsFromDB
+} from '../lib/gemini';
 
 const DEPARTMENTS_LIST = [
   'Marketing',
@@ -25,20 +28,6 @@ const DEPARTMENTS_LIST = [
   'Financeiro',
   'Diretoria'
 ];
-
-const SAMPLE_MEET_NOTES = `De: gemini-notes@google.com
-Assunto: Anotações: Alinhamento Executivo & Operacional Semanal
-
-Resumo da reunião:
-Alinhamento geral sobre campanhas de captação, repasses de polos de Terapia Educacional, emissão de diplomas pendentes e revisão de matrizes pedagógicas.
-
-Próximas etapas:
-- Ana Lívia vai criar os novos criativos da campanha de Pós-Graduação e validar os vídeos de depoimentos até sexta-feira.
-- Tati Salatinos ficará responsável por entrar em contato com os leads pendentes do MBA e fechar o lote promocional de matrículas hoje às 17h.
-- Luiz Augusto vai formalizar o aditivo contratual dos novos polos de Terapia Educacional e alinhar o cronograma de expansão.
-- Gislaine vai priorizar a conferência e expedição dos certificados urgentes da Secretaria Acadêmica dentro do prazo MEC.
-- Lindomar vai revisar a matriz curricular e os materiais didáticos das novas disciplinas do Pedagógico.
-- Paulo do Vale vai validar o credenciamento dos novos docentes especialistas para o próximo módulo.`;
 
 export default function MeetNotesImportModal({
   isOpen,
@@ -55,15 +44,34 @@ export default function MeetNotesImportModal({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [dbCollaborators, setDbCollaborators] = useState([]);
 
-  const activeCollaborators = useMemo(
-    () => (collaborators || []).filter((c) => !c.isBot && c.roleType !== 'bot'),
-    [collaborators]
-  );
+  useEffect(() => {
+    let mounted = true;
+    fetchActiveCollaboratorsFromDB(collaborators)
+      .then((liveUsers) => {
+        if (mounted && Array.isArray(liveUsers) && liveUsers.length > 0) {
+          setDbCollaborators(liveUsers);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [collaborators]);
+
+  const activeCollaborators = useMemo(() => {
+    const source = dbCollaborators.length > 0 ? dbCollaborators : collaborators;
+    return (source || []).filter((c) => !c.isBot && c.roleType !== 'bot');
+  }, [dbCollaborators, collaborators]);
 
   const handleLoadSample = () => {
     setMeetingTitle('Anotações: Alinhamento Executivo & Operacional Semanal');
-    setNotesText(SAMPLE_MEET_NOTES);
+    const sampleLines = activeCollaborators.slice(0, 6).map((u) => {
+      return `- ${u.name} (${u.department || 'Geral'}) ficará responsável por conduzir as próximas entregas prioritárias de ${u.role || u.department || 'seu setor'} até o próximo alinhamento.`;
+    });
+    const dynamicSample = `De: gemini-notes@google.com\nAssunto: Anotações: Alinhamento Executivo & Operacional Semanal\n\nResumo da reunião:\nAlinhamento geral sobre metas dos setores, prazos regulatórios e acompanhamento de indicadores no Kanban.\n\nPróximas etapas:\n${sampleLines.join('\n')}`;
+    setNotesText(dynamicSample);
     setErrorMsg('');
   };
 
@@ -171,7 +179,7 @@ export default function MeetNotesImportModal({
                 </span>
               </div>
               <p className="text-xs text-purple-200/80 mt-0.5">
-                Lê e-mails de <code className="text-yellow-300">gemini-notes@google.com</code> ("Anotações: [Nome da Reunião]"), extrai as "Próximas etapas" e vincula cada cartão ao colaborador e setor exatos.
+                Lê e-mails de <code className="text-yellow-300">gemini-notes@google.com</code> ("Anotações: [Nome da Reunião]"), extrai as "Próximas etapas" e vincula dinamicamente aos usuários reais do banco.
               </p>
             </div>
           </div>
@@ -185,16 +193,16 @@ export default function MeetNotesImportModal({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 text-xs">
-          {/* Informativo de Webhook + Botão de Exemplo */}
+          {/* Informativo de Sincronização Dinâmica com a Tabela de Perfis do Supabase */}
           <div className="p-3.5 rounded-xl bg-purple-50 dark:bg-purple-950/25 border border-purple-200 dark:border-purple-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div className="flex items-start gap-2.5">
               <Mail size={18} className="text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold text-purple-950 dark:text-purple-200">
-                  Mapeamento Inteligente de Equipe Ativo
+                  Sincronização Dinâmica com Perfis do Banco ({activeCollaborators.length} colaboradores ativos)
                 </p>
                 <p className="text-[11px] text-purple-800/80 dark:text-purple-300/80">
-                  Reconhece automaticamente: <strong>Ana Lívia</strong> (Marketing), <strong>Tati Salatinos</strong> (Comercial), <strong>Luiz Augusto</strong> (Terapia Educacional / Expansão), <strong>Gislaine</strong> (Secretaria), <strong>Lindomar</strong> e <strong>Paulo do Vale</strong> (Pedagógico), entre todos os usuários ativos.
+                  Compara dinamicamente o nome ou e-mail citado na ata com a tabela de usuários do Supabase (por correspondência exata ou proximidade de nome) ou atribui ao Administrador padrão.
                 </p>
               </div>
             </div>
@@ -203,7 +211,7 @@ export default function MeetNotesImportModal({
               onClick={handleLoadSample}
               className="px-3 py-1.5 rounded-lg bg-white dark:bg-chatPanel border border-purple-300 dark:border-purple-500/40 text-purple-700 dark:text-purple-300 font-semibold text-[11px] hover:bg-purple-100/50 transition shrink-0 cursor-pointer"
             >
-              📋 Preencher com Ata de Exemplo
+              📋 Preencher com Ata de Teste
             </button>
           </div>
 

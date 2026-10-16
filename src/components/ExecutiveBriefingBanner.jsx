@@ -11,7 +11,12 @@ import {
   Link2,
   Check
 } from 'lucide-react';
-import { generateExecutiveMeetingBriefing, normalizeText } from '../lib/gemini';
+import {
+  generateExecutiveMeetingBriefing,
+  normalizeText,
+  fetchActiveCollaboratorsFromDB,
+  matchCollaboratorToTask
+} from '../lib/gemini';
 
 export const AGENDA_BLOCKS = [
   {
@@ -28,7 +33,7 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: MARKETING',
     shortLabel: 'MARKETING',
     department: 'Marketing',
-    assigneeMatch: 'Ana Livia',
+    assigneeMatch: '',
     timeSlot: '09:00 - 10:00',
     badgeColor: 'from-pink-600 to-purple-700'
   },
@@ -37,7 +42,7 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: COMERCIAL',
     shortLabel: 'COMERCIAL',
     department: 'Comercial',
-    assigneeMatch: 'Tatiane Salatinos',
+    assigneeMatch: '',
     timeSlot: '10:00 - 11:00',
     badgeColor: 'from-emerald-600 to-teal-700'
   },
@@ -46,7 +51,7 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: TERAPIA E EXPANSÃO',
     shortLabel: 'TERAPIA E EXPANSÃO',
     department: 'Expansão',
-    assigneeMatch: 'Luiz Augusto',
+    assigneeMatch: '',
     timeSlot: '11:00 - 12:00',
     badgeColor: 'from-indigo-600 to-blue-700'
   },
@@ -55,7 +60,8 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: DEMANDA PAULO',
     shortLabel: 'DEMANDA PAULO',
     department: 'Pedagógico',
-    assigneeMatch: 'Paulo do Vale',
+    assigneeQuery: 'Paulo',
+    assigneeMatch: '',
     timeSlot: '14:00 - 15:00',
     badgeColor: 'from-amber-600 to-orange-700'
   },
@@ -64,7 +70,8 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: LINDOMAR (PEDAGÓGICO)',
     shortLabel: 'LINDOMAR',
     department: 'Pedagógico',
-    assigneeMatch: 'Lindomar',
+    assigneeQuery: 'Lindomar',
+    assigneeMatch: '',
     timeSlot: '15:00 - 16:00',
     badgeColor: 'from-cyan-600 to-sky-700'
   },
@@ -73,7 +80,7 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: SECRETARIA & MEC',
     shortLabel: 'SECRETARIA',
     department: 'Secretaria',
-    assigneeMatch: 'Gislaine Santos',
+    assigneeMatch: '',
     timeSlot: '16:00 - 17:00',
     badgeColor: 'from-violet-600 to-purple-800'
   },
@@ -82,7 +89,7 @@ export const AGENDA_BLOCKS = [
     label: 'BLOCO: TUTORIA ACADÊMICA',
     shortLabel: 'TUTORIA',
     department: 'Tutoria',
-    assigneeMatch: 'Raquel Lopes',
+    assigneeMatch: '',
     timeSlot: '17:00 - 18:00',
     badgeColor: 'from-teal-600 to-emerald-800'
   }
@@ -92,11 +99,49 @@ export default function ExecutiveBriefingBanner({
   tasks = [],
   activeDepartment = 'Todos',
   activeCollaborator = 'Todos',
+  collaborators = [],
   onSelectAgendaBlock,
   vipClients = [],
   slas = [],
   compact = false
 }) {
+  const [liveCollaborators, setLiveCollaborators] = useState(collaborators);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchActiveCollaboratorsFromDB(collaborators)
+      .then((dbUsers) => {
+        if (isMounted && Array.isArray(dbUsers) && dbUsers.length > 0) {
+          setLiveCollaborators(dbUsers);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isMounted = false;
+    };
+  }, [collaborators]);
+
+  // Resolve dinamicamente os responsáveis de cada bloco com base nos usuários ativos do banco
+  const resolvedAgendaBlocks = useMemo(() => {
+    return AGENDA_BLOCKS.map((b) => {
+      if (b.id === 'ALL') return b;
+      if (b.assigneeQuery) {
+        const matched = matchCollaboratorToTask(b.assigneeQuery, b.department, liveCollaborators);
+        return {
+          ...b,
+          assigneeMatch: matched?.name || b.assigneeQuery
+        };
+      }
+      const deptLead = (liveCollaborators || []).find(
+        (u) => !u.isBot && normalizeText(u.department) === normalizeText(b.department)
+      );
+      return {
+        ...b,
+        assigneeMatch: deptLead?.name || ''
+      };
+    });
+  }, [liveCollaborators]);
+
   const [selectedBlockId, setSelectedBlockId] = useState(() => {
     if (activeDepartment && activeDepartment !== 'Todos') {
       const found = AGENDA_BLOCKS.find(
@@ -120,18 +165,18 @@ export default function ExecutiveBriefingBanner({
   // Sincroniza quando o painel de departamento muda externamente
   useEffect(() => {
     if (activeDepartment && activeDepartment !== 'Todos') {
-      const found = AGENDA_BLOCKS.find(
+      const found = resolvedAgendaBlocks.find(
         (b) => normalizeText(b.department) === normalizeText(activeDepartment)
       );
       if (found) {
         setSelectedBlockId(found.id);
       }
     }
-  }, [activeDepartment]);
+  }, [activeDepartment, resolvedAgendaBlocks]);
 
   const currentBlock = useMemo(
-    () => AGENDA_BLOCKS.find((b) => b.id === selectedBlockId) || AGENDA_BLOCKS[0],
-    [selectedBlockId]
+    () => resolvedAgendaBlocks.find((b) => b.id === selectedBlockId) || resolvedAgendaBlocks[0],
+    [selectedBlockId, resolvedAgendaBlocks]
   );
 
   // Filtra os cartões do Kanban correspondentes ao bloco da agenda selecionado
@@ -144,12 +189,14 @@ export default function ExecutiveBriefingBanner({
       const blockDept = normalizeText(currentBlock.department || '');
       const blockAssignee = normalizeText(currentBlock.assigneeMatch || '');
 
-      // Para blocos nominais específicos (ex: DEMANDA PAULO ou LINDOMAR)
-      if (currentBlock.id === 'DEMANDA_PAULO') {
-        return taskAssignee.includes('paulo') || normalizeText(t.title).includes('paulo');
-      }
-      if (currentBlock.id === 'LINDOMAR') {
-        return taskAssignee.includes('lindomar') || normalizeText(t.title).includes('lindomar');
+      // Para blocos nominais específicos resolvidos dinamicamente do banco
+      if (currentBlock.assigneeQuery) {
+        const queryNorm = normalizeText(currentBlock.assigneeQuery);
+        return (
+          (blockAssignee && taskAssignee === blockAssignee) ||
+          taskAssignee.includes(queryNorm) ||
+          normalizeText(t.title).includes(queryNorm)
+        );
       }
 
       if (blockDept && taskDept === blockDept) return true;
@@ -317,7 +364,7 @@ export default function ExecutiveBriefingBanner({
         <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 shrink-0 mr-1">
           Blocos da Agenda:
         </span>
-        {AGENDA_BLOCKS.map((block) => {
+        {resolvedAgendaBlocks.map((block) => {
           const isSelected = block.id === selectedBlockId;
           return (
             <button
