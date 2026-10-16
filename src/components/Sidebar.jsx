@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 import { matchStudentByPhone } from '../lib/eduControl';
+import { formatLastSeen } from '../lib/presence';
 
 export default function Sidebar({
   activeView = 'chat',
@@ -621,8 +622,9 @@ export default function Sidebar({
                               <span>{user.avatar || '👤'}</span>
                               <span
                                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatSidebar ${
-                                  user.online ? 'bg-brand-600' : 'bg-gray-300'
+                                  user.online ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
                                 }`}
+                                title={user.online ? 'Online' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline (nunca acessou)'}
                               />
                             </div>
                             <div className="truncate pr-5">

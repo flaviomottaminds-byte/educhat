@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, UserCheck, Shield, Building2, Mail, CheckCircle2, ArrowRight, UserPlus, Edit2 } from 'lucide-react';
 import { hasFullPortfolioAccess } from '../lib/portfolioAccess';
+import { formatLastSeen } from '../lib/presence';
 
 export default function UserSelectionModal({
   isOpen,
@@ -112,8 +113,14 @@ export default function UserSelectionModal({
                 }`}
               >
                 <div className="flex items-start gap-3 mb-3">
-                  <div className="w-12 h-12 rounded-full bg-slate-100 dark:bg-chatPanel flex items-center justify-center text-2xl shrink-0 group-hover:scale-105 transition shadow-2xs">
+                  <div className="relative w-12 h-12 rounded-full bg-slate-100 dark:bg-chatPanel flex items-center justify-center text-2xl shrink-0 group-hover:scale-105 transition shadow-2xs">
                     {user.avatar}
+                    <span
+                      className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white dark:border-chatPanel ${
+                        user.online ? 'bg-emerald-500 ring-2 ring-emerald-500/20' : 'bg-slate-300 dark:bg-slate-600'
+                      }`}
+                      title={user.online ? 'Online agora' : user.lastSeen ? `Visto por último ${formatLastSeen(user.lastSeen)}` : 'Offline (nunca acessou)'}
+                    />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -127,6 +134,17 @@ export default function UserSelectionModal({
                       ) : (
                         <span className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5 border border-emerald-500/30">
                           <UserCheck size={10} /> Carteira Própria
+                        </span>
+                      )}
+                      {user.online ? (
+                        <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 font-bold px-1.5 py-0.5 rounded flex items-center gap-1 border border-emerald-300 dark:border-emerald-700/50">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Online
+                        </span>
+                      ) : (
+                        <span className="text-[10px] bg-slate-100 dark:bg-chatPanel text-slate-500 dark:text-slate-400 font-medium px-1.5 py-0.5 rounded flex items-center gap-1 border border-slate-200 dark:border-chatBorder">
+                          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                          {user.lastSeen ? `Visto ${formatLastSeen(user.lastSeen)}` : 'Offline'}
                         </span>
                       )}
                     </div>

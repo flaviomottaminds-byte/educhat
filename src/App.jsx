@@ -45,6 +45,11 @@ import {
 import { hasFullPortfolioAccess, isChatAssignedToUser } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
+import {
+  isCollaboratorOnline,
+  loadLocalHeartbeats,
+  saveLocalHeartbeat
+} from './lib/presence';
 
 const INITIAL_VIP_CLIENTS = [
   { id: 'vip1', name: 'Polo Campinas', plan: 'Plano Fixo Gold', since: '2025' },
@@ -122,6 +127,21 @@ export default function App() {
       return INITIAL_COLLABORATORS[0];
     }
   });
+
+  // Rastreamento de Presença em Tempo Real (Supabase Realtime Presence) e Heartbeat
+  const [onlineUserIds, setOnlineUserIds] = useState(() => new Set());
+  const [heartbeats, setHeartbeats] = useState(() => loadLocalHeartbeats());
+
+  // Resolução dinâmica de colaboradores com status online/offline estrito baseado em presença e heartbeat
+  const resolvedCollaborators = React.useMemo(() => {
+    return (collaborators || []).map((collab) => {
+      const isOnline = isCollaboratorOnline(collab, onlineUserIds, heartbeats, currentUser?.id);
+      return {
+        ...collab,
+        online: isOnline
+      };
+    });
+  }, [collaborators, onlineUserIds, heartbeats, currentUser?.id]);
   const [isUserSelectOpen, setIsUserSelectOpen] = useState(() => {
     try {
       return !localStorage.getItem('educhat_user_id');
@@ -304,7 +324,7 @@ export default function App() {
       }
     : {
         type: 'dm',
-        data: (collaborators || []).find((u) => u?.id === activeChat?.id) || (collaborators || [])[1] || INITIAL_COLLABORATORS[1],
+        data: (resolvedCollaborators || []).find((u) => u?.id === activeChat?.id) || (resolvedCollaborators || [])[1] || INITIAL_COLLABORATORS[1],
       };
 
   const currentChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
@@ -887,7 +907,8 @@ export default function App() {
             role: p.role || 'Colaborador',
             roleType: p.role_type || (p.role === 'admin' || p.role === 'diretor' ? 'diretor' : 'colaborador'),
             avatar: p.avatar || '👤',
-            online: p.online !== false,
+            online: p.is_bot ? true : (p.online === true),
+            lastSeen: p.last_seen || null,
             department: p.department || 'Comercial',
             isBot: p.is_bot || false
           })));
@@ -1387,6 +1408,102 @@ export default function App() {
       supabase.removeChannel(channelListener);
     };
   }, [activeChat, currentUser]);
+
+  // Canal de Presença em Tempo Real (Supabase Realtime Presence) & Heartbeat Periódico
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    // Registra heartbeat local para o usuário ativo
+    const initialHb = saveLocalHeartbeat(currentUser.id);
+    setHeartbeats(initialHb);
+
+    const presenceChannel = supabase.channel('educhat_presence_room', {
+      config: {
+        presence: {
+          key: currentUser.id
+        }
+      }
+    });
+
+    const updatePresenceState = () => {
+      const state = presenceChannel.presenceState();
+      const activeIds = new Set();
+      Object.keys(state).forEach((key) => {
+        activeIds.add(key);
+        const presences = state[key] || [];
+        presences.forEach((p) => {
+          if (p.userId) activeIds.add(p.userId);
+          if (p.email) activeIds.add(p.email);
+        });
+      });
+      activeIds.add(currentUser.id);
+      setOnlineUserIds(activeIds);
+    };
+
+    presenceChannel
+      .on('presence', { event: 'sync' }, updatePresenceState)
+      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
+        setOnlineUserIds((prev) => {
+          const next = new Set(prev);
+          next.add(key);
+          (newPresences || []).forEach((p) => {
+            if (p.userId) next.add(p.userId);
+            if (p.email) next.add(p.email);
+          });
+          return next;
+        });
+      })
+      .on('presence', { event: 'leave' }, ({ key }) => {
+        setOnlineUserIds((prev) => {
+          const next = new Set(prev);
+          if (key !== currentUser.id) {
+            next.delete(key);
+          }
+          return next;
+        });
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          try {
+            await presenceChannel.track({
+              userId: currentUser.id,
+              userName: currentUser.name,
+              department: currentUser.department,
+              onlineAt: new Date().toISOString()
+            });
+          } catch (e) {
+            console.warn('Erro ao registrar presença no Supabase:', e);
+          }
+        }
+      });
+
+    // Heartbeat periódico a cada 30 segundos enquanto a janela estiver ativa
+    const hbInterval = setInterval(() => {
+      if (!document.hidden && currentUser?.id) {
+        const hb = saveLocalHeartbeat(currentUser.id);
+        setHeartbeats({ ...hb });
+        try {
+          presenceChannel.track({
+            userId: currentUser.id,
+            userName: currentUser.name,
+            department: currentUser.department,
+            onlineAt: new Date().toISOString()
+          });
+        } catch {}
+      }
+    }, 30000);
+
+    return () => {
+      clearInterval(hbInterval);
+      try {
+        presenceChannel.untrack().finally(() => {
+          supabase.removeChannel(presenceChannel);
+        });
+      } catch {
+        supabase.removeChannel(presenceChannel);
+      }
+    };
+  }, [currentUser?.id]);
 
   // Enviar nova mensagem no chat ativo com suporte a anexo, resposta/citação e áudio (Item 2, 3, 5 e 7)
   const handleSendMessage = (text, attachment = null, options = {}) => {
@@ -2220,7 +2337,8 @@ export default function App() {
         role_type: newCollaborator.roleType || 'colaborador',
         department: newCollaborator.department,
         avatar: newCollaborator.avatar || '👨‍💼',
-        online: true,
+        online: false,
+        last_seen: null,
         is_bot: false,
         created_at: new Date().toISOString()
       }], { onConflict: 'id' });
@@ -2252,6 +2370,8 @@ export default function App() {
     setCurrentUser(newUser);
     try {
       localStorage.setItem('educhat_user_id', newUser.id);
+      const hb = saveLocalHeartbeat(newUser.id);
+      setHeartbeats({ ...hb });
     } catch {}
 
     const isNewUserManager = hasFullPortfolioAccess(newUser);
@@ -2789,7 +2909,7 @@ export default function App() {
         activeView={activeView}
         setActiveView={setActiveView}
         channels={channels}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
         whatsAppContacts={whatsAppContacts}
         activeChat={activeChat}
         onSelectChannel={(channelId) => {
@@ -2856,7 +2976,7 @@ export default function App() {
           onUpdateChatAssignment={handleUpdateChatAssignment}
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
-          collaborators={collaborators}
+          collaborators={resolvedCollaborators}
           eduControlStudents={eduControlStudents}
         />
       )}
@@ -2865,7 +2985,7 @@ export default function App() {
         <KanbanBoard
           tasks={tasks}
           currentUser={currentUser}
-          collaborators={collaborators}
+          collaborators={resolvedCollaborators}
           onUpdateTaskStatus={handleUpdateTaskStatus}
           onAddTask={() =>
             setAiModal({ isOpen: true, mode: 'extract_task', sourceMessage: null })
@@ -2879,7 +2999,7 @@ export default function App() {
           <GestaoDashboard
             tasks={tasks}
             channels={channels}
-            collaborators={collaborators}
+            collaborators={resolvedCollaborators}
             onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
             onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
           />
@@ -2903,7 +3023,7 @@ export default function App() {
                   Voltar para Conversas
                 </button>
                 <button
-                  onClick={() => handleSwitchUser(collaborators[0])}
+                  onClick={() => handleSwitchUser(resolvedCollaborators[0] || collaborators[0])}
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"
                 >
                   Alternar para Flávio Motta (Diretor)
@@ -2923,7 +3043,7 @@ export default function App() {
         channel={activeChat.type === 'channel' ? chatMeta.data : null}
         activeChat={activeChat}
         onConfirmTaskCreation={handleConfirmTaskCreation}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
         vipClients={vipClients}
       />
 
@@ -2960,7 +3080,7 @@ export default function App() {
         onRemoveDocument={handleRemoveDocument}
         eduControlStudents={eduControlStudents}
         onSyncStudents={handleSyncEduControlStudents}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
       />
 
       {/* Modal de Dossiê 360º & Auto-Aprendizado do WhatsApp */}
@@ -2975,7 +3095,7 @@ export default function App() {
       <UserSelectionModal
         isOpen={isUserSelectOpen}
         onClose={() => setIsUserSelectOpen(false)}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
         onSelectUser={handleSwitchUser}
         onEditCollaborator={(collab) => {
           setIsUserSelectOpen(false);
@@ -3003,7 +3123,7 @@ export default function App() {
         }}
         onDeleteTask={handleDeleteTask}
         currentUser={currentUser}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
       />
 
       {/* Modal de Conexão WhatsApp & Simulador de Webhooks */}
@@ -3038,7 +3158,7 @@ export default function App() {
         onClose={() => setIsEduControlModalOpen(false)}
         onSyncStudents={handleSyncEduControlStudents}
         currentStudents={eduControlStudents}
-        collaborators={collaborators}
+        collaborators={resolvedCollaborators}
       />
     </div>
   );

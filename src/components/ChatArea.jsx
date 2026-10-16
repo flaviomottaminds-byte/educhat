@@ -34,6 +34,7 @@ import {
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
+import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
@@ -854,8 +855,9 @@ export default function ChatArea({
               <span>{target.avatar || '👤'}</span>
               <span
                 className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-chatPanel ${
-                  target.online ? 'bg-brand-600' : 'bg-gray-300'
+                  target.online ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
                 }`}
+                title={target.online ? 'Online' : target.lastSeen ? `Visto por último ${formatLastSeen(target.lastSeen)}` : 'Offline (nunca acessou)'}
               />
             </div>
           ) : (
@@ -964,7 +966,11 @@ export default function ChatArea({
                   {isBotChat
                     ? 'Base normativa MEC, Asaas, POPs e fluxos operacionais'
                     : isDM
-                    ? target.online ? 'online' : 'visto por último recentemente'
+                    ? target.online
+                      ? 'online'
+                      : target.lastSeen
+                      ? `visto por último ${formatLastSeen(target.lastSeen)}`
+                      : 'offline (nunca acessou)'
                     : channelMembersText || target.desc || 'Canal de comunicação'}
                 </span>
                 <span className="text-gray-300 dark:text-gray-600">•</span>

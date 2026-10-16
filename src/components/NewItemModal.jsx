@@ -128,7 +128,8 @@ export default function NewItemModal({ isOpen, onClose, type, onSave, channels =
         role: (formData.role || '').trim() || DEFAULT_ROLES[matchedQueue.id] || `${matchedQueue.id} & Atendimento`,
         roleType: formData.roleType || 'colaborador',
         avatar: formData.avatar || '👨‍💼',
-        online: true,
+        online: formData.id ? (initialData?.online || false) : false,
+        lastSeen: formData.id ? (initialData?.lastSeen || null) : null,
         isBot: false,
       });
     }
