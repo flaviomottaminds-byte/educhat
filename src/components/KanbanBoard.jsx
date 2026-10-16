@@ -4,11 +4,7 @@ import {
   Clock,
   ArrowRight,
   ArrowLeft,
-  Sparkles,
   Shield,
-  UserCheck,
-  Building2,
-  Lock,
   Maximize2,
   Paperclip
 } from 'lucide-react';
@@ -88,22 +84,6 @@ export default function KanbanBoard({
     return found ? { ...currentUser, ...found } : currentUser;
   }, [currentUser, liveCollaborators]);
 
-  const isDirector = useMemo(() => {
-    const u = liveCurrentUser || currentUser;
-    if (!u) return false;
-    const roleNorm = normalizeText(u.role || '');
-    const roleTypeNorm = normalizeText(u.roleType || '');
-    return (
-      u.id === 'u1' ||
-      roleTypeNorm === 'diretor' ||
-      roleTypeNorm === 'admin' ||
-      roleNorm === 'admin' ||
-      roleNorm.includes('diretor') ||
-      roleNorm.includes('administrador') ||
-      roleNorm.includes('gestor geral')
-    );
-  }, [liveCurrentUser, currentUser]);
-
   // Lista dinâmica de setores refletindo todos os departamentos reais cadastrados nos perfis do banco
   const dynamicDepartments = useMemo(() => {
     const set = new Set(BASE_DEPARTMENTS);
@@ -115,93 +95,40 @@ export default function KanbanBoard({
     return Array.from(set);
   }, [liveCollaborators]);
 
-  // Filtros rápidos da Visão do Admin (Por Setor e Por Colaborador)
+  // Filtros rápidos da Visão Global (Por Setor e Por Colaborador)
   const [filterDepartment, setFilterDepartment] = useState('Todos');
   const [filterAssignee, setFilterAssignee] = useState('todos');
 
-  // Abas de isolamento do Usuário Comum ('my_and_dept' | 'my_tasks' | 'dept_tasks' | 'my_requests')
-  const [collabTab, setCollabTab] = useState('my_and_dept');
-
-  const currentUserName = normalizeText(liveCurrentUser?.name);
-  const currentUserFirst = currentUserName.split(' ')[0];
-  const currentUserEmail = normalizeText(liveCurrentUser?.email);
-  const currentUserId = liveCurrentUser?.id;
-
-  // 1. Verifica se o cartão está vinculado ao user_id, email ou nome do colaborador logado
-  const isAssignedToMe = (t) => {
-    if (currentUserId && t.assigneeId && t.assigneeId === currentUserId) return true;
-    if (currentUserEmail && t.assigneeEmail && normalizeText(t.assigneeEmail) === currentUserEmail) return true;
-    const a = normalizeText(t.assignee);
-    if (!a || !currentUserName) return false;
-    return a === currentUserName || (currentUserFirst.length >= 3 && a.startsWith(currentUserFirst));
-  };
-
-  // 2. Verifica se foi solicitado por mim para outro setor (Transferência Cruzada)
-  const isRequestedByMe = (t) => {
-    const r = normalizeText(t.requester);
-    if (!r || !currentUserName) return false;
-    return r === currentUserName || (currentUserFirst.length >= 3 && r.startsWith(currentUserFirst));
-  };
-
-  // 3. Verifica se pertence ao meu departamento
-  const isMyDepartment = (t) => {
-    const d = normalizeText(t.department);
-    const userDept = normalizeText(liveCurrentUser?.department);
-    return Boolean(d && userDept && d === userDept);
-  };
-
-  // Isolamento Estrito de Visão por Usuário no Kanban (Requisito 3)
+  // Visão Global nativa: exibe 100% dos cartões livremente com filtros rápidos opcionais
   const filteredTasks = useMemo(() => {
     return (tasks || []).filter((t) => {
-      if (isDirector) {
-        if (filterDepartment !== 'Todos') {
-          if (normalizeText(t.department) !== normalizeText(filterDepartment)) {
-            return false;
-          }
+      if (filterDepartment && filterDepartment !== 'Todos') {
+        if (normalizeText(t.department) !== normalizeText(filterDepartment)) {
+          return false;
         }
-        if (filterAssignee !== 'todos') {
-          const selectedCollab = liveCollaborators.find(
-            (u) => u.id === filterAssignee || normalizeText(u.name) === normalizeText(filterAssignee)
-          );
-          const normFilterName = normalizeText(selectedCollab?.name || filterAssignee);
-          const normAssignee = normalizeText(t.assignee);
-          const idMatches = selectedCollab?.id && t.assigneeId && t.assigneeId === selectedCollab.id;
-          const emailMatches =
-            selectedCollab?.email &&
-            t.assigneeEmail &&
-            normalizeText(t.assigneeEmail) === normalizeText(selectedCollab.email);
-          const nameMatches =
-            normAssignee === normFilterName ||
-            (normFilterName.split(' ')[0]?.length >= 3 && normAssignee.includes(normFilterName.split(' ')[0]));
-
-          if (!idMatches && !emailMatches && !nameMatches) {
-            return false;
-          }
-        }
-        return true;
-      } else {
-        // Usuário Comum: vê estritamente os cartões atribuídos ao seu user_id/nome ou ao seu departamento
-        if (collabTab === 'my_and_dept') {
-          return isAssignedToMe(t) || isMyDepartment(t);
-        }
-        if (collabTab === 'my_tasks') {
-          return isAssignedToMe(t);
-        }
-        if (collabTab === 'dept_tasks') {
-          return isMyDepartment(t);
-        }
-        if (collabTab === 'my_requests') {
-          return isRequestedByMe(t) && !isAssignedToMe(t);
-        }
-        return false;
       }
-    });
-  }, [tasks, isDirector, filterDepartment, filterAssignee, collabTab, liveCurrentUser, liveCollaborators]);
+      if (filterAssignee && filterAssignee !== 'todos') {
+        const selectedCollab = liveCollaborators.find(
+          (u) => u.id === filterAssignee || normalizeText(u.name) === normalizeText(filterAssignee)
+        );
+        const normFilterName = normalizeText(selectedCollab?.name || filterAssignee);
+        const normAssignee = normalizeText(t.assignee);
+        const idMatches = selectedCollab?.id && t.assigneeId && t.assigneeId === selectedCollab.id;
+        const emailMatches =
+          selectedCollab?.email &&
+          t.assigneeEmail &&
+          normalizeText(t.assigneeEmail) === normalizeText(selectedCollab.email);
+        const nameMatches =
+          normAssignee === normFilterName ||
+          (normFilterName.split(' ')[0]?.length >= 3 && normAssignee.includes(normFilterName.split(' ')[0]));
 
-  const myTasksCount = tasks.filter(isAssignedToMe).length;
-  const deptTasksCount = tasks.filter(isMyDepartment).length;
-  const myAndDeptCount = tasks.filter((t) => isAssignedToMe(t) || isMyDepartment(t)).length;
-  const myRequestsCount = tasks.filter((t) => isRequestedByMe(t) && !isAssignedToMe(t)).length;
+        if (!idMatches && !emailMatches && !nameMatches) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [tasks, filterDepartment, filterAssignee, liveCollaborators]);
 
   const handleMove = (e, taskId, currentStatus, direction) => {
     e.stopPropagation();
@@ -243,117 +170,58 @@ export default function KanbanBoard({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#f0f2f5] dark:bg-chatBg p-4 sm:p-6 overflow-y-auto transition-colors">
-      {/* Header do Kanban com Nível de Acesso */}
+      {/* Header do Kanban */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 mb-4 shrink-0">
         <div>
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             <h2 className="text-xl sm:text-2xl font-bold text-chatTextTitle flex items-center gap-2">
-              📋 Quadro de Demandas & Automação Executiva
+              📋 Quadro de Demandas
             </h2>
-            {isDirector ? (
-              <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
-                <Shield size={12} /> Visão Global Admin ({liveCurrentUser?.role || 'Diretoria'})
-              </span>
-            ) : (
-              <span className="text-[11px] font-semibold bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-purple-200 dark:border-purple-500/30">
-                <Lock size={12} /> Visão Isolada: {liveCurrentUser?.name} ({liveCurrentUser?.department} • {liveCurrentUser?.role})
-              </span>
-            )}
+            <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
+              <Shield size={12} /> Visão Global ({liveCurrentUser?.name || 'Administração'})
+            </span>
           </div>
           <p className="text-xs text-chatTextMuted">
-            {isDirector
-              ? 'Visão Global Administrativa: todos os cartões de todos os setores e colaboradores.'
-              : 'Exibindo cartões atribuídos a você ou ao seu setor. Você pode transferir tarefas entre departamentos ao clicar em qualquer card.'}
+            Visão Global Administrativa: todos os cartões de todos os setores e colaboradores da instituição.
           </p>
         </div>
 
-        {/* Controles de Filtro por Perfil + Botões de Ação */}
+        {/* Controles de Filtro (Setor e Colaborador) + Botão Nova Demanda */}
         <div className="flex items-center gap-2 flex-wrap">
-          {isDirector ? (
-            <>
-              {/* Filtro Rápido por Setor / Departamento */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-chatTextMuted font-medium">Setor:</span>
-                <select
-                  value={filterDepartment}
-                  onChange={(e) => setFilterDepartment(e.target.value)}
-                  className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
-                >
-                  {dynamicDepartments.map((dept) => (
-                    <option key={dept} value={dept}>
-                      {dept === 'Todos' ? '🏢 Todos os Setores' : `🏢 ${dept}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          {/* Filtro Rápido por Setor / Departamento */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-chatTextMuted font-medium">Setor:</span>
+            <select
+              value={filterDepartment}
+              onChange={(e) => setFilterDepartment(e.target.value)}
+              className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
+            >
+              {dynamicDepartments.map((dept) => (
+                <option key={dept} value={dept}>
+                  {dept === 'Todos' ? '🏢 Todos os Setores' : `🏢 ${dept}`}
+                </option>
+              ))}
+            </select>
+          </div>
 
-              {/* Filtro Rápido por Colaborador (Sincronizado com o Banco em Tempo Real) */}
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
-                <select
-                  value={filterAssignee}
-                  onChange={(e) => setFilterAssignee(e.target.value)}
-                  className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
-                >
-                  <option value="todos">
-                    🌐 Toda a Equipe ({liveCollaborators.length} usuários • {tasks.length} cards)
-                  </option>
-                  {liveCollaborators.map((c) => (
-                    <option key={c.id} value={c.name}>
-                      {c.avatar || '👤'} {c.name} — {c.department || 'Geral'} ({c.role || 'Colaborador'})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
-          ) : (
-            /* Abas de Isolamento do Usuário Comum */
-            <div className="flex bg-slate-200/80 dark:bg-chatPanel p-1 rounded-lg border border-slate-300 dark:border-chatBorder text-xs flex-wrap">
-              <button
-                onClick={() => setCollabTab('my_and_dept')}
-                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
-                  collabTab === 'my_and_dept'
-                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
-                    : 'text-chatTextMuted hover:text-chatTextTitle'
-                }`}
-              >
-                <span>📋 Meu Painel ({myAndDeptCount})</span>
-              </button>
-              <button
-                onClick={() => setCollabTab('my_tasks')}
-                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
-                  collabTab === 'my_tasks'
-                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
-                    : 'text-chatTextMuted hover:text-chatTextTitle'
-                }`}
-              >
-                <UserCheck size={13} />
-                <span>Minhas ({myTasksCount})</span>
-              </button>
-              <button
-                onClick={() => setCollabTab('dept_tasks')}
-                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
-                  collabTab === 'dept_tasks'
-                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
-                    : 'text-chatTextMuted hover:text-chatTextTitle'
-                }`}
-              >
-                <Building2 size={13} />
-                <span>Setor {liveCurrentUser?.department} ({deptTasksCount})</span>
-              </button>
-              <button
-                onClick={() => setCollabTab('my_requests')}
-                title="Demandas que você transferiu ou abriu para outros setores"
-                className={`px-2.5 py-1.5 rounded-md font-semibold flex items-center gap-1 transition ${
-                  collabTab === 'my_requests'
-                    ? 'bg-white dark:bg-brand-600 text-chatTextTitle dark:text-white shadow-xs'
-                    : 'text-chatTextMuted hover:text-chatTextTitle'
-                }`}
-              >
-                <span>📤 Solicitações ({myRequestsCount})</span>
-              </button>
-            </div>
-          )}
+          {/* Filtro Rápido por Colaborador */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
+            <select
+              value={filterAssignee}
+              onChange={(e) => setFilterAssignee(e.target.value)}
+              className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
+            >
+              <option value="todos">
+                🌐 Toda a Equipe ({liveCollaborators.length} usuários • {tasks.length} cards)
+              </option>
+              {liveCollaborators.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.avatar || '👤'} {c.name} — {c.department || 'Geral'} ({c.role || 'Colaborador'})
+                </option>
+              ))}
+            </select>
+          </div>
 
           <button
             type="button"

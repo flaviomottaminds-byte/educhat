@@ -46,7 +46,6 @@ import {
 } from './lib/whatsappRouting';
 import {
   generateGeminiChatReply,
-  extractTasksFromMeetNotes,
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from './lib/portfolioAccess';
