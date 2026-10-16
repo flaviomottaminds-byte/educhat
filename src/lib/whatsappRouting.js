@@ -4,6 +4,48 @@ import { matchesDepartment, normalizeName } from './portfolioAccess';
 
 export const INITIAL_WHATSAPP_CONTACTS = [
   {
+    id: 'wa-91122697298017_lid',
+    remoteJid: '91122697298017@lid',
+    name: 'Flávio Alexandre Motta',
+    phone: '+55 11 93059-4591',
+    avatar: '👨‍💼',
+    department: 'Diretoria / Gestão',
+    assignee: 'Flávio Motta',
+    status: 'carteira_ativa',
+    statusLabel: 'WhatsApp Oficial (Ativo)',
+    aiActive: false,
+    lastInteraction: 'Agora',
+    triageContext: 'Canal direto com a Diretoria no WhatsApp Oficial (+55 11 93059-4591).'
+  },
+  {
+    id: 'wa-152093449003127_lid',
+    remoteJid: '152093449003127@lid',
+    name: 'Evyllinn Gomes',
+    phone: '152093449003127',
+    avatar: '👩‍🎓',
+    department: 'Secretaria Acadêmica',
+    assignee: 'Ana Paula',
+    status: 'carteira_ativa',
+    statusLabel: 'Aluna Ativa',
+    aiActive: false,
+    lastInteraction: 'Recente',
+    triageContext: 'Aguardando retorno sobre emissão de documentos e status de matrícula.'
+  },
+  {
+    id: 'wa-49371504767063_lid',
+    remoteJid: '49371504767063@lid',
+    name: 'Gabriel Camargo',
+    phone: '49371504767063',
+    avatar: '👨‍💼',
+    department: 'Comercial & Vendas',
+    assignee: 'Gabriel Carvalho',
+    status: 'carteira_ativa',
+    statusLabel: 'Equipe / Comercial',
+    aiActive: false,
+    lastInteraction: 'Recente',
+    triageContext: 'Acompanhamento de demandas comerciais e novos polos.'
+  },
+  {
     id: 'wa-lucas-mendes',
     name: 'Lucas Mendes (Lead MBA)',
     phone: '+55 11 98765-4321',
@@ -58,6 +100,35 @@ export const INITIAL_WHATSAPP_CONTACTS = [
 ];
 
 export const INITIAL_WHATSAPP_MESSAGES = {
+  'wa-91122697298017_lid': [
+    {
+      id: 'wa_flavio_1',
+      senderId: 'wa-91122697298017_lid',
+      senderName: 'Flávio Alexandre Motta',
+      text: 'Flávio, consegui eliminar todas as matrículas e analisei todos os documentos.',
+      timestamp: '14:30',
+      isWhatsApp: true,
+      fromStudent: true
+    },
+    {
+      id: 'wa_flavio_2',
+      senderId: 'u1',
+      senderName: 'Você',
+      text: 'Excelente! Amanhã pegamos o dia para fechar os Ejas restantes.',
+      timestamp: '14:32',
+      isWhatsApp: true,
+      fromStudent: false
+    },
+    {
+      id: 'wa_flavio_3',
+      senderId: 'wa-91122697298017_lid',
+      senderName: 'Flávio Alexandre Motta',
+      text: 'ola .. teste',
+      timestamp: 'Agora',
+      isWhatsApp: true,
+      fromStudent: true
+    }
+  ],
   'wa-lucas-mendes': [
     {
       id: 'wa_msg_1',

@@ -58,7 +58,14 @@ import {
   loadLocalHeartbeats,
   saveLocalHeartbeat
 } from './lib/presence';
-import { toWhatsAppNumber, sendWhatsAppText, ensureEvolutionWebhook, getEvolutionState } from './lib/evolution';
+import {
+  toWhatsAppNumber,
+  toWhatsAppTarget,
+  sendWhatsAppText,
+  ensureEvolutionWebhook,
+  getEvolutionState,
+  fetchEvolutionRecentMessages
+} from './lib/evolution';
 import { extractAttachmentFromText } from './lib/attachmentParser';
 
 const INITIAL_VIP_CLIENTS = [
@@ -103,6 +110,13 @@ const INITIAL_LEARNED_DOCS = [
     textContent: 'Memorando 01/2026: Fica determinado que todas as reposições de aulas e certidões devem ser tratadas em no máximo 48h.'
   }
 ];
+
+// Helper global para evitar que requisições ao Supabase travem a interface se o banco estiver lento ou pausado
+const withTimeout = (promise, ms = 2500, fallback = { data: null, error: 'timeout' }) =>
+  Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms))
+  ]);
 
 export default function App() {
   const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
@@ -177,7 +191,10 @@ export default function App() {
     let cancelled = false;
     const refreshProfilesPresence = async () => {
       try {
-        const { data, error } = await supabase.from('profiles').select('id,email,name,last_seen');
+        const { data, error } = await withTimeout(
+          supabase.from('profiles').select('id,email,name,last_seen'),
+          2500
+        );
         if (error || !data || cancelled) return;
         setCollaborators((prev) =>
           prev.map((c) => {
@@ -219,6 +236,109 @@ export default function App() {
     return () => {
       cancelled = true;
       clearInterval(id);
+    };
+  }, []);
+
+  // Sincronização Direta e Contínua com a Evolution API (WhatsApp Real):
+  // Lê os chats e mensagens reais da instância 'EduChat-Matriz-01' a cada 3.5 segundos
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncLiveEvolution = async () => {
+      try {
+        const { contacts: liveContacts, messagesByChat: liveMessages } =
+          await fetchEvolutionRecentMessages({ limit: 50 });
+
+        if (cancelled) return;
+
+        if (Array.isArray(liveContacts) && liveContacts.length > 0) {
+          setWhatsAppContacts((prev) => {
+            const next = [...prev];
+            liveContacts.forEach((incoming) => {
+              const idx = next.findIndex(
+                (c) =>
+                  c.id === incoming.id ||
+                  (incoming.remoteJid && c.remoteJid === incoming.remoteJid) ||
+                  (c.phone && incoming.phone && c.phone.replace(/\D/g, '') === incoming.phone.replace(/\D/g, ''))
+              );
+              if (idx !== -1) {
+                next[idx] = { ...next[idx], ...incoming, remoteJid: incoming.remoteJid || next[idx].remoteJid };
+              } else {
+                next.unshift(incoming);
+              }
+            });
+            return next;
+          });
+        }
+
+        if (liveMessages && Object.keys(liveMessages).length > 0) {
+          setMessages((prev) => {
+            const next = { ...prev };
+            let hasNewIncoming = false;
+
+            Object.keys(liveMessages).forEach((chatKey) => {
+              const existingList = next[chatKey] || [];
+              const seenIds = new Set(existingList.map((m) => m.id));
+              const toAdd = (liveMessages[chatKey] || []).filter((m) => !seenIds.has(m.id));
+
+              if (toAdd.length > 0) {
+                next[chatKey] = [...existingList, ...toAdd];
+                if (toAdd.some((m) => m.fromStudent)) {
+                  hasNewIncoming = true;
+                }
+              }
+            });
+
+            if (hasNewIncoming && !document.hidden) {
+              playMessageSound();
+            }
+
+            return next;
+          });
+        }
+      } catch (err) {
+        console.warn('[Evolution Sync] Falha:', err);
+      }
+    };
+
+    syncLiveEvolution();
+    const evoInterval = setInterval(syncLiveEvolution, 3500);
+
+    return () => {
+      cancelled = true;
+      clearInterval(evoInterval);
+    };
+  }, []);
+
+  // Barramento de Comunicação Interna Instantânea Multi-Aba (BroadcastChannel):
+  // Garante que mensagens enviadas em qualquer canal ou DM apareçam em 0ms em todas as abas/janelas
+  useEffect(() => {
+    let bus = null;
+    try {
+      bus = new BroadcastChannel('educhat_internal_bus');
+      bus.onmessage = (event) => {
+        if (event.data?.type === 'INTERNAL_MESSAGE') {
+          const { chatKey, message } = event.data;
+          setMessages((prev) => {
+            const list = prev[chatKey] || [];
+            if (list.some((m) => m.id === message.id)) return prev;
+            return {
+              ...prev,
+              [chatKey]: [...list, message]
+            };
+          });
+
+          if (message.senderId !== currentUserRef.current?.id && !document.hidden) {
+            playMessageSound();
+          }
+        }
+      };
+    } catch {}
+
+    return () => {
+      if (bus) {
+        try { bus.close(); } catch {}
+      }
     };
   }, []);
   const [isUserSelectOpen, setIsUserSelectOpen] = useState(() => {
@@ -912,11 +1032,13 @@ export default function App() {
       } catch {}
 
       // 1A. Busca registros de sistema (alunos e colaboradores) separadamente para não consumir o limite de mensagens de chat
-      const { data: sysRows } = await supabase
-        .from('messages')
-        .select('id, chat_id, text')
-        .in('chat_id', ['sys_educontrol_students', 'sys_collaborators'])
-        .limit(500);
+      const { data: sysRows } = await withTimeout(
+        supabase
+          .from('messages')
+          .select('id, chat_id, text')
+          .in('chat_id', ['sys_educontrol_students', 'sys_collaborators'])
+          .limit(500)
+      );
 
       if (sysRows && sysRows.length > 0) {
         const dbStudents = [];
@@ -992,21 +1114,27 @@ export default function App() {
       // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
       let recentDbMessages = null;
       try {
-        const { data, error } = await supabase
-          .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
-          .not('chat_id', 'like', 'sys_%')
-          .order('created_at', { ascending: false })
-          .limit(1000);
+        const { data, error } = await withTimeout(
+          supabase
+            .from('messages')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .not('chat_id', 'like', 'sys_%')
+            .order('created_at', { ascending: false })
+            .limit(1000),
+          3000
+        );
         if (!error && Array.isArray(data)) {
           recentDbMessages = data;
         } else if (error) {
           console.warn('[Supabase] Erro na consulta com created_at, executando fallback:', error);
-          const { data: fallbackData } = await supabase
-            .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp')
-            .not('chat_id', 'like', 'sys_%')
-            .limit(500);
+          const { data: fallbackData } = await withTimeout(
+            supabase
+              .from('messages')
+              .select('id, chat_id, sender_id, sender_name, text, timestamp')
+              .not('chat_id', 'like', 'sys_%')
+              .limit(500),
+            2000
+          );
           if (Array.isArray(fallbackData)) recentDbMessages = fallbackData;
         }
       } catch (err) {
@@ -1180,10 +1308,13 @@ export default function App() {
       }
 
       // 2. Tarefas do Kanban
-      const { data: dbTasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .order('created_at', { ascending: false });
+      const { data: dbTasks } = await withTimeout(
+        supabase
+          .from('tasks')
+          .select('*')
+          .order('created_at', { ascending: false }),
+        2500
+      );
 
       if (dbTasks && dbTasks.length > 0) {
         setTasks(
@@ -1245,7 +1376,10 @@ export default function App() {
 
       // 3. Colaboradores / Perfis
       try {
-        const { data: dbProfiles, error: profErr } = await supabase.from('profiles').select('*');
+        const { data: dbProfiles, error: profErr } = await withTimeout(
+          supabase.from('profiles').select('*'),
+          2500
+        );
         if (!profErr && dbProfiles && Array.isArray(dbProfiles) && dbProfiles.length > 0) {
           setCollaborators((prev) => {
             const list = [...prev];
@@ -1956,13 +2090,16 @@ export default function App() {
     let lastPolledTimestamp = new Date(Date.now() - 60000).toISOString();
     const pollLatestMessages = async () => {
       try {
-        const { data: latestRows, error } = await supabase
-          .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
-          .not('chat_id', 'like', 'sys_%')
-          .gt('created_at', lastPolledTimestamp)
-          .order('created_at', { ascending: true })
-          .limit(40);
+        const { data: latestRows, error } = await withTimeout(
+          supabase
+            .from('messages')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .not('chat_id', 'like', 'sys_%')
+            .gt('created_at', lastPolledTimestamp)
+            .order('created_at', { ascending: true })
+            .limit(40),
+          2500
+        );
 
         if (!error && Array.isArray(latestRows) && latestRows.length > 0) {
           lastPolledTimestamp = latestRows[latestRows.length - 1].created_at || new Date().toISOString();
@@ -2074,28 +2211,43 @@ export default function App() {
     }
     payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
-    const saveOutgoingRow = (rowId) =>
-      supabase.from('messages').insert([{
-        id: rowId,
-        chat_id: currentChatKey,
-        sender_id: newMsg.senderId,
-        sender_name: newMsg.senderName,
-        text: payloadText,
-        timestamp: newMsg.timestamp
-      }]).then(({ error }) => {
-        if (error && !String(error.message || '').toLowerCase().includes('duplicate')) {
-          console.warn('Erro ao salvar msg no Supabase:', error);
-        }
-      });
+    const saveOutgoingRow = (rowId) => {
+      // Grava no Supabase de forma não bloqueante com timeout seguro de 2.5s
+      try {
+        const insertPromise = supabase.from('messages').insert([{
+          id: rowId,
+          chat_id: currentChatKey,
+          sender_id: newMsg.senderId,
+          sender_name: newMsg.senderName,
+          text: payloadText,
+          timestamp: newMsg.timestamp
+        }]);
+        Promise.race([
+          insertPromise,
+          new Promise((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 2500))
+        ]).then((res) => {
+          if (res?.error && res.error !== 'timeout' && !String(res.error.message || '').toLowerCase().includes('duplicate')) {
+            console.warn('Aviso ao sincronizar msg com Supabase:', res.error);
+          }
+        }).catch(() => {});
+      } catch {}
+    };
+
+    // Comunicação Interna Instantânea Multi-Aba: propaga mensagem para outras abas abertas
+    try {
+      const bus = new BroadcastChannel('educhat_internal_bus');
+      bus.postMessage({ type: 'INTERNAL_MESSAGE', chatKey: currentChatKey, message: newMsg });
+      bus.close();
+    } catch {}
 
     // Conversas de WhatsApp: envia de verdade pela Evolution API (texto) e grava com o ID real da mensagem
     const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
-    const waNumber = toWhatsAppNumber(waContact?.phone || currentChatKey.replace(/^wa-/, ''));
+    const waTarget = waContact?.remoteJid || waContact?.phone || toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
     const isWhatsAppSend =
-      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!waNumber;
+      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!waTarget;
 
     if (isWhatsAppSend) {
-      sendWhatsAppText(waNumber, text).then((result) => {
+      sendWhatsAppText(waTarget, text).then((result) => {
         if (result.ok && result.messageId) {
           const realId = 'wa_' + result.messageId;
           setMessages((prev) => {

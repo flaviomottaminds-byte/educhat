@@ -108,19 +108,26 @@ export async function ensureEvolutionWebhook({ force = false } = {}) {
   }
 }
 
-/** Normaliza para o formato internacional (DDI 55) apenas com dígitos. Retorna '' se inválido. */
-export function toWhatsAppNumber(raw = '') {
-  let d = String(raw || '').replace(/\D/g, '');
+/** Normaliza para o destino internacional (DDI 55 com dígitos ou remoteJid completo como @lid / @s.whatsapp.net). */
+export function toWhatsAppTarget(raw = '') {
+  const str = String(raw || '').trim();
+  if (!str) return '';
+  if (str.includes('@')) return str;
+  let d = str.replace(/\D/g, '');
   if (d.length < 10) return '';
   if (d.length === 10 || d.length === 11) d = `55${d}`;
   return d;
 }
 
+export function toWhatsAppNumber(raw = '') {
+  return toWhatsAppTarget(raw);
+}
+
 /** Envia texto via /message/sendText. Retorna { ok, messageId, error }. */
-export async function sendWhatsAppText(number, text) {
+export async function sendWhatsAppText(target, text) {
   const { instance } = getEvolutionConfig();
-  const to = toWhatsAppNumber(number);
-  if (!to) return { ok: false, error: 'Número inválido' };
+  const to = toWhatsAppTarget(target);
+  if (!to) return { ok: false, error: 'Número/Destinatário inválido' };
   try {
     const payload = {
       number: to,
@@ -129,7 +136,7 @@ export async function sendWhatsAppText(number, text) {
         text: text
       },
       options: {
-        delay: 1200,
+        delay: 1000,
         presence: 'composing',
         linkPreview: false
       }
@@ -156,5 +163,96 @@ export async function sendWhatsAppText(number, text) {
     return { ok: true, messageId, data };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * Consulta as mensagens mais recentes diretamente do banco da Evolution API.
+ * Retorna { contacts: Array, messagesByChat: Record<string, Array> }.
+ */
+export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
+  const { instance } = getEvolutionConfig();
+  try {
+    const res = await evoFetch(
+      `/chat/findMessages/${instance}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ where: {}, limit })
+      },
+      10000
+    );
+    if (!res.ok) return { contacts: [], messagesByChat: {} };
+    const d = await res.json().catch(() => ({}));
+    const records = d?.messages?.records || (Array.isArray(d) ? d : []);
+
+    const contactsMap = new Map();
+    const messagesByChat = {};
+
+    records.forEach((m) => {
+      const rawJid = m.key?.remoteJid;
+      if (!rawJid || rawJid === 'status@broadcast') return;
+      const chatKey = 'wa-' + rawJid.replace(/[@.]/g, '_');
+      const text =
+        m.message?.conversation ||
+        m.message?.extendedTextMessage?.text ||
+        m.message?.imageMessage?.caption ||
+        m.message?.documentMessage?.title ||
+        (m.message?.audioMessage ? '🎙️ [Áudio recebido]' : (m.message?.imageMessage ? '📷 [Imagem]' : (m.message?.documentMessage ? '📄 [Documento]' : '')));
+
+      if (!text && !m.message?.audioMessage && !m.message?.imageMessage) return;
+
+      const fromMe = Boolean(m.key?.fromMe);
+      const time = m.messageTimestamp
+        ? new Date(m.messageTimestamp * 1000).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        : 'Agora';
+
+      const contactName =
+        m.pushName && m.pushName !== 'Você'
+          ? m.pushName
+          : (rawJid.includes('@') ? rawJid.split('@')[0] : 'Contato WhatsApp');
+
+      if (!contactsMap.has(chatKey)) {
+        contactsMap.set(chatKey, {
+          id: chatKey,
+          remoteJid: rawJid,
+          name: contactName,
+          phone: rawJid.replace(/@.*$/, ''),
+          avatar: '👤',
+          department: 'Atendimento',
+          assignee: 'Flávio Motta',
+          status: 'carteira_ativa',
+          statusLabel: 'WhatsApp Oficial',
+          aiActive: false,
+          lastInteraction: time,
+          lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString()
+        });
+      }
+
+      if (!messagesByChat[chatKey]) messagesByChat[chatKey] = [];
+      messagesByChat[chatKey].push({
+        id: m.key?.id || m.id || `wa_${Date.now()}_${Math.random()}`,
+        senderId: fromMe ? 'u1' : chatKey,
+        senderName: fromMe ? 'Você' : contactName,
+        text: text || '🎙️ [Áudio recebido]',
+        timestamp: time,
+        isWhatsApp: true,
+        fromStudent: !fromMe,
+        remoteJid: rawJid,
+        status: fromMe ? 'delivered' : 'read'
+      });
+    });
+
+    // Inverte para que as mensagens fiquem em ordem cronológica (antiga -> nova)
+    Object.keys(messagesByChat).forEach((k) => {
+      messagesByChat[k] = messagesByChat[k].reverse();
+    });
+
+    return {
+      contacts: Array.from(contactsMap.values()),
+      messagesByChat
+    };
+  } catch (err) {
+    console.warn('[Evolution API] Falha ao sincronizar mensagens:', err);
+    return { contacts: [], messagesByChat: {} };
   }
 }
