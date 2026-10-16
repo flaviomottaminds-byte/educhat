@@ -22,7 +22,8 @@ import {
   ShieldCheck,
   ChevronDown,
   ChevronUp,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Key
 } from 'lucide-react';
 import {
   parseVipClientsFile,
@@ -39,6 +40,7 @@ import {
 } from '../lib/listParsers';
 import { parseEduControlFile } from '../lib/eduControl';
 import { getSaoPauloTime } from '../lib/timezone';
+import { getGeminiApiKey, saveGeminiApiKey } from '../lib/gemini';
 
 export default function AIMemoryModal({
   isOpen,
@@ -93,6 +95,16 @@ export default function AIMemoryModal({
   // Diretrizes da IA
   const [promptText, setPromptText] = useState(customPrompt);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  // Integração com Google Gemini
+  const [geminiKey, setGeminiKey] = useState(getGeminiApiKey());
+  const [geminiKeySaved, setGeminiKeySaved] = useState(false);
+
+  const handleSaveGeminiKey = () => {
+    saveGeminiApiKey(geminiKey);
+    setGeminiKeySaved(true);
+    setTimeout(() => setGeminiKeySaved(false), 3000);
+  };
 
   // Refs para inputs de arquivo
   const fileInputRef = useRef(null);
@@ -1038,16 +1050,76 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
           )}
 
           {/* ========================================================================= */}
-          {/* ABA 6: DIRETRIZES DA IA (PROMPT) */}
+          {/* ABA 6: DIRETRIZES DA IA (PROMPT & GOOGLE GEMINI) */}
           {/* ========================================================================= */}
           {activeTab === 'prompt' && (
-            <div className="space-y-3">
+            <div className="space-y-4">
+              {/* Integração Nativa Google Gemini AI */}
+              <div className="bg-gradient-to-r from-purple-900/20 to-indigo-900/20 border border-purple-500/30 rounded-xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-purple-600 text-white flex items-center justify-center shadow-xs">
+                      <Key size={16} />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold text-chatTextTitle">
+                        Motor de IA Generativa: Google Gemini API
+                      </h4>
+                      <p className="text-[10px] text-chatTextMuted">
+                        Conecta o chat diretamente aos modelos oficiais (gemini-2.5-flash / gemini-1.5-flash)
+                      </p>
+                    </div>
+                  </div>
+                  {geminiKey ? (
+                    <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold px-2.5 py-1 rounded-full border border-emerald-300 dark:border-emerald-600 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      Gemini Conectado
+                    </span>
+                  ) : (
+                    <span className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold px-2.5 py-1 rounded-full border border-slate-300 dark:border-slate-700">
+                      Motor Local de Contingência
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={geminiKey}
+                    onChange={(e) => setGeminiKey(e.target.value)}
+                    placeholder="AIzaSy... (Chave de API do Google AI Studio)"
+                    className="flex-1 bg-white dark:bg-chatInputBg text-slate-800 dark:text-chatTextTitle px-3 py-2 rounded-lg border border-slate-200 dark:border-chatBorder focus:outline-none focus:border-purple-500 font-mono text-xs shadow-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveGeminiKey}
+                    className="bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-xs transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    {geminiKeySaved ? <Check size={14} className="text-emerald-300" /> : <Sparkles size={14} />}
+                    <span>{geminiKeySaved ? 'Chave Salva!' : 'Salvar Chave'}</span>
+                  </button>
+                </div>
+
+                <p className="text-[10.5px] text-chatTextMuted">
+                  Obtenha uma chave gratuita e imediata no{' '}
+                  <a
+                    href="https://aistudio.google.com/app/apikey"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-purple-600 dark:text-purple-400 font-bold hover:underline"
+                  >
+                    Google AI Studio (aistudio.google.com)
+                  </a>
+                  . A IA utilizará esta chave para dialogar de forma contínua e humanizada com os alunos.
+                </p>
+              </div>
+
               <div className="bg-slate-50 dark:bg-chatSidebar border border-slate-200 dark:border-chatBorder rounded-xl p-4 space-y-3">
-                <p className="text-slate-600 dark:text-chatTextMuted">
+                <p className="text-slate-600 dark:text-chatTextMuted font-semibold text-xs">
                   Instruções livres de raciocínio da IA em linguagem natural para priorização automática e SLA:
                 </p>
                 <textarea
-                  rows={8}
+                  rows={6}
                   value={promptText}
                   onChange={(e) => setPromptText(e.target.value)}
                   className="w-full bg-white dark:bg-chatInputBg text-slate-800 dark:text-chatTextTitle p-3 rounded-lg border border-slate-200 dark:border-chatBorder focus:outline-none focus:border-brand-500 font-mono text-xs leading-relaxed shadow-xs"
@@ -1058,7 +1130,7 @@ Carla Martins;345.678.901-23;+55 (21) 99112-3344;carla.martins@ensino.br;Formaç
                   </span>
                   <button
                     onClick={handleSavePrompt}
-                    className="bg-purple-600 hover:bg-purple-500 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 shadow-xs transition"
+                    className="bg-purple-600 hover:bg-purple-500 text-white font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 shadow-xs transition text-xs"
                   >
                     {savedSuccess ? <Check size={16} className="text-emerald-300" /> : <Sparkles size={16} />}
                     <span>{savedSuccess ? 'Diretrizes Salvas!' : 'Salvar Diretrizes'}</span>

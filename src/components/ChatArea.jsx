@@ -29,7 +29,8 @@ import {
   GraduationCap,
   Award,
   BookOpen,
-  Volume2
+  Volume2,
+  UserMinus
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser, matchesDepartment } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
@@ -549,6 +550,7 @@ export default function ChatArea({
   onOpenWhatsAppDossier,
   onToggleWhatsAppAI,
   onUpdateChatAssignment,
+  onRemoveCoAssignee,
   currentUser,
   realtimeStatus = 'connected',
   collaborators = [],
@@ -588,6 +590,12 @@ export default function ChatArea({
 
   const [selectedDept, setSelectedDept] = useState(target.department || 'Comercial');
   const [selectedAssignee, setSelectedAssignee] = useState(target.assignee || '');
+  const [selectedCoAssignees, setSelectedCoAssignees] = useState(() => {
+    const list = Array.isArray(target.assignees)
+      ? target.assignees.filter((a) => a && a !== target.assignee)
+      : [];
+    return list;
+  });
   const [selectedStatus, setSelectedStatus] = useState(target.status || 'carteira_ativa');
 
   useEffect(() => {
@@ -595,8 +603,12 @@ export default function ChatArea({
       setSelectedDept(target.department || 'Comercial');
       setSelectedAssignee(target.assignee || '');
       setSelectedStatus(target.status || 'carteira_ativa');
+      const list = Array.isArray(target.assignees)
+        ? target.assignees.filter((a) => a && a !== target.assignee)
+        : [];
+      setSelectedCoAssignees(list);
     }
-  }, [target.id, target.department, target.assignee, target.status]);
+  }, [target.id, target.department, target.assignee, target.status, JSON.stringify(target.assignees)]);
 
   // Fechar popover de atribuição ao clicar fora
   useEffect(() => {
@@ -627,9 +639,12 @@ export default function ChatArea({
         statusLabel = `Carteira • ${selectedDept}`;
       }
 
+      const allAssignees = Array.from(new Set([selectedAssignee, ...selectedCoAssignees].filter(Boolean)));
+
       onUpdateChatAssignment(targetChatId, {
         department: selectedDept,
         assignee: selectedAssignee,
+        assignees: allAssignees,
         status: selectedStatus || 'carteira_ativa',
         statusLabel
       });
@@ -926,6 +941,10 @@ export default function ChatArea({
                     setSelectedDept(target.department || 'Comercial');
                     setSelectedAssignee(target.assignee || '');
                     setSelectedStatus(target.status || 'carteira_ativa');
+                    const coList = Array.isArray(target.assignees)
+                      ? target.assignees.filter((a) => a && a !== target.assignee)
+                      : [];
+                    setSelectedCoAssignees(coList);
                     setIsAssignmentOpen(true);
                   }}
                   className="group inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/95 dark:bg-chatCard hover:bg-brand-50 dark:hover:bg-brand-950/50 border border-slate-300 dark:border-chatBorder hover:border-brand-500 shadow-2xs hover:shadow-xs transition text-chatTextTitle cursor-pointer select-none shrink-0"
@@ -936,10 +955,30 @@ export default function ChatArea({
                   </span>
                   <span className="text-slate-300 dark:text-slate-600">•</span>
                   <span className="text-[11px] leading-tight">
-                    Resp: <strong className="font-bold text-chatTextTitle">{target.assignee || 'Aguardando'}</strong>
+                    Resp: <strong className="font-bold text-chatTextTitle">
+                      {target.assignee || 'Aguardando'}
+                      {Array.isArray(target.assignees) && target.assignees.length > 1 && (
+                        <span className="text-purple-600 dark:text-purple-400 font-semibold ml-1">
+                          (+{target.assignees.length - 1} co-resp)
+                        </span>
+                      )}
+                    </strong>
                   </span>
                   <ChevronDown size={12} className="text-brand-600 dark:text-brand-400 group-hover:translate-y-0.5 transition-transform" />
                 </button>
+
+                {/* Botão de Retirada da Co-atribuição ("Sair do Atendimento") */}
+                {isWhatsApp && Array.isArray(target.assignees) && target.assignees.length > 1 && isChatAssignedToUser(target, currentUser) && (
+                  <button
+                    type="button"
+                    onClick={() => onRemoveCoAssignee && onRemoveCoAssignee(target.id, currentUser?.name)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/50 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-600 text-[10.5px] font-bold transition cursor-pointer shadow-2xs"
+                    title="Retirar-se deste atendimento compartilhado, mantendo os outros responsáveis"
+                  >
+                    <UserMinus size={12} />
+                    <span>Sair do Atendimento</span>
+                  </button>
+                )}
 
                 <span className="text-gray-300 dark:text-gray-600 shrink-0">•</span>
                 {realtimeStatus === 'connected' ? (
@@ -1786,11 +1825,12 @@ export default function ChatArea({
                   className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-chatCard border border-slate-200 dark:border-chatBorder text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-brand-500 font-medium cursor-pointer"
                 >
                   <option value="Comercial">🎯 Comercial (Matrículas & Vendas)</option>
-                  <option value="Marketing">👩‍🎨 Marketing & Comunicação</option>
                   <option value="Tutoria">🎓 Tutoria & Apoio Pedagógico</option>
                   <option value="Secretaria">📋 Secretaria Acadêmica & Documentos</option>
                   <option value="Pedagógico">👨‍🏫 Coordenação Pedagógica</option>
                   <option value="Expansão">🚀 Expansão & Parcerias de Polos</option>
+                  <option value="Financeiro">💰 Financeiro & Boletos</option>
+                  <option value="Marketing">👩‍🎨 Marketing & Comunicação</option>
                   <option value="Diretoria">👑 Diretoria & Gestão Executiva</option>
                 </select>
               </div>
@@ -1874,6 +1914,69 @@ export default function ChatArea({
                         </button>
                       );
                     })}
+                </div>
+              </div>
+
+              {/* 2.1 Co-atribuição Provisória de Múltiplos Usuários (Trabalho Cruzado entre Departamentos) */}
+              <div className="p-3 bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800/40 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-bold uppercase tracking-wider text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                    <UserPlus size={13} className="text-purple-600 dark:text-purple-400" />
+                    <span>Co-responsáveis Provisórios (Multi-departamental):</span>
+                  </label>
+                  <span className="text-[10.5px] font-bold text-purple-700 dark:text-purple-300">
+                    {selectedCoAssignees.length > 0 ? `${selectedCoAssignees.length} co-responsável(is)` : 'Nenhum co-responsável'}
+                  </span>
+                </div>
+
+                <p className="text-[10.5px] text-purple-800/80 dark:text-purple-300/80 leading-relaxed">
+                  Permite que consultores de outros setores (ex: Secretaria + Comercial) acompanhem e respondam juntos neste mesmo atendimento. Qualquer um poderá se retirar a qualquer momento.
+                </p>
+
+                {/* Chips de Co-responsáveis selecionados */}
+                {selectedCoAssignees.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {selectedCoAssignees.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-chatCard text-purple-800 dark:text-purple-300 font-bold text-xs border border-purple-300 dark:border-purple-700 shadow-2xs"
+                      >
+                        <span>👤 {name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCoAssignees((prev) => prev.filter((n) => n !== name))}
+                          className="text-purple-500 hover:text-red-500 transition cursor-pointer"
+                          title={`Remover ${name} da co-atribuição`}
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Dropdown para Adicionar Co-responsável de Qualquer Departamento */}
+                <div className="flex gap-2">
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val && !selectedCoAssignees.includes(val) && val !== selectedAssignee) {
+                        setSelectedCoAssignees((prev) => [...prev, val]);
+                      }
+                      e.target.value = '';
+                    }}
+                    className="w-full text-xs p-2 rounded-xl bg-white dark:bg-chatCard border border-purple-200 dark:border-purple-800/60 text-chatTextTitle focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium cursor-pointer"
+                  >
+                    <option value="">➕ Adicionar consultor de outro setor como Co-responsável...</option>
+                    {(collaborators || [])
+                      .filter((c) => !c.isBot && c.name !== selectedAssignee && !selectedCoAssignees.includes(c.name))
+                      .map((collab) => (
+                        <option key={collab.id} value={collab.name}>
+                          {collab.name} ({collab.department || 'Geral'})
+                        </option>
+                      ))}
+                  </select>
                 </div>
               </div>
 

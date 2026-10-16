@@ -1,5 +1,6 @@
 // Motor de Roteamento de Webhook WhatsApp & URA Inteligente
-// Embarca as 3 Portas de Entrada: Carteira Ativa, Aluno Veterano (Opção C) e Números Inéditos (URA)
+// Embarca as 3 Portas de Entrada: Carteira Ativa, Aluno Veterano (Opção C) e Números Inéditos (URA Dinâmica)
+import { matchesDepartment, normalizeName } from './portfolioAccess';
 
 export const INITIAL_WHATSAPP_CONTACTS = [
   {
@@ -111,7 +112,7 @@ export const INITIAL_WHATSAPP_MESSAGES = {
       id: 'wa_msg_j2',
       senderId: 'bot_ia_retencao',
       senderName: '🤖 Assistente EduChat',
-      text: 'Olá, Juliana! Que alegria falar com você novamente! 🎓\n\nIdentifiquei em nosso sistema que você já é aluna formada da nossa instituição. Para agilizarmos seu atendimento com prioridade, sobre o que gostaria de tratar agora?\n\n1️⃣ Secretaria Acadêmica (Certificados, Histórico e Documentos)\n2️⃣ Financeiro (2ª via de boletos, declarações fiscais)\n3️⃣ Ouvidoria e Atendimento Geral\n4️⃣ Conhecer Novos Cursos (Descontos especiais para ex-alunos)',
+      text: 'Olá, Juliana! Que alegria falar com você novamente! 🎓\n\nIdentifiquei em nosso sistema que você já é aluna formada da nossa instituição. Para agilizarmos seu atendimento com prioridade, sobre o que gostaria de tratar agora?\n\n1️⃣ Tutoria & Apoio Pedagógico\n2️⃣ Secretaria Acadêmica & Documentos\n3️⃣ Coordenação Pedagógica\n4️⃣ Comercial & Novas Matrículas\n5️⃣ Expansão & Polos',
       timestamp: '11:40',
       isWhatsApp: true,
       fromStudent: false,
@@ -132,7 +133,7 @@ export const INITIAL_WHATSAPP_MESSAGES = {
       id: 'wa_msg_c2',
       senderId: 'bot_ura_inedito',
       senderName: '🤖 URA EduChat',
-      text: 'Olá! Seja muito bem-vindo(a) à nossa instituição! 👋\n\nPara direcionarmos seu atendimento com máxima agilidade para o setor responsável, por favor digite o número da opção desejada:\n\n1️⃣ Matrículas e Novos Cursos\n2️⃣ Tutoria e Apoio Pedagógico\n3️⃣ Financeiro e Boletos\n4️⃣ Secretaria e Documentação',
+      text: 'Olá! Seja muito bem-vindo(a) à nossa instituição! 👋\n\nPara direcionarmos seu atendimento com máxima agilidade para o setor responsável, por favor digite o número da opção desejada:\n\n1️⃣ Tutoria e Apoio Pedagógico\n2️⃣ Secretaria Acadêmica e Documentos\n3️⃣ Coordenação Pedagógica\n4️⃣ Comercial e Novas Matrículas\n5️⃣ Expansão e Polos Parceiros',
       timestamp: '13:38',
       isWhatsApp: true,
       fromStudent: false,
@@ -140,6 +141,61 @@ export const INITIAL_WHATSAPP_MESSAGES = {
     }
   ]
 };
+
+const EMOJI_NUMBERS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+
+/**
+ * Mapeamento e descoberta dinâmica de Departamentos para a URA.
+ * Sempre que um novo canal ou departamento for criado, é incorporado automaticamente.
+ */
+export function getAvailableURADepartments(channels = [], collaborators = []) {
+  // Lista padrão base prioritária recomendada
+  const baseOrder = [
+    { name: 'Tutoria', label: 'Tutoria e Apoio Pedagógico', icon: '🎓', keywords: ['tutoria', 'tutor', 'duvida', 'aula', 'ead', 'professor'] },
+    { name: 'Secretaria', label: 'Secretaria Acadêmica e Documentos', icon: '📋', keywords: ['secretaria', 'documento', 'diploma', 'certificado', 'historico', 'declaracao'] },
+    { name: 'Pedagógico', label: 'Coordenação Pedagógica', icon: '👨‍🏫', keywords: ['pedagogico', 'coordenacao', 'grade', 'disciplina', 'ementa', 'matriz'] },
+    { name: 'Comercial', label: 'Comercial e Novas Matrículas', icon: '🎯', keywords: ['comercial', 'matricula', 'curso', 'pos', 'mba', 'graduacao', 'valor', 'inscricao', 'preco'] },
+    { name: 'Expansão', label: 'Expansão e Polos Parceiros', icon: '🚀', keywords: ['expansao', 'polo', 'parceria', 'unidade', 'convenio'] },
+    { name: 'Financeiro', label: 'Financeiro e Boletos', icon: '💰', keywords: ['financeiro', 'boleto', 'pagamento', 'fatura', 'acordo', 'mensalidade', 'segunda via'] },
+    { name: 'Marketing', label: 'Marketing e Comunicação', icon: '👩‍🎨', keywords: ['marketing', 'comunicacao', 'imprensa', 'divulgacao'] }
+  ];
+
+  const deptMap = new Map();
+  baseOrder.forEach((d) => deptMap.set(normalizeName(d.name), d));
+
+  // Incorporação dinâmica dos canais cadastrados no sistema
+  channels.forEach((ch) => {
+    if (!ch) return;
+    const rawDept = ch.department || ch.name;
+    if (!rawDept || rawDept === 'Todos' || rawDept === 'Geral' || rawDept === 'geral') return;
+
+    const norm = normalizeName(rawDept);
+    if (!deptMap.has(norm)) {
+      deptMap.set(norm, {
+        name: rawDept,
+        label: rawDept,
+        icon: '🏢',
+        keywords: [norm, normalizeName(ch.name)]
+      });
+    }
+  });
+
+  return Array.from(deptMap.values());
+}
+
+/**
+ * Gera o texto do menu da URA formatado com numeração automática
+ */
+export function generateDynamicURAMenu(channels = [], collaborators = []) {
+  const departments = getAvailableURADepartments(channels, collaborators);
+
+  const menuLines = departments.map((dept, idx) => {
+    const num = EMOJI_NUMBERS[idx] || `${idx + 1}️⃣`;
+    return `${num} ${dept.label}`;
+  });
+
+  return `Olá! Seja muito bem-vindo(a) à nossa instituição! 👋\n\nPara agilizarmos seu atendimento com o consultor ideal, por favor digite o número da opção desejada:\n\n${menuLines.join('\n')}`;
+}
 
 // Motor Central de Decisão do Webhook
 export function routeIncomingWhatsAppWebhook({
@@ -150,14 +206,13 @@ export function routeIncomingWhatsAppWebhook({
   audioTranscription = null,
   tasks = [],
   collaborators = [],
-  contacts = []
+  contacts = [],
+  channels = []
 }) {
   const cleanPhone = (fromPhone || '').replace(/\D/g, '');
 
   // =========================================================================
-  // REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT - ITEM 2)
-  // Se o lead ou aluno já possui consultor previamente atribuído neste contato/chat,
-  // NÃO sobrescreve para fila genérica ou URA: direciona estritamente para ele.
+  // REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT)
   // =========================================================================
   const existingContact = (contacts || []).find((c) => {
     if (!c) return false;
@@ -188,7 +243,7 @@ export function routeIncomingWhatsAppWebhook({
       badgeNotificationUserIds: consultant ? [consultant.id] : [],
       kanbanBadgeUpdate: '🔥 Mensagem de Rechamada',
       systemMessage: `Permanência de Carteira: Rechamada de ${senderName} mantida diretamente com ${existingContact.assignee} (${existingContact.department || 'Comercial'}).`,
-      autoReply: null // Sem URA genérica: continuidade da relação comercial garantida
+      autoReply: null
     };
   }
 
@@ -230,6 +285,8 @@ export function routeIncomingWhatsAppWebhook({
     (t) => t.status === 'done' || t.status === 'concluido'
   );
 
+  const uraMenuText = generateDynamicURAMenu(channels, collaborators);
+
   if (concludedTask) {
     return {
       routeType: 'VETERAN_RETENTION',
@@ -240,13 +297,13 @@ export function routeIncomingWhatsAppWebhook({
       targetDepartment: 'Autoatendimento IA',
       taskId: concludedTask.id,
       notificationText: `🎓 Aluno veterano ${senderName} em autoatendimento IA.`,
-      badgeNotificationUserIds: [], // IA cuida primeiro, zero interrupção nos vendedores
-      autoReply: `Olá, ${senderName}! Que bom falar com você novamente! 🎓\n\nIdentifiquei em nosso sistema que você já é nosso aluno(a). Para direcionarmos seu atendimento com rapidez, escolha uma opção:\n\n1️⃣ Secretaria Acadêmica (Certificados, Histórico e Documentos)\n2️⃣ Financeiro (2ª via de boletos, declarações fiscais)\n3️⃣ Ouvidoria e Atendimento Geral\n4️⃣ Conhecer Novos Cursos (Descontos especiais para ex-alunos)`,
-      triagePrompt: 'Aguardando seleção do veterano no menu de 4 opções'
+      badgeNotificationUserIds: [],
+      autoReply: `Olá, ${senderName}! Que bom falar com você novamente! 🎓\n\nIdentifiquei em nosso sistema que você já é nosso aluno(a). Para direcionarmos seu atendimento com rapidez, escolha uma opção:\n\n${uraMenuText.replace(/Olá! Seja muito bem-vindo\(a\) à nossa instituição! 👋\n\nPara agilizarmos seu atendimento com o consultor ideal, por favor digite o número da opção desejada:\n\n/, '')}`,
+      triagePrompt: 'Aguardando seleção do veterano no menu da URA'
     };
   }
 
-  // PORTA 3: Número Inédito (Primeiro Contato / URA Inteligente)
+  // PORTA 3: Número Inédito (Primeiro Contato / URA Dinâmica de Entrada)
   return {
     routeType: 'BRAND_NEW_URA',
     door: 3,
@@ -256,80 +313,86 @@ export function routeIncomingWhatsAppWebhook({
     targetDepartment: 'Triagem Inicial',
     taskId: null,
     notificationText: `✨ Novo lead inédito ${senderName} recebido na URA.`,
-    badgeNotificationUserIds: [], // Notifica somente após a URA classificar o setor!
-    autoReply: `Olá! Seja muito bem-vindo(a) à nossa instituição! 👋\n\nPara agilizarmos seu atendimento com o consultor ideal, sobre o que gostaria de falar?\n\n1️⃣ Matrículas e Novos Cursos\n2️⃣ Tutoria e Apoio Pedagógico\n3️⃣ Financeiro e Boletos\n4️⃣ Secretaria e Documentação`,
+    badgeNotificationUserIds: [],
+    autoReply: uraMenuText,
     triagePrompt: 'URA de Entrada disparada. Aguardando escolha do lead.'
   };
 }
 
-// Processador de Resposta da URA ou Menu da IA
-export function processTriageResponse(userChoiceText, contextType = 'ura_inedito', collaborators = []) {
+/**
+ * Processador de Resposta da URA ou Menu da IA com resolução dinâmica de departamentos e canais
+ */
+export function processTriageResponse(userChoiceText, contextType = 'ura_inedito', channels = [], collaborators = []) {
   const text = (userChoiceText || '').toLowerCase().trim();
+  const departments = getAvailableURADepartments(channels, collaborators);
 
-  // Opção 1: Matrículas e Novos Cursos (Comercial)
-  if (text.includes('1') || text.includes('matr') || text.includes('curso') || text.includes('preço') || text.includes('valor') || text.includes('inscri')) {
-    const commercialUser = collaborators.find((c) => c.department === 'Comercial' && !c.isBot) || { name: 'Tatiane Salatinos', id: 'u2' };
-    return {
-      department: 'Comercial',
-      assignee: commercialUser.name,
-      assigneeId: commercialUser.id,
-      channelId: 'c-comercial',
-      triageLabel: '1️⃣ Matrículas e Novos Cursos',
-      taskTitle: 'Novo Lead: Atendimento Comercial & Matrícula',
-      priority: 'alta',
-      isUpsell: contextType === 'veterano_retencao',
-      handOffMessage: `🎯 Demanda classificada e encaminhada para o Comercial (${commercialUser.name}). O consultor já tem acesso a este histórico completo.`
-    };
+  let matchedDept = null;
+  let optionIndex = -1;
+
+  // 1. Tenta extrair número exato digitado (ex: "1", "2", "3", "opção 1", etc.)
+  const numMatch = text.match(/\b([1-9]|10)\b/);
+  if (numMatch) {
+    const idx = parseInt(numMatch[1], 10) - 1;
+    if (idx >= 0 && idx < departments.length) {
+      matchedDept = departments[idx];
+      optionIndex = idx;
+    }
   }
 
-  // Opção 2: Tutoria / Apoio Pedagógico
-  if (text.includes('2') || text.includes('tutor') || text.includes('pedag') || text.includes('aula') || text.includes('dúvida acad') || text.includes('professor')) {
-    const tutoriaUser = collaborators.find((c) => c.department === 'Tutoria' && !c.isBot) || { name: 'Raquel Lopes', id: 'u6' };
-    return {
-      department: 'Tutoria',
-      assignee: tutoriaUser.name,
-      assigneeId: tutoriaUser.id,
-      channelId: 'c-tutoria',
-      triageLabel: '2️⃣ Tutoria e Apoio Pedagógico',
-      taskTitle: 'Dúvida Acadêmica / Acompanhamento Pedagógico',
-      priority: 'media',
-      isUpsell: false,
-      handOffMessage: `🎓 Demanda classificada e encaminhada para a Tutoria Acadêmica (${tutoriaUser.name}).`
-    };
+  // 2. Se não casou por número, verifica palavras-chave dos departamentos
+  if (!matchedDept) {
+    for (let i = 0; i < departments.length; i++) {
+      const d = departments[i];
+      const normD = normalizeName(d.name);
+      if (text.includes(normD) || d.keywords.some((kw) => text.includes(kw))) {
+        matchedDept = d;
+        optionIndex = i;
+        break;
+      }
+    }
   }
 
-  // Opção 3: Financeiro e Boletos
-  if (text.includes('3') || text.includes('financ') || text.includes('boleto') || text.includes('pagamento') || text.includes('acordo') || text.includes('fatura')) {
-    const dirUser = collaborators.find((c) => c.roleType === 'diretor') || { name: 'Flávio Motta', id: 'u1' };
-    return {
-      department: 'Financeiro',
-      assignee: dirUser.name,
-      assigneeId: dirUser.id,
-      channelId: 'c-geral',
-      triageLabel: '3️⃣ Financeiro e Boletos',
-      taskTitle: 'Solicitação Financeira: 2ª Via / Negociação',
-      priority: 'alta',
-      isUpsell: false,
-      handOffMessage: `💰 Demanda classificada e encaminhada para o Financeiro.`
-    };
+  if (!matchedDept) {
+    return null;
   }
 
-  // Opção 4: Secretaria e Documentos
-  if (text.includes('4') || text.includes('secret') || text.includes('certif') || text.includes('diploma') || text.includes('hist') || text.includes('document')) {
-    const secUser = collaborators.find((c) => c.department === 'Secretaria' && !c.isBot) || { name: 'Ana Paula', id: 'u7' };
-    return {
-      department: 'Secretaria',
-      assignee: secUser.name,
-      assigneeId: secUser.id,
-      channelId: 'c-secretaria',
-      triageLabel: '4️⃣ Secretaria e Documentação',
-      taskTitle: 'Demanda de Secretaria: Emissão de Documento / Certidão',
-      priority: 'media',
-      isUpsell: false,
-      handOffMessage: `📋 Demanda classificada e encaminhada para a Secretaria Acadêmica (${secUser.name}).`
-    };
-  }
+  // Localiza consultor do departamento nos colaboradores cadastrados
+  const deptCollab = (collaborators || []).find(
+    (c) => !c.isBot && matchesDepartment(c.department, matchedDept.name)
+  );
 
-  // Fallback: Resposta livre não mapeada diretamente nos números
-  return null;
+  // Fallback inteligente de consultores por setor caso não haja colaborador cadastrado na fila
+  const fallbackConsultants = {
+    'tutoria': { name: 'Raquel Lopes', id: 'u6' },
+    'secretaria': { name: 'Ana Paula', id: 'u7' },
+    'pedagógico': { name: 'Flávio Motta', id: 'u1' },
+    'comercial': { name: 'Gabriel Carvalho', id: 'u3' },
+    'expansão': { name: 'Luiz Augusto', id: 'u4' },
+    'marketing': { name: 'Yasmin', id: 'u_yasmin' },
+    'financeiro': { name: 'Flávio Motta', id: 'u1' }
+  };
+
+  const assignedUser = deptCollab || fallbackConsultants[normalizeName(matchedDept.name)] || {
+    name: deptCollab?.name || `Fila ${matchedDept.name}`,
+    id: deptCollab?.id || 'u1'
+  };
+
+  // Localiza canal correspondente
+  const matchingChannel = (channels || []).find(
+    (ch) => matchesDepartment(ch.department, matchedDept.name) || normalizeName(ch.name) === normalizeName(matchedDept.name)
+  );
+
+  const numEmoji = EMOJI_NUMBERS[optionIndex] || `${optionIndex + 1}️⃣`;
+
+  return {
+    department: matchedDept.name,
+    assignee: assignedUser.name,
+    assigneeId: assignedUser.id,
+    channelId: matchingChannel?.id || `c-${normalizeName(matchedDept.name)}`,
+    triageLabel: `${numEmoji} ${matchedDept.label}`,
+    taskTitle: `Novo Atendimento: ${matchedDept.name}`,
+    priority: matchedDept.name === 'Financeiro' || matchedDept.name === 'Comercial' ? 'alta' : 'media',
+    isUpsell: contextType === 'veterano_retencao',
+    handOffMessage: `🎯 Demanda classificada e encaminhada para a fila de **${matchedDept.name}** com **${assignedUser.name}**. O consultor já recebeu seu histórico!`
+  };
 }

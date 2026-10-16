@@ -40,9 +40,12 @@ import {
   INITIAL_WHATSAPP_CONTACTS,
   INITIAL_WHATSAPP_MESSAGES,
   routeIncomingWhatsAppWebhook,
-  processTriageResponse
+  processTriageResponse,
+  getAvailableURADepartments,
+  generateDynamicURAMenu
 } from './lib/whatsappRouting';
-import { hasFullPortfolioAccess, isChatAssignedToUser } from './lib/portfolioAccess';
+import { generateGeminiChatReply } from './lib/gemini';
+import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
 import {
@@ -381,7 +384,12 @@ export default function App() {
     });
 
     setWhatsAppContacts((prev) =>
-      prev.map((c) => (c.id === targetId ? { ...c, unread_count: 0, unread: 0 } : c))
+      prev.map((c) => {
+        const cPhoneDigits = (c.phone || '').replace(/\D/g, '');
+        const targetDigits = (targetId || '').replace(/\D/g, '');
+        const isMatch = c.id === targetId || (cPhoneDigits && targetDigits && cPhoneDigits === targetDigits);
+        return isMatch ? { ...c, unread_count: 0, unread: 0 } : c;
+      })
     );
 
     setChannels((prev) =>
@@ -435,11 +443,84 @@ export default function App() {
     });
   };
 
-  // Sincroniza limpeza de notificação ao alternar de chat ou receber mensagem no chat aberto (Item 7)
+  // Sincroniza limpeza de notificação e carregamento imediato ao alternar de chat (Item 1 & 7)
   useEffect(() => {
     if (activeChat?.id) {
       clearUnread(activeChat.id);
       markMessagesAsRead(activeChat);
+
+      const targetChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
+      const rawId = activeChat.id;
+
+      // Se o chat ativo não possui mensagens no estado local, busca do Supabase para evitar chat vazio
+      if (!messages[targetChatKey] || messages[targetChatKey].length === 0) {
+        supabase
+          .from('messages')
+          .select('*')
+          .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
+          .order('created_at', { ascending: true })
+          .then(({ data: fetchedDbMessages }) => {
+            if (fetchedDbMessages && fetchedDbMessages.length > 0) {
+              const parsedList = fetchedDbMessages.map((m) => {
+                let cleanText = m.text || '';
+                let parsedAttachment = null;
+                let linkedTaskId = null;
+                let parsedReplyTo = null;
+                let isAudio = false;
+                let audioUrl = null;
+                let audioTranscription = null;
+                let duration = '0:14';
+
+                if (cleanText.includes('[ARQUIVO_ANEXO:')) {
+                  const { attachment: extracted, cleanText: sanitized } = extractAttachmentFromText(cleanText);
+                  if (extracted) parsedAttachment = extracted;
+                  cleanText = sanitized;
+                }
+                if (cleanText.includes('<!-- AUDIO_URL:')) {
+                  const match = cleanText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+                  if (match) {
+                    audioUrl = match[1].trim();
+                    cleanText = cleanText.replace(/<!-- AUDIO_URL:[\s\S]+? -->/, '').trim();
+                  }
+                }
+                if (cleanText.includes('<!-- IS_AUDIO:true -->') || cleanText.includes('🎙️')) {
+                  isAudio = true;
+                }
+                if (cleanText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+                  const match = cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || cleanText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
+                  if (match) audioTranscription = match[1].replace(/^["']|["']$/g, '').trim();
+                  isAudio = true;
+                }
+                if (parsedAttachment?.type?.startsWith('audio/') || parsedAttachment?.isAudio) {
+                  isAudio = true;
+                  if (!audioUrl) audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+                }
+
+                return {
+                  id: m.id,
+                  senderId: m.sender_id,
+                  senderName: m.sender_name,
+                  text: cleanText,
+                  timestamp: getSaoPauloTime(m.created_at || m.timestamp),
+                  attachment: parsedAttachment,
+                  replyTo: parsedReplyTo,
+                  status: 'read',
+                  taskId: linkedTaskId,
+                  actionExtracted: false,
+                  isAudio: isAudio || !!audioUrl,
+                  audioUrl,
+                  audioTranscription,
+                  duration
+                };
+              });
+
+              setMessages((prev) => ({
+                ...prev,
+                [targetChatKey]: parsedList
+              }));
+            }
+          });
+      }
     }
   }, [activeChat?.id, currentMessages?.length]);
 
@@ -475,6 +556,11 @@ export default function App() {
     const currentKey = getChatKey(activeChatRef.current, currentUserId);
     const isCurrentActive = cKey === currentKey && !document.hidden;
 
+    // REQUISITO 1: Alerta sonoro SEMPRE que uma nova mensagem de WhatsApp chegar na plataforma
+    if (cKey.startsWith('wa-')) {
+      playMessageSound();
+    }
+
     if (isCurrentActive) {
       // Se a conversa já está visível e aberta, marca como lida imediatamente sem criar badge
       markMessagesAsRead(activeChatRef.current);
@@ -505,8 +591,10 @@ export default function App() {
         return next;
       });
 
-      // Toca áudio e faz a barra de tarefas do Windows piscar
-      playMessageSound();
+      // Toca áudio para canais/DMs inativos e faz a barra de tarefas do Windows piscar
+      if (!cKey.startsWith('wa-')) {
+        playMessageSound();
+      }
       notifyIncomingMessage(notificationTitle, msg.text);
     }
   };
@@ -867,14 +955,18 @@ export default function App() {
             const asgn = storedAssignments[c.id];
             const latestMsg = grouped[c.id]?.[grouped[c.id].length - 1];
             const unreadCount = unreadMap[c.id] || c.unread_count || c.unread || 0;
+            const primaryAssignee = asgn?.assignee || c.assignee;
+            const allAssignees = asgn?.assignees || (asgn?.assignee ? [asgn.assignee] : c.assignees || [c.assignee]);
+
             return {
               ...c,
               department: asgn?.department || c.department,
-              assignee: asgn?.assignee || c.assignee,
+              assignee: primaryAssignee,
+              assignees: allAssignees,
               status: asgn?.status || c.status,
               statusLabel: asgn?.statusLabel || c.statusLabel,
               triageContext: asgn?.updatedBy
-                ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy}`
+                ? `Atribuído a ${primaryAssignee} (${asgn.department}) por ${asgn.updatedBy}`
                 : c.triageContext,
               lastInteraction: latestMsg ? latestMsg.timestamp : c.lastInteraction,
               lastMessageAt: latestMsg ? (latestMsg.timestamp || latestMsg.created_at) : c.lastMessageAt,
@@ -889,9 +981,10 @@ export default function App() {
               const asgn = storedAssignments[waKey];
               const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
               const assignee = asgn?.assignee || initialContact?.assignee || 'Gabriel Carvalho';
+              const assignees = asgn?.assignees || (assignee ? [assignee] : ['Gabriel Carvalho']);
 
               // ISOLAMENTO: Só adiciona se for atribuído ao consultor ou se for gestor
-              if (!isManager && !isChatAssignedToUser(assignee, currentUser)) {
+              if (!isManager && !isChatAssignedToUser({ assignee, assignees }, currentUser)) {
                 continue;
               }
 
@@ -907,6 +1000,7 @@ export default function App() {
                 avatar: '👤',
                 department: asgn?.department || 'Comercial',
                 assignee: assignee,
+                assignees: assignees,
                 status: asgn?.status || 'ura_inedito',
                 statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
                 aiActive: false,
@@ -1390,6 +1484,127 @@ export default function App() {
           }
 
           handleIncomingNotification(incoming, cKey);
+
+          // GATILHO INTELIGENTE DE RESPOSTA AUTOMÁTICA VIA SUPABASE REALTIME (URA & GEMINI AI)
+          if (
+            cKey.startsWith('wa-') &&
+            row.sender_id !== currentUserId &&
+            row.sender_id !== 'system' &&
+            !row.sender_id.startsWith('bot') &&
+            row.sender_id !== 'u_ia_copilot' &&
+            !document.hidden
+          ) {
+            setWhatsAppContacts((prevContacts) => {
+              const contact = prevContacts.find((c) => c.id === cKey);
+              if (!contact) return prevContacts;
+
+              // 1. Resposta de URA / Seleção de Departamento
+              if (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao') {
+                const triageResult = processTriageResponse(incoming.text, contact.status, channels, collaborators);
+                if (triageResult) {
+                  setTimeout(() => {
+                    // Atualiza contato para Carteira Ativa na fila correspondente
+                    setWhatsAppContacts((list) =>
+                      list.map((c) =>
+                        c.id === cKey
+                          ? {
+                              ...c,
+                              department: triageResult.department,
+                              assignee: triageResult.assignee,
+                              status: 'carteira_ativa',
+                              statusLabel: 'Em Atendimento',
+                              aiActive: false,
+                              triageContext: `Encaminhado via URA: [${triageResult.triageLabel}] para ${triageResult.assignee}`
+                            }
+                          : c
+                      )
+                    );
+
+                    const botReply = {
+                      id: 'bot_triage_' + Date.now(),
+                      senderId: 'bot',
+                      senderName: '🤖 Copiloto EduChat',
+                      text: `✅ ${triageResult.handOffMessage}`,
+                      timestamp: getSaoPauloTime(),
+                      isWhatsApp: true,
+                      fromStudent: false
+                    };
+
+                    setMessages((prev) => ({
+                      ...prev,
+                      [cKey]: [...(prev[cKey] || []), botReply]
+                    }));
+
+                    supabase.from('messages').insert([{
+                      id: botReply.id,
+                      chat_id: cKey,
+                      sender_id: botReply.senderId,
+                      sender_name: botReply.senderName,
+                      text: botReply.text,
+                      timestamp: botReply.timestamp
+                    }]).then(({ error }) => {
+                      if (error) console.warn('Erro ao salvar resposta de URA:', error);
+                    });
+                  }, 500);
+
+                  return prevContacts;
+                }
+              }
+
+              // 2. Diálogo Contínuo com Google Gemini AI (RAG de Memorandos e Regras)
+              if (contact.aiActive) {
+                setTimeout(async () => {
+                  try {
+                    const matchedStudent = matchStudentByPhone(cKey, eduControlStudents);
+                    const history = (messages[cKey] || []).slice(-10);
+                    const reply = await generateGeminiChatReply({
+                      message: incoming.text,
+                      history,
+                      student: matchedStudent,
+                      learnedDocuments,
+                      pops: [],
+                      slas: INITIAL_SLAS,
+                      customPrompt: customAIPrompt,
+                      department: contact.department || 'Geral',
+                      userName: incoming.senderName || contact.name
+                    });
+
+                    const geminiMsg = {
+                      id: 'gemini_' + Date.now(),
+                      senderId: 'u_ia_copilot',
+                      senderName: '🤖 Assistente IA (Gemini)',
+                      text: reply,
+                      timestamp: getSaoPauloTime(),
+                      isWhatsApp: true,
+                      fromStudent: false
+                    };
+
+                    setMessages((prev) => ({
+                      ...prev,
+                      [cKey]: [...(prev[cKey] || []), geminiMsg]
+                    }));
+
+                    supabase.from('messages').insert([{
+                      id: geminiMsg.id,
+                      chat_id: cKey,
+                      sender_id: geminiMsg.senderId,
+                      sender_name: geminiMsg.senderName,
+                      text: geminiMsg.text,
+                      timestamp: geminiMsg.timestamp
+                    }]).then(({ error }) => {
+                      if (error) console.warn('Erro ao persistir resposta Gemini Realtime:', error);
+                    });
+
+                    playMessageSound();
+                  } catch (e) {
+                    console.warn('Erro ao gerar resposta Gemini Realtime:', e);
+                  }
+                }, 800);
+              }
+
+              return prevContacts;
+            });
+          }
         }
       )
       .on(
@@ -1907,12 +2122,27 @@ export default function App() {
           }
         } else {
           // =========================================================================
-          // 2. FLUXO REGULAR: Resposta convencional do Copiloto (RAG, MEC e POPs)
+          // 2. FLUXO REGULAR: Resposta do Copiloto via Google Gemini (RAG, MEC e POPs)
           // =========================================================================
-          console.log('💬 [AI Chat] Usuário comum ou consulta regular: Acionando copiloto de IA padrão (RAG/MEC)...');
-          const aiResult = answerCopilotQuery(queryText, currentUser, vipClients, customAIPrompt, learnedDocuments);
-          replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
-          console.log('🤖 [AI Chat] Resposta gerada pela IA padrão:', replyText.slice(0, 100) + '...');
+          console.log('💬 [AI Chat] Acionando Google Gemini com RAG de documentos e processos...');
+          try {
+            replyText = await generateGeminiChatReply({
+              message: queryText,
+              history: (messages[currentChatKey] || []).slice(-10),
+              student: null,
+              learnedDocuments,
+              pops: [],
+              slas: INITIAL_SLAS,
+              customPrompt: customAIPrompt,
+              department: currentUser?.department || 'Geral',
+              userName: currentUser?.name || 'Consultor'
+            });
+          } catch (geminiErr) {
+            console.warn('Fallback para copiloto local:', geminiErr);
+            const aiResult = answerCopilotQuery(queryText, currentUser, vipClients, customAIPrompt, learnedDocuments);
+            replyText = typeof aiResult === 'object' && aiResult?.reply ? aiResult.reply : aiResult;
+          }
+          console.log('🤖 [AI Chat] Resposta gerada pela IA:', replyText.slice(0, 100) + '...');
         }
         console.groupEnd();
 
@@ -1959,7 +2189,7 @@ export default function App() {
 
       // Se a mensagem enviada for a resposta de uma URA / Triagem (ex: "1", "2", "3", "4" ou texto correspondente)
       if (contact && (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao')) {
-        const triageResult = processTriageResponse(text, contact.status, collaborators);
+        const triageResult = processTriageResponse(text, contact.status, channels, collaborators);
         if (triageResult) {
           setTimeout(() => {
             // 1. Atualizar contato
@@ -2286,7 +2516,8 @@ export default function App() {
       messageText,
       tasks,
       collaborators,
-      contacts: whatsAppContacts
+      contacts: whatsAppContacts,
+      channels
     });
 
     const targetChatId = contactId || (whatsAppContacts.find(c => c.phone.replace(/\D/g, '') === fromPhone.replace(/\D/g, ''))?.id) || 'wa-carlos-eduardo';
@@ -2370,6 +2601,58 @@ export default function App() {
         }));
         playMessageSound();
       }, 700);
+    } else {
+      // Se não gerou menu fixo de URA e o contato está em atendimento com IA ativa
+      const targetContact = whatsAppContacts.find((c) => c.id === targetChatId);
+      if (targetContact?.aiActive) {
+        setTimeout(async () => {
+          try {
+            const matchedStudent = matchStudentByPhone(targetChatId, eduControlStudents);
+            const chatHistory = (messages[targetChatId] || []).slice(-10);
+            const geminiReply = await generateGeminiChatReply({
+              message: cleanMessageText,
+              history: chatHistory,
+              student: matchedStudent,
+              learnedDocuments,
+              pops: [],
+              slas: INITIAL_SLAS,
+              customPrompt: customAIPrompt,
+              department: targetContact.department || 'Geral',
+              userName: senderName || targetContact.name
+            });
+
+            const botMsg = {
+              id: 'gemini_' + Date.now(),
+              senderId: 'u_ia_copilot',
+              senderName: '🤖 Assistente IA (Gemini)',
+              text: geminiReply,
+              timestamp: getSaoPauloTime(),
+              isWhatsApp: true,
+              fromStudent: false
+            };
+
+            setMessages((prev) => ({
+              ...prev,
+              [targetChatId]: [...(prev[targetChatId] || []), botMsg]
+            }));
+
+            supabase.from('messages').insert([{
+              id: botMsg.id,
+              chat_id: targetChatId,
+              sender_id: botMsg.senderId,
+              sender_name: botMsg.senderName,
+              text: botMsg.text,
+              timestamp: botMsg.timestamp
+            }]).then(({ error }) => {
+              if (error) console.warn('Erro ao persistir resposta Gemini:', error);
+            });
+
+            playMessageSound();
+          } catch (err) {
+            console.warn('Erro ao responder com Gemini no Webhook:', err);
+          }
+        }, 800);
+      }
     }
 
     return routingResult;
@@ -3007,24 +3290,34 @@ export default function App() {
     playMessageSound();
   };
 
-  // Reatribuição Manual de Fila e Consultor Responsável com Persistência no Supabase e Realtime (Item 1 e 3)
-  const handleUpdateChatAssignment = async (chatId, { department, assignee, status, statusLabel }) => {
+  // Reatribuição Manual de Fila e Consultor Responsável com Suporte a Co-atribuição Multi-departamental (Itens 2 e 3)
+  const handleUpdateChatAssignment = async (chatId, { department, assignee, assignees = [], status, statusLabel }) => {
     if (!chatId) return;
     const timeStr = getSaoPauloTime();
+
+    const allAssignees = Array.isArray(assignees) && assignees.length > 0
+      ? Array.from(new Set(assignees.filter(Boolean)))
+      : [assignee || 'Gabriel Carvalho'];
+    const primaryAssignee = allAssignees[0] || assignee || 'Gabriel Carvalho';
 
     // 1. Atualizar contatos locais imediatamente (Optimistic Update)
     setWhatsAppContacts((prev) => {
       const exists = prev.some((c) => c.id === chatId);
+      const triageContextText = allAssignees.length > 1
+        ? `Co-atribuído a ${allAssignees.join(' e ')} (${department}) por ${currentUser?.name || 'Gestão'}.`
+        : `Atribuído a ${primaryAssignee} (${department}) por ${currentUser?.name || 'Gestão'}.`;
+
       if (exists) {
         return prev.map((c) => {
           if (c.id !== chatId) return c;
           return {
             ...c,
             department: department || c.department,
-            assignee: assignee || c.assignee,
+            assignee: primaryAssignee,
+            assignees: allAssignees,
             status: status || c.status || 'carteira_ativa',
             statusLabel: statusLabel || (department ? `Carteira • ${department}` : c.statusLabel),
-            triageContext: `Atribuído a ${assignee || 'Fila'} (${department}) por ${currentUser?.name || 'Gestão'}.`
+            triageContext: triageContextText
           };
         });
       }
@@ -3038,12 +3331,13 @@ export default function App() {
           phone: formattedPhone,
           avatar: '👤',
           department: department || 'Comercial',
-          assignee: assignee || 'Gabriel Carvalho',
+          assignee: primaryAssignee,
+          assignees: allAssignees,
           status: status || 'carteira_ativa',
           statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
           aiActive: false,
           lastInteraction: 'Agora',
-          triageContext: `Atribuído a ${assignee || 'Fila'} (${department}) por ${currentUser?.name || 'Gestão'}.`
+          triageContext: triageContextText
         }
       ];
     });
@@ -3057,7 +3351,8 @@ export default function App() {
           matched = true;
           return {
             ...s,
-            assignee: assignee || s.assignee,
+            assignee: primaryAssignee,
+            assignees: allAssignees,
             department: department || s.department
           };
         }
@@ -3073,9 +3368,11 @@ export default function App() {
 
     // 3. Persistir no localStorage para retenção offline e recarregamento instantâneo
     try {
+      const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
       const asgnObj = {
         department,
-        assignee,
+        assignee: primaryAssignee,
+        assignees: allAssignees,
         status: status || 'carteira_ativa',
         statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
         updatedBy: currentUser?.name || 'Gestão',
@@ -3088,17 +3385,20 @@ export default function App() {
       console.warn('Erro ao salvar no localStorage:', e);
     }
 
-    // 3. Montar payload de auditoria e evento de sistema no Supabase
+    // 4. Montar payload de auditoria e evento de sistema no Supabase
     const assignmentPayload = {
       department,
-      assignee,
+      assignee: primaryAssignee,
+      assignees: allAssignees,
       status: status || 'carteira_ativa',
       statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
       updatedBy: currentUser?.name || 'Gestão',
       timestamp: timeStr
     };
 
-    const auditNotice = `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${assignee || 'Aguardando'}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
+    const auditNotice = allAssignees.length > 1
+      ? `📌 [Co-atribuição de Fila & Responsáveis] Atendimento compartilhado entre ${allAssignees.join(' e ')} (Fila: ${department}) por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
+      : `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${primaryAssignee}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
 
     const systemMsg = {
       id: 'asgn_' + Date.now(),
@@ -3132,7 +3432,7 @@ export default function App() {
       console.warn('Erro ao inserir reatribuição no Supabase:', err);
     }
 
-    // 4. Se houver um card no Kanban associado a este chat, atualiza o responsável e departamento no Kanban também
+    // 5. Se houver um card no Kanban associado a este chat, atualiza o responsável e departamento no Kanban também
     const contactObj = whatsAppContacts.find((c) => c.id === chatId);
     const cleanPhone = (contactObj?.phone || '').replace(/\D/g, '');
     const linkedTask = tasks.find((t) => {
@@ -3144,9 +3444,33 @@ export default function App() {
     if (linkedTask) {
       handleUpdateTaskDetails(linkedTask.id, {
         department,
-        assignee
+        assignee: primaryAssignee
       });
     }
+  };
+
+  // Helper para retirada voluntária de co-responsável ("Sair do Atendimento" - Item 3)
+  const handleRemoveCoAssignee = (chatId, userNameToRemove) => {
+    const contact = whatsAppContacts.find((c) => c.id === chatId);
+    if (!contact) return;
+
+    const currentAssignees = Array.isArray(contact.assignees) && contact.assignees.length > 0
+      ? contact.assignees
+      : [contact.assignee].filter(Boolean);
+
+    const remaining = currentAssignees.filter(
+      (a) => normalizeName(a) !== normalizeName(userNameToRemove)
+    );
+
+    const newPrimary = remaining[0] || 'Aguardando';
+
+    handleUpdateChatAssignment(chatId, {
+      department: contact.department,
+      assignee: newPrimary,
+      assignees: remaining,
+      status: contact.status,
+      statusLabel: contact.statusLabel
+    });
   };
 
   return (
@@ -3221,6 +3545,7 @@ export default function App() {
           onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
           onToggleWhatsAppAI={handleToggleWhatsAppAI}
           onUpdateChatAssignment={handleUpdateChatAssignment}
+          onRemoveCoAssignee={handleRemoveCoAssignee}
           currentUser={currentUser}
           realtimeStatus={realtimeStatus}
           collaborators={resolvedCollaborators}

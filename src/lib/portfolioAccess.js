@@ -27,36 +27,70 @@ export function normalizeName(str) {
 
 /**
  * Retorna true se o chat/contato do WhatsApp estiver atribuído diretamente ao usuário logado,
+ * ou se o usuário logado for co-responsável (co-atribuição temporária),
  * ou se o usuário logado for gestor/diretor (visão irrestrita de carteira).
  */
 export function isChatAssignedToUser(contactOrAssignee, user) {
   if (!user) return false;
   if (hasFullPortfolioAccess(user)) return true;
 
-  const assignee = typeof contactOrAssignee === 'string'
-    ? contactOrAssignee
-    : (contactOrAssignee?.assignee || '');
+  // Extrai todos os responsáveis possíveis (responsável primário + co-atribuídos)
+  const assigneeCandidates = [];
 
-  if (!assignee) return false;
-
-  const aNorm = normalizeName(assignee);
-  const uNameNorm = normalizeName(user.name);
-  const uIdNorm = normalizeName(user.id);
-
-  // 1. Correspondência exata por ID ou Nome Completo
-  if (aNorm === uNameNorm || aNorm === uIdNorm) return true;
-
-  // 2. Correspondência por primeiro nome (ex: "Tatiane" para "Tatiane Salatinos", "Gabriel" para "Gabriel Carvalho", "Luiz" para "Luiz Augusto")
-  const userFirstName = uNameNorm.split(' ')[0];
-  const assigneeFirstName = aNorm.split(' ')[0];
-  if (userFirstName && (userFirstName === assigneeFirstName || aNorm.includes(userFirstName))) {
-    return true;
+  if (typeof contactOrAssignee === 'string') {
+    // Pode conter separadores como vírgula ou '+'
+    contactOrAssignee.split(/[,+]/).forEach((part) => {
+      const trimmed = part.trim();
+      if (trimmed) assigneeCandidates.push(trimmed);
+    });
+  } else if (contactOrAssignee && typeof contactOrAssignee === 'object') {
+    if (contactOrAssignee.assignee) {
+      contactOrAssignee.assignee.split(/[,+]/).forEach((part) => {
+        const trimmed = part.trim();
+        if (trimmed) assigneeCandidates.push(trimmed);
+      });
+    }
+    if (Array.isArray(contactOrAssignee.assignees)) {
+      contactOrAssignee.assignees.forEach((a) => {
+        if (typeof a === 'string') assigneeCandidates.push(a);
+        else if (a?.name) assigneeCandidates.push(a.name);
+      });
+    }
+    if (Array.isArray(contactOrAssignee.coAssignees)) {
+      contactOrAssignee.coAssignees.forEach((a) => {
+        if (typeof a === 'string') assigneeCandidates.push(a);
+        else if (a?.name) assigneeCandidates.push(a.name);
+      });
+    }
+    if (contactOrAssignee.coAssignee) {
+      assigneeCandidates.push(contactOrAssignee.coAssignee);
+    }
   }
 
-  // 3. Correspondência de inclusão recíproca
-  if (uNameNorm.includes(aNorm) || aNorm.includes(uNameNorm)) return true;
+  if (assigneeCandidates.length === 0) return false;
 
-  return false;
+  const uNameNorm = normalizeName(user.name);
+  const uIdNorm = normalizeName(user.id);
+  const userFirstName = uNameNorm.split(' ')[0];
+
+  return assigneeCandidates.some((cand) => {
+    if (!cand) return false;
+    const aNorm = normalizeName(cand);
+
+    // 1. Correspondência exata por ID ou Nome Completo
+    if (aNorm === uNameNorm || aNorm === uIdNorm) return true;
+
+    // 2. Correspondência por primeiro nome
+    const assigneeFirstName = aNorm.split(' ')[0];
+    if (userFirstName && userFirstName.length >= 3 && (userFirstName === assigneeFirstName || aNorm.includes(userFirstName))) {
+      return true;
+    }
+
+    // 3. Correspondência de inclusão recíproca
+    if (uNameNorm.includes(aNorm) || aNorm.includes(uNameNorm)) return true;
+
+    return false;
+  });
 }
 
 /**
@@ -90,6 +124,9 @@ export function matchesDepartment(collabDept, targetDept) {
 
   const isExpansao = (s) => s.includes('expans') || s.includes('polo') || s.includes('parceria');
   if (isExpansao(c) && isExpansao(t)) return true;
+
+  const isFinanceiro = (s) => s.includes('financ') || s.includes('boleto') || s.includes('cobranca');
+  if (isFinanceiro(c) && isFinanceiro(t)) return true;
 
   const isDiretoria = (s) => s.includes('diretor') || s.includes('gestao') || s.includes('executiv');
   if (isDiretoria(c) && isDiretoria(t)) return true;
