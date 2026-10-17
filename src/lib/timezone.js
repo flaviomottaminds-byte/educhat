@@ -31,10 +31,10 @@ export function parseDateSafely(input) {
     const trimmed = input.trim();
     if (!trimmed) return null;
 
-    // Marcadores especiais
+    // Marcadores especiais (usam data de baseline estável para impedir loops de reordenação no refresh)
     if (/^ontem$/i.test(trimmed)) return 'Ontem';
-    if (/^agora$/i.test(trimmed) || /^recente$/i.test(trimmed) || /min atrás$/i.test(trimmed)) {
-      return new Date();
+    if (/^agora$/i.test(trimmed) || /^recente$/i.test(trimmed) || /min atrás$/i.test(trimmed) || /^há \d/i.test(trimmed)) {
+      return new Date('2026-10-17T08:00:00.000Z');
     }
 
     // Formato brasileiro "DD/MM/YYYY" ou "DD/MM/YYYY HH:mm"

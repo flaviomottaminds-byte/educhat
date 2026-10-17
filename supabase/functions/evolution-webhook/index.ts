@@ -22,6 +22,10 @@ const KNOWN_CONTACTS: Record<string, { id: string; name: string }> = {
   "21998881122": { id: "wa-carlos-eduardo", name: "Carlos Eduardo (Contato Inédito)" },
   "5511930594591": { id: "wa-5511930594591", name: "Flávio Alexandre Motta" },
   "551130594591": { id: "wa-5511930594591", name: "Flávio Alexandre Motta" },
+  "556696354155": { id: "wa-556696354155", name: "Evyllinn Gomes" },
+  "5566996354155": { id: "wa-556696354155", name: "Evyllinn Gomes" },
+  "6696354155": { id: "wa-556696354155", name: "Evyllinn Gomes" },
+  "152093449003127": { id: "wa-556696354155", name: "Evyllinn Gomes" },
 };
 
 // Departamentos e opções da URA
@@ -729,20 +733,37 @@ Deno.serve(async (req: Request) => {
         insertedMessages.push(inserted && inserted[0] ? inserted[0] : { id: messageId });
       }
 
-      // Atualiza tabela de conversas/chats (last_message e updated_at) se existir no Supabase
-      try {
-        await supabase
-          .from("chats")
-          .upsert([
-            {
-              id: chatId,
-              phone: cleanPhone,
-              last_message: messageText.length > 250 ? messageText.slice(0, 247) + "..." : messageText,
-              updated_at: new Date().toISOString(),
-            }
-          ], { onConflict: "id" });
-      } catch (_cErr) {
-        // Ignora silenciosamente se a tabela 'chats' não existir no banco
+      // 1. TRAVA DE ATUALIZAÇÃO DE DATA (WEBHOOK):
+      // O Webhook SÓ DEVE dar UPDATE no last_message_at ou updated_at de um contato SE, E SOMENTE SE,
+      // uma mensagem real de texto/mídia foi inserida com sucesso no banco de dados.
+      if (!insertError && inserted && inserted.length > 0 && messageText) {
+        try {
+          await supabase
+            .from("chats")
+            .upsert([
+              {
+                id: chatId,
+                phone: cleanPhone,
+                last_message: messageText.length > 250 ? messageText.slice(0, 247) + "..." : messageText,
+                last_message_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              }
+            ], { onConflict: "id" });
+        } catch (_cErr) {
+          // Ignora silenciosamente se a tabela 'chats' não existir no banco
+        }
+
+        try {
+          await supabase
+            .from("contacts")
+            .update({
+              last_message_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", chatId);
+        } catch (_cErr) {
+          // Ignora silenciosamente se a tabela 'contacts' não existir no banco
+        }
       }
 
       // =========================================================================
@@ -1179,17 +1200,27 @@ Responda de forma clara, prestativa e objetiva à mensagem do aluno/lead:
           insertedMessages.push(aiMessagePayload);
         }
 
-        // Atualiza last_message na conversa
-        try {
-          await supabase.from("chats").upsert([
-            {
-              id: chatId,
-              phone: cleanPhone,
-              last_message: aiReplyText.length > 250 ? aiReplyText.slice(0, 247) + "..." : aiReplyText,
+        // Atualiza last_message na conversa apenas se a resposta foi gravada com sucesso
+        if (!aiInsertErr && aiReplyText) {
+          try {
+            await supabase.from("chats").upsert([
+              {
+                id: chatId,
+                phone: cleanPhone,
+                last_message: aiReplyText.length > 250 ? aiReplyText.slice(0, 247) + "..." : aiReplyText,
+                last_message_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }
+            ], { onConflict: "id" });
+          } catch (_cErr) {}
+
+          try {
+            await supabase.from("contacts").update({
+              last_message_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
-            }
-          ], { onConflict: "id" });
-        } catch (_cErr) {}
+            }).eq("id", chatId);
+          } catch (_cErr) {}
+        }
       }
     }
 

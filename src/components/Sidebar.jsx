@@ -209,9 +209,16 @@ export default function Sidebar({
 
     return Array.from(map.values()).sort((a, b) => {
       const getContactSortTime = (c) => {
-        const cMessages = messages?.[c.id] || messages?.[getCanonicalPhoneKey(c)] || [];
-        const lastMsg = Array.isArray(cMessages) && cMessages.length > 0 ? cMessages[cMessages.length - 1] : null;
-        const rawTime = lastMsg?.created_at || lastMsg?.timestampRaw || c.lastMessageAt || c.updated_at || c.lastInteraction;
+        const canonKey = getCanonicalPhoneKey(c);
+        const cMessages = messages?.[c.id] || (canonKey ? messages[`wa-${canonKey}`] : null) || (canonKey ? messages[canonKey] : null) || [];
+        const realMsgs = (Array.isArray(cMessages) ? cMessages : []).filter((m) => {
+          if (!m || !m.text) return false;
+          if (m.chat_id?.startsWith('sys_') || m.id?.startsWith('sys_')) return false;
+          const clean = (m.text || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+          return clean.length > 0 && clean !== 'Mensagem recebida' && clean !== '💬 Mensagem recebida';
+        });
+        const lastMsg = realMsgs.length > 0 ? realMsgs[realMsgs.length - 1] : null;
+        const rawTime = lastMsg?.created_at || lastMsg?.timestampRaw || c.lastMessageAt || c.created_at || c.createdAt || 0;
         const parsed = parseDateSafely(rawTime);
         const timeVal = parsed instanceof Date ? parsed.getTime() : (typeof rawTime === 'number' ? rawTime : 0);
         return isNaN(timeVal) ? 0 : timeVal;
@@ -524,9 +531,16 @@ export default function Sidebar({
                 const contactUnread = unreadCounts?.[contact.id] || contact.unread_count || contact.unread || 0;
                 const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
                 const displayName = student?.name || contact.name;
-                const contactMessages = messages?.[contact.id] || messages?.[getCanonicalPhoneKey(contact)] || [];
-                const lastMsg = Array.isArray(contactMessages) && contactMessages.length > 0 ? contactMessages[contactMessages.length - 1] : null;
-                const contactTime = lastMsg?.created_at || lastMsg?.timestampRaw || contact.lastMessageAt || contact.updated_at || contact.lastInteraction;
+                const canonPhone = getCanonicalPhoneKey(contact);
+                const contactMessages = messages?.[contact.id] || (canonPhone ? messages[`wa-${canonPhone}`] : null) || (canonPhone ? messages[canonPhone] : null) || [];
+                const realContactMsgs = (Array.isArray(contactMessages) ? contactMessages : []).filter((m) => {
+                  if (!m || !m.text) return false;
+                  if (m.chat_id?.startsWith('sys_') || m.id?.startsWith('sys_')) return false;
+                  const clean = (m.text || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+                  return clean.length > 0 && clean !== 'Mensagem recebida' && clean !== '💬 Mensagem recebida';
+                });
+                const lastMsg = realContactMsgs.length > 0 ? realContactMsgs[realContactMsgs.length - 1] : null;
+                const contactTime = lastMsg?.created_at || lastMsg?.timestampRaw || contact.lastMessageAt || contact.created_at || contact.createdAt;
 
                 return (
                   <button

@@ -75,14 +75,17 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     status: 'ura_inedito',
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
-    lastInteraction: 'Agora',
+    lastInteraction: '12:13',
+    lastMessageAt: '2026-10-17T12:13:45.138Z',
+    created_at: '2026-10-17T09:00:00.000Z',
     triageContext: 'Canal oficial WhatsApp (+55 11 93059-4591). Fila Geral / Triagem.'
   },
   {
-    id: 'wa-152093449003127_lid',
+    id: 'wa-556696354155',
     remoteJid: '152093449003127@lid',
+    remoteJidAlt: '556696354155@s.whatsapp.net',
     name: 'Evyllinn Gomes',
-    phone: '152093449003127',
+    phone: '+55 66 99635-4155',
     avatar: '👩‍🎓',
     department: 'Triagem URA',
     assignee: null,
@@ -90,7 +93,9 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     status: 'ura_inedito',
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
-    lastInteraction: 'Recente',
+    lastInteraction: '12:20',
+    lastMessageAt: '2026-10-17T12:20:31.078Z',
+    created_at: '2026-10-17T11:59:06.000Z',
     triageContext: 'Aguardando retorno sobre emissão de documentos. Fila Geral / Triagem.'
   },
   {
@@ -105,7 +110,9 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     status: 'ura_inedito',
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
-    lastInteraction: 'Recente',
+    lastInteraction: '09:15',
+    lastMessageAt: '2026-10-17T09:15:00.000Z',
+    created_at: '2026-10-17T09:15:00.000Z',
     triageContext: 'Demandas comerciais e novos polos. Fila Geral / Triagem.'
   },
   {
@@ -119,7 +126,9 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     status: 'ura_inedito',
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
-    lastInteraction: '10 min atrás',
+    lastInteraction: '09:00',
+    lastMessageAt: '2026-10-17T09:00:00.000Z',
+    created_at: '2026-10-17T09:00:00.000Z',
     triageContext: 'Negociação de matrícula MBA em Gestão Estratégica. Fila Geral / Triagem.'
   },
   {
@@ -133,8 +142,26 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     status: 'ura_inedito',
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
-    lastInteraction: '15 min atrás',
+    lastInteraction: '08:45',
+    lastMessageAt: '2026-10-17T08:45:00.000Z',
+    created_at: '2026-10-17T08:45:00.000Z',
     triageContext: 'Interessada no curso de Pedagogia EAD. Fila Geral / Triagem.'
+  },
+  {
+    id: 'wa-carlos-eduardo',
+    name: 'Carlos Eduardo (Contato Inédito)',
+    phone: '+55 21 99888-1122',
+    avatar: '👤',
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
+    aiActive: false,
+    lastInteraction: '08:30',
+    lastMessageAt: '2026-10-17T08:30:00.000Z',
+    created_at: '2026-10-17T08:30:00.000Z',
+    triageContext: 'Primeiro contato recebido via WhatsApp. Fila Geral / Triagem.'
   },
   {
     id: 'wa-juliana-rocha',
@@ -148,21 +175,9 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
     lastInteraction: 'Ontem',
+    lastMessageAt: '2026-10-16T15:00:00.000Z',
+    created_at: '2026-10-16T15:00:00.000Z',
     triageContext: 'Aluna pós-graduação. Fila Geral / Triagem.'
-  },
-  {
-    id: 'wa-carlos-eduardo',
-    name: 'Carlos Eduardo (Contato Inédito)',
-    phone: '+55 21 99888-1122',
-    avatar: '👤',
-    department: 'Triagem URA',
-    assignee: null,
-    assigned_to: null,
-    status: 'ura_inedito',
-    statusLabel: 'Fila • Triagem Geral',
-    aiActive: false,
-    lastInteraction: 'Há 2 min',
-    triageContext: 'Primeiro contato recebido via WhatsApp. Fila Geral / Triagem.'
   }
 ];
 

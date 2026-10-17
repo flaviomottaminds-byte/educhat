@@ -293,8 +293,8 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
           statusLabel: 'WhatsApp Oficial',
           aiActive: false,
           lastInteraction: time,
-          lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString(),
-          updated_at: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : new Date().toISOString()
+          lastMessageAt: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : (m.created_at || '2026-10-17T08:00:00.000Z'),
+          updated_at: m.messageTimestamp ? new Date(m.messageTimestamp * 1000).toISOString() : (m.created_at || '2026-10-17T08:00:00.000Z')
         });
       } else {
         const existing = contactsMap.get(chatKey);

@@ -431,12 +431,12 @@ export default function App() {
   const [whatsAppContacts, setWhatsAppContacts] = useState(() => {
     try {
       // RESET GERAL: limpa caches locais com atribuições desatualizadas e timestamps de mensagens fantasmas
-      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v3');
+      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v5');
       if (!resetFlag) {
         localStorage.removeItem('educhat_whatsapp_contacts');
         localStorage.removeItem('educhat_chat_assignments');
         localStorage.removeItem('educhat_messages_cache');
-        localStorage.setItem('educhat_reset_carteiras_v3', 'true');
+        localStorage.setItem('educhat_reset_carteiras_v5', 'true');
         return INITIAL_WHATSAPP_CONTACTS;
       }
       const saved = localStorage.getItem('educhat_whatsapp_contacts');
@@ -1798,9 +1798,27 @@ export default function App() {
 
           const updatedExisting = prev.map((c) => {
             const asgn = storedAssignments[c.id];
-            const latestMsg = grouped[c.id]?.[grouped[c.id].length - 1];
+            const canonKey = getCanonicalPhoneKey(c);
+
+            // Busca mensagens reais associadas ao contato (por ID ou chave canônica)
+            const chatMessages = grouped[c.id] || (canonKey ? grouped[`wa-${canonKey}`] : null) || [];
+            const realMessages = (Array.isArray(chatMessages) ? chatMessages : []).filter((m) => {
+              if (!m || !m.text) return false;
+              if (m.chat_id?.startsWith('sys_') || m.id?.startsWith('sys_')) return false;
+              if (m.text.includes('<!-- ASSIGNMENT:') && m.text.includes('[Reset Geral')) return false;
+              const clean = m.text.replace(/<!--[\s\S]*?-->/g, '').trim();
+              return clean.length > 0 && clean !== 'Mensagem recebida' && clean !== '💬 Mensagem recebida';
+            });
+            const latestRealMsg = realMessages.length > 0 ? realMessages[realMessages.length - 1] : null;
+
+            // REGRA: Se tem mensagem real, lastMessageAt é exatamente o created_at dela.
+            // Se NÃO tem mensagem real, usa o created_at original do contato (NUNCA new Date())!
+            const computedLastTime = latestRealMsg
+              ? (latestRealMsg.created_at || latestRealMsg.timestampRaw || latestRealMsg.timestamp)
+              : (c.created_at || c.createdAt || c.lastMessageAt || '2026-10-17T08:00:00.000Z');
+
             const unreadCount = unreadMap[c.id] ?? c.unread_count ?? c.unread ?? 0;
-            const primaryAssignee = asgn?.assignee || c.assignee;
+            const primaryAssignee = asgn?.assignee !== undefined ? asgn.assignee : c.assignee;
             const allAssignees = asgn?.assignees || (asgn?.assignee ? [asgn.assignee] : c.assignees || [c.assignee]);
 
             return {
@@ -1808,13 +1826,15 @@ export default function App() {
               department: asgn?.department || c.department,
               assignee: primaryAssignee,
               assignees: allAssignees,
+              assigned_to: asgn?.assigned_to !== undefined ? asgn.assigned_to : c.assigned_to,
               status: asgn?.status || c.status,
               statusLabel: asgn?.statusLabel || c.statusLabel,
               triageContext: asgn?.updatedBy
                 ? `Atribuído a ${primaryAssignee} (${asgn.department}) por ${asgn.updatedBy}`
                 : c.triageContext,
-              lastInteraction: formatRelativeChatTime(latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : (c.lastMessageAt || c.lastInteraction)),
-              lastMessageAt: latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : c.lastMessageAt,
+              lastInteraction: formatRelativeChatTime(computedLastTime),
+              lastMessageAt: computedLastTime,
+              created_at: c.created_at || c.createdAt || computedLastTime,
               unread_count: unreadCount,
               unread: unreadCount
             };
@@ -1826,22 +1846,36 @@ export default function App() {
               if (canonicalWaKey) existingCanonicalKeys.add(canonicalWaKey);
               existingIds.add(waKey);
               const asgn = storedAssignments[waKey];
-              const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
+              const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey || (canonicalWaKey && getCanonicalPhoneKey(c) === canonicalWaKey));
               const assignee = asgn?.assignee || initialContact?.assignee || null;
               const assignees = asgn?.assignees || (assignee ? [assignee] : []);
               const assigned_to = asgn?.assigned_to || (collaboratorsRef.current.find((c) => c.name === assignee)?.id) || null;
               const department = asgn?.department || initialContact?.department || 'Triagem URA';
               const status = asgn?.status || initialContact?.status || (assignee ? 'carteira_ativa' : 'ura_inedito');
               const statusLabel = asgn?.statusLabel || initialContact?.statusLabel || (assignee ? `Carteira • ${assignee}` : 'Fila • Triagem URA');
-              const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
+
+              const chatMessages = grouped[waKey] || [];
+              const realMessages = (Array.isArray(chatMessages) ? chatMessages : []).filter((m) => {
+                if (!m || !m.text) return false;
+                if (m.chat_id?.startsWith('sys_') || m.id?.startsWith('sys_')) return false;
+                if (m.text.includes('<!-- ASSIGNMENT:') && m.text.includes('[Reset Geral')) return false;
+                const clean = m.text.replace(/<!--[\s\S]*?-->/g, '').trim();
+                return clean.length > 0 && clean !== 'Mensagem recebida' && clean !== '💬 Mensagem recebida';
+              });
+              const latestRealMsg = realMessages.length > 0 ? realMessages[realMessages.length - 1] : null;
+
               const rawDigits = waKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
               const unreadCount = unreadMap[waKey] || 0;
-              const rawLastTime = latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : new Date().toISOString();
+
+              // Se há mensagem real, usa created_at da última mensagem. Se não, usa data original de criação (nunca new Date())!
+              const rawLastTime = latestRealMsg
+                ? (latestRealMsg.created_at || latestRealMsg.timestampRaw || latestRealMsg.timestamp)
+                : (initialContact?.created_at || initialContact?.createdAt || '2026-10-17T08:00:00.000Z');
 
               newContacts.push({
                 id: waKey,
-                name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
+                name: latestRealMsg?.senderName || initialContact?.name || `WhatsApp (${formattedPhone})`,
                 phone: formattedPhone,
                 avatar: '👤',
                 department,
@@ -1853,6 +1887,7 @@ export default function App() {
                 aiActive: false,
                 lastInteraction: formatRelativeChatTime(rawLastTime),
                 lastMessageAt: rawLastTime,
+                created_at: initialContact?.created_at || initialContact?.createdAt || rawLastTime,
                 triageContext: asgn
                   ? (assignee ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}` : `Fila de ${department}: Aguardando atendente disponível.`)
                   : 'Histórico sincronizado do WhatsApp.',
