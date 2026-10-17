@@ -908,19 +908,10 @@ export default function ChatArea({
     : '';
 
   const isManager = hasFullPortfolioAccess(currentUser);
-  const assignedToId = getChatAssignedToId(target, collaborators);
-  const myUserId = String(currentUser?.id || '').trim().toLowerCase();
-  const myNameNorm = normalizeName(currentUser?.name);
+  const canView = !isWhatsApp || canUserViewChat(target, currentUser, collaborators);
 
-  // Se um usuário comum (não-admin) conseguir acessar um chat cujo assigned_to seja DIFERENTE de null E DIFERENTE do seu próprio currentUser.id
-  const isAssignedToOther =
-    !isManager &&
-    assignedToId !== null &&
-    assignedToId !== myUserId &&
-    assignedToId !== myNameNorm &&
-    !isChatAssignedToUser(target, currentUser, collaborators);
-
-  if (isWhatsApp && isAssignedToOther) {
+  if (isWhatsApp && !canView) {
+    const isUnassigned = getChatAssignedToId(target, collaborators) === null;
     return (
       <section className="flex-1 flex flex-col items-center justify-center h-full bg-[#efeae2] dark:bg-chatBg p-8 text-center relative transition-colors">
         <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
@@ -929,9 +920,11 @@ export default function ChatArea({
           </div>
           <h3 className="text-base font-bold text-chatTextTitle">Atendimento Fora da Sua Carteira</h3>
           <p className="text-xs text-chatTextMuted leading-relaxed">
-            Esta conversa do WhatsApp está atribuída a <strong>{target?.assignee || 'outro consultor'}</strong> ({target?.department || 'Comercial'}).
+            {isUnassigned
+              ? 'Este atendimento pertence à Fila Geral (Triagem) e aguarda distribuição pela Gestão.'
+              : <>Esta conversa do WhatsApp está atribuída a <strong>{target?.assignee || 'outro consultor'}</strong> ({target?.department || 'Comercial'}).</>}
             <br /><br />
-            Por diretriz de privacidade e segurança da equipe comercial, você só possui acesso aos atendimentos sob sua responsabilidade direta ou da fila geral de triagem.
+            Por diretriz de privacidade e segurança da equipe, você só possui acesso aos atendimentos sob sua responsabilidade direta.
           </p>
         </div>
       </section>

@@ -184,36 +184,39 @@ export function matchesDepartment(collabDept, targetDept) {
 
 /**
  * FILTRO RIGOROSO DE VISIBILIDADE DE CHATS DO WHATSAPP (BARRA LATERAL E LISTAGENS):
- * 1. Gestores / Administradores: visibilidade irrestrita (100% da fila e histórico geral).
- * 2. Colaboradores comuns (Atendentes):
- *    O chat SÓ entra se assigned_to === currentUser.id OU assigned_to === null.
- *    Se o assigned_to for diferente de null E diferente de currentUser.id, BLOQUEIA TOTALMENTE!
+ * 1. Gestores / Administradores: visibilidade irrestrita (100% da fila geral e carteiras).
+ * 2. Colaboradores comuns (Atendentes/Consultores):
+ *    - Visualizam EXCLUSIVAMENTE os chats onde assigned_to === currentUser.id.
+ *    - Se assigned_to === null (Fila Geral / Triagem), retorna false (oculta completamente da barra lateral).
+ *    - Se assigned_to pertencer a outro colega, retorna false.
  */
 export function canUserViewChat(contact, user, collaborators = []) {
   if (!contact || !user) return false;
 
-  // 1. Gestores / Administradores / Diretores: sem restrições (100% da fila geral)
+  // 1. Gestores / Administradores / Diretores: sem restrições (100% da fila geral e carteiras)
   if (hasFullPortfolioAccess(user)) return true;
 
+  // 2. Colaborador comum (Atendente / Consultor):
   const assignedToId = getChatAssignedToId(contact, collaborators);
+
+  // FILA GERAL / TRIAGEM: assigned_to === null é EXCLUSIVA DO GESTOR/ADMIN -> Oculta do usuário comum
+  if (assignedToId === null) {
+    return false;
+  }
+
   const myUserId = String(user.id || '').trim().toLowerCase();
   const myNameNorm = normalizeName(user.name);
 
-  // A) FILA GERAL / TRIAGEM: assigned_to === null (Permitido)
-  if (assignedToId === null) {
-    return true;
-  }
-
-  // B) MINHA CARTEIRA: assigned_to === currentUser.id (Permitido)
+  // MINHA CARTEIRA: assigned_to === currentUser.id (Permitido)
   if (assignedToId === myUserId || (myNameNorm && assignedToId === myNameNorm)) {
     return true;
   }
 
-  // C) Co-atribuição direta
+  // Co-atribuição direta explícita ao usuário logado
   if (isChatAssignedToUser(contact, user, collaborators)) {
     return true;
   }
 
-  // D) BLOQUEIO ESTRITO: Pertence a outro colaborador (assigned_to !== null && assigned_to !== currentUser.id)
+  // Qualquer outro chat (pertencente a outro colega): Bloqueado
   return false;
 }
