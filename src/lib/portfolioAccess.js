@@ -33,12 +33,26 @@ export function normalizeName(str) {
 export function isChatAssignedToUser(contactOrAssignee, user) {
   if (!user) return false;
   if (hasFullPortfolioAccess(user)) return true;
+  if (!contactOrAssignee) return false;
 
-  // Extrai todos os responsáveis possíveis (responsável primário + co-atribuídos)
+  const uId = String(user.id || '').trim().toLowerCase();
+  const uNameNorm = normalizeName(user.name);
+
+  // 1. Verificação por ID direto (assigned_to ou assignee_id)
+  if (typeof contactOrAssignee === 'object') {
+    const rawAssignedTo = contactOrAssignee.assigned_to ?? contactOrAssignee.assignee_id;
+    if (rawAssignedTo !== undefined && rawAssignedTo !== null) {
+      const assignedTo = String(rawAssignedTo).trim().toLowerCase();
+      if (assignedTo && assignedTo === uId) {
+        return true;
+      }
+    }
+  }
+
+  // 2. Extrai todos os responsáveis possíveis (responsável primário + co-atribuídos)
   const assigneeCandidates = [];
 
   if (typeof contactOrAssignee === 'string') {
-    // Pode conter separadores como vírgula ou '+'
     contactOrAssignee.split(/[,+]/).forEach((part) => {
       const trimmed = part.trim();
       if (trimmed) assigneeCandidates.push(trimmed);
@@ -54,6 +68,7 @@ export function isChatAssignedToUser(contactOrAssignee, user) {
       contactOrAssignee.assignees.forEach((a) => {
         if (typeof a === 'string') assigneeCandidates.push(a);
         else if (a?.name) assigneeCandidates.push(a.name);
+        else if (a?.id && String(a.id).trim().toLowerCase() === uId) assigneeCandidates.push(user.name);
       });
     }
     if (Array.isArray(contactOrAssignee.coAssignees)) {
@@ -69,8 +84,6 @@ export function isChatAssignedToUser(contactOrAssignee, user) {
 
   if (assigneeCandidates.length === 0) return false;
 
-  const uNameNorm = normalizeName(user.name);
-  const uIdNorm = normalizeName(user.id);
   const userFirstName = uNameNorm.split(' ')[0];
 
   return assigneeCandidates.some((cand) => {
@@ -78,7 +91,7 @@ export function isChatAssignedToUser(contactOrAssignee, user) {
     const aNorm = normalizeName(cand);
 
     // 1. Correspondência exata por ID ou Nome Completo
-    if (aNorm === uNameNorm || aNorm === uIdNorm) return true;
+    if (aNorm === uNameNorm || aNorm === uId) return true;
 
     // 2. Correspondência por primeiro nome
     const assigneeFirstName = aNorm.split(' ')[0];
@@ -91,6 +104,65 @@ export function isChatAssignedToUser(contactOrAssignee, user) {
 
     return false;
   });
+}
+
+/**
+ * Retorna true se o contato NÃO possui nenhum responsável ativo atribuído
+ * (pertence à fila geral/triagem, URA ou assigned_to === null).
+ */
+export function isChatUnassigned(contact) {
+  if (!contact) return true;
+
+  // 1. Se possuir assigned_to explícito
+  const rawAssignedTo = contact.assigned_to ?? contact.assignee_id;
+  if (rawAssignedTo !== undefined && rawAssignedTo !== null) {
+    const aId = String(rawAssignedTo).trim().toLowerCase();
+    if (!aId || aId === 'null' || aId === 'undefined' || aId === 'triagem' || aId === 'aguardando' || aId === 'fila') {
+      return true;
+    }
+    // Possui um ID de atendente humano real atribuído
+    return false;
+  }
+
+  // 2. Se possuir assignee textual
+  const rawAssignee = String(contact.assignee || '').trim();
+  if (!rawAssignee) return true;
+
+  const norm = normalizeName(rawAssignee);
+  const unassignedValues = [
+    '',
+    'null',
+    'undefined',
+    'aguardando',
+    'aguardando atendimento',
+    'aguardando atribuicao',
+    'aguardando atribuição',
+    'triagem',
+    'triagem ura',
+    'fila',
+    'fila geral',
+    'fila de triagem',
+    'sem responsavel',
+    'sem responsável',
+    'nao atribuido',
+    'não atribuído',
+    'assistente ia',
+    'bot de triagem ura',
+    'robo',
+    'bot',
+    'ura',
+    'ura inedito'
+  ];
+
+  if (unassignedValues.includes(norm)) {
+    return true;
+  }
+
+  if (contact.status === 'ura_inedito' || contact.status === 'aguardando_atendimento') {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -135,55 +207,35 @@ export function matchesDepartment(collabDept, targetDept) {
 }
 
 /**
- * Determina se o usuário pode visualizar uma conversa do WhatsApp (Alunos/Leads).
- * Regras estritas:
+ * FILTRO RIGOROSO DE VISIBILIDADE DE CHATS DO WHATSAPP (BARRA LATERAL E LISTAGENS):
  * 1. Gestores / Administradores: visibilidade irrestrita (100% da fila e histórico geral).
  * 2. Colaboradores comuns (Atendentes):
- *    a) Atribuído diretamente ao colaborador (responsável ativo ou co-atribuído).
- *    b) Fila de triagem (sem responsável atribuído) e pertencente explicitamente ao departamento de atuação do colaborador.
+ *    A) Exibir apenas os chats onde assigned_to === currentUser.id (Minha Carteira).
+ *    B) Exibir os chats onde assigned_to === null (Fila Geral/Triagem do seu departamento).
+ *    REGRA ESTRITA: Chats onde o assigned_to pertence a OUTRO colaborador (ex: atribuído ao Gabriel,
+ *    mas visto pela Michele) DEVEM ser removidos/filtrados da query e NÃO podem aparecer na lista lateral.
  */
 export function canUserViewChat(contact, user) {
   if (!contact || !user) return false;
 
-  // 1. Gestores / Administradores / Diretores: sem restrições
+  // 1. Gestores / Administradores / Diretores: sem restrições (100% da fila geral)
   if (hasFullPortfolioAccess(user)) return true;
 
-  // 2.a) Atribuído diretamente ao colaborador logado
-  if (isChatAssignedToUser(contact, user)) return true;
-
-  // 2.b) Fila de triagem (sem responsável) E pertence ao mesmo departamento
-  const primaryAssignee = normalizeName(contact.assignee || '');
-  const isUnassigned =
-    !primaryAssignee ||
-    primaryAssignee === 'aguardando' ||
-    primaryAssignee === 'triagem' ||
-    primaryAssignee === 'fila' ||
-    primaryAssignee === 'fila de triagem' ||
-    primaryAssignee === 'sem responsavel' ||
-    primaryAssignee === 'nao atribuido' ||
-    primaryAssignee === 'assistente ia' ||
-    primaryAssignee === 'bot de triagem ura' ||
-    primaryAssignee === 'robo' ||
-    primaryAssignee === 'bot' ||
-    contact.status === 'ura_inedito' ||
-    contact.status === 'aguardando_atendimento' ||
-    !Array.isArray(contact.assignees) ||
-    contact.assignees.length === 0 ||
-    contact.assignees.every((a) => {
-      const aNorm = normalizeName(typeof a === 'string' ? a : a?.name || '');
-      return (
-        !aNorm ||
-        aNorm === 'aguardando' ||
-        aNorm === 'triagem' ||
-        aNorm === 'fila' ||
-        aNorm === 'sem responsavel' ||
-        aNorm === 'assistente ia' ||
-        aNorm === 'bot de triagem ura'
-      );
-    });
-
-  if (isUnassigned && matchesDepartment(user.department, contact.department)) {
+  // 2. A) MINHA CARTEIRA: Atribuído diretamente ao colaborador logado
+  if (isChatAssignedToUser(contact, user)) {
     return true;
+  }
+
+  // 3. ISOLAMENTO ESTRITO: Se possui um responsável e NÃO é o usuário logado,
+  // BLOQUEIA DEFINITIVAMENTE! Nunca vaza contatos de terceiros.
+  if (!isChatUnassigned(contact)) {
+    return false;
+  }
+
+  // 2. B) FILA GERAL / TRIAGEM (assigned_to === null / sem responsável atribuído):
+  // Exibir apenas se pertencer explicitamente ao departamento de atuação do colaborador
+  if (isChatUnassigned(contact)) {
+    return matchesDepartment(user.department, contact.department);
   }
 
   return false;

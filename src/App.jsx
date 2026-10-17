@@ -436,8 +436,17 @@ export default function App() {
         if (Array.isArray(parsed) && parsed.length > 0) {
           const list = [...parsed];
           INITIAL_WHATSAPP_CONTACTS.forEach((iw) => {
-            if (!list.some((c) => c.id === iw.id)) {
+            const idx = list.findIndex((c) => c.id === iw.id);
+            if (idx === -1) {
               list.push(iw);
+            } else {
+              // Garante sincronização dos dados canônicos de atribuição
+              list[idx] = {
+                ...list[idx],
+                assigned_to: iw.assigned_to !== undefined ? iw.assigned_to : list[idx].assigned_to,
+                assignee: list[idx].assignee || iw.assignee,
+                department: list[idx].department || iw.department
+              };
             }
           });
           return list;
@@ -4708,7 +4717,11 @@ export default function App() {
           setActiveView={setActiveView}
           channels={channels}
           collaborators={resolvedCollaborators}
-          whatsAppContacts={whatsAppContacts}
+          whatsAppContacts={
+            hasFullPortfolioAccess(currentUser)
+              ? whatsAppContacts
+              : (whatsAppContacts || []).filter((c) => canUserViewChat(c, currentUser))
+          }
           activeChat={activeChat}
           messages={messages}
           channelReadReceipts={channelReadReceipts}

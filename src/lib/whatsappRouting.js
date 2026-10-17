@@ -71,6 +71,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👨‍💼',
     department: 'Diretoria / Gestão',
     assignee: 'Flávio Motta',
+    assigned_to: 'u1',
     status: 'carteira_ativa',
     statusLabel: 'WhatsApp Oficial (Ativo)',
     aiActive: false,
@@ -85,6 +86,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👩‍🎓',
     department: 'Secretaria Acadêmica',
     assignee: 'Ana Paula',
+    assigned_to: 'u7',
     status: 'carteira_ativa',
     statusLabel: 'Aluna Ativa',
     aiActive: false,
@@ -99,6 +101,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👨‍💼',
     department: 'Comercial & Vendas',
     assignee: 'Gabriel Carvalho',
+    assigned_to: 'u3',
     status: 'carteira_ativa',
     statusLabel: 'Equipe / Comercial',
     aiActive: false,
@@ -112,6 +115,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👨‍💼',
     department: 'Comercial',
     assignee: 'Gabriel Carvalho',
+    assigned_to: 'u3',
     status: 'carteira_ativa', // 'carteira_ativa' | 'veterano_retencao' | 'ura_inedito'
     statusLabel: 'Carteira Ativa',
     aiActive: false, // Atendente humano assumiu
@@ -125,6 +129,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👩‍💼',
     department: 'Comercial',
     assignee: 'Tatiane Salatinos',
+    assigned_to: 'u2',
     status: 'carteira_ativa',
     statusLabel: 'Carteira Ativa',
     aiActive: false,
@@ -138,6 +143,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👩‍🎓',
     department: 'Secretaria',
     assignee: 'Ana Paula',
+    assigned_to: 'u7',
     status: 'veterano_retencao',
     statusLabel: 'Aluno Veterano',
     aiActive: true, // Autoatendimento IA ativo
@@ -151,6 +157,7 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     avatar: '👤',
     department: 'Triagem URA',
     assignee: 'Assistente IA',
+    assigned_to: null,
     status: 'ura_inedito',
     statusLabel: 'Novo Lead (URA)',
     aiActive: true, // Bot URA em andamento

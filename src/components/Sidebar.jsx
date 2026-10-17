@@ -414,7 +414,9 @@ export default function Sidebar({
           }`}
         >
           <Smartphone size={13} />
-          WhatsApp Alunos
+          {isManager
+            ? `WhatsApp Alunos (${accessibleWhatsAppContacts.length})`
+            : `Minha Carteira (${accessibleWhatsAppContacts.length})`}
           {totalWhatsAppUnread > 0 && (
             <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 rounded-full">
               {totalWhatsAppUnread}
