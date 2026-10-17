@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Send,
   Paperclip,
@@ -652,6 +652,75 @@ export default function ChatArea({
     setIsAssignmentOpen(false);
   };
 
+  // 2. LIMPEZA NA INTERFACE (FRONTEND):
+  // Garante mensagens únicas no chat, fundindo o estado da mensagem otimista com a confirmada pelo servidor
+  const uniqueMessages = useMemo(() => {
+    if (!Array.isArray(messages) || messages.length === 0) return [];
+
+    const result = [];
+    const seenIds = new Set();
+    const seenSignatures = new Map(); // key: "side:cleanBody:timestamp" -> index in result
+
+    for (const m of messages) {
+      if (!m) continue;
+
+      // Se for mensagem de sistema, preserva
+      if (m.senderId === 'system') {
+        if (m.id) seenIds.add(m.id);
+        result.push(m);
+        continue;
+      }
+
+      // Deduplicação estrita por ID
+      if (m.id && seenIds.has(m.id)) {
+        continue;
+      }
+
+      const isMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
+      const cleanBody = (m.text || '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+        .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+        .trim();
+      const timeStr = getSaoPauloTime(m.timestamp || m.created_at);
+      const signature = `${isMe ? 'out' : 'in'}:${cleanBody}:${timeStr}`;
+
+      if (cleanBody && seenSignatures.has(signature)) {
+        const existingIdx = seenSignatures.get(signature);
+        const existing = result[existingIdx];
+
+        const existingIsOptimistic = String(existing.id || '').startsWith('m_') || String(existing.id || '').startsWith('opt_');
+        const incomingIsReal = String(m.id || '').startsWith('wa_');
+
+        const statusWeight = { failed: 0, sent: 1, delivered: 2, read: 3 };
+        const existingWeight = statusWeight[existing.status] || 1;
+        const incomingWeight = statusWeight[m.status] || (incomingIsReal ? 2 : 1);
+
+        // Se a nova mensagem é do servidor ou tem status mais recente/confirmado, funde nela
+        if (incomingIsReal || incomingWeight >= existingWeight || existingIsOptimistic) {
+          result[existingIdx] = {
+            ...existing,
+            ...m,
+            id: incomingIsReal ? m.id : existing.id,
+            status: incomingWeight >= existingWeight ? (m.status || 'delivered') : existing.status,
+            senderId: existing.senderId || m.senderId,
+            senderName: existing.senderName || m.senderName,
+          };
+          if (m.id) seenIds.add(m.id);
+        }
+        continue;
+      }
+
+      if (m.id) seenIds.add(m.id);
+      if (cleanBody) {
+        seenSignatures.set(signature, result.length);
+      }
+      result.push(m);
+    }
+
+    return result;
+  }, [messages, currentUser?.id]);
+
   const scrollToBottom = (instant = true) => {
     if (messagesContainerRef.current) {
       messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
@@ -664,7 +733,7 @@ export default function ChatArea({
     scrollToBottom(true);
     const raf = requestAnimationFrame(() => scrollToBottom(true));
     return () => cancelAnimationFrame(raf);
-  }, [messages, messages?.length, chatMeta?.data?.id || chatMeta?.id]);
+  }, [uniqueMessages, uniqueMessages?.length, chatMeta?.data?.id || chatMeta?.id]);
 
   // Limpeza de recursos ao desmontar
   useEffect(() => {
@@ -1204,7 +1273,7 @@ export default function ChatArea({
 
       {/* Área de Mensagens com Textura Oficial do WhatsApp */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2.5 whatsapp-bg">
-        {messages.length === 0 ? (
+        {uniqueMessages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-[#667781]">
             <div className="bg-white/85 dark:bg-chatCard/90 backdrop-blur-xs p-5 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-sm shadow-sm space-y-2">
               <span className="text-4xl block">{target.avatar || '💬'}</span>
@@ -1223,7 +1292,7 @@ export default function ChatArea({
             </div>
           </div>
         ) : (
-          messages.map((m) => {
+          uniqueMessages.map((m) => {
             if (m.senderId === 'system') {
               return (
                 <div key={m.id} className="flex justify-center my-2 animate-in fade-in">
@@ -1237,7 +1306,7 @@ export default function ChatArea({
               );
             }
 
-            const isMe = m.senderId === currentUser?.id;
+            const isMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
             const isBot = m.senderId === 'bot' || m.senderId === 'u_ia_copilot';
 
             return (

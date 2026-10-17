@@ -1738,10 +1738,55 @@ export default function App() {
             (cKey === currentActiveKey || activeChatRef.current?.id === cKey || activeChatRef.current?.id === row.chat_id) &&
             !document.hidden;
 
-          // REGRA 2: Atualização FUNCIONAL IMEDIATA (0ms) de setMessages (Sem Stale Closure!)
+          // REGRA 2: Atualização FUNCIONAL IMEDIATA (0ms) de setMessages com fusão de echo
           setMessages((prevMessages) => {
             const prevList = prevMessages[cKey] || [];
-            if (prevList.some((m) => m.id === incoming.id)) return prevMessages;
+
+            // 1. Se já existe mensagem com esse id exato, atualiza in-place (ex: atualização de status sent -> delivered -> read)
+            const exactIdx = prevList.findIndex((m) => m.id === incoming.id);
+            if (exactIdx !== -1) {
+              const next = [...prevList];
+              next[exactIdx] = {
+                ...next[exactIdx],
+                ...incoming,
+                status: incoming.status || next[exactIdx].status
+              };
+              return { ...prevMessages, [cKey]: next };
+            }
+
+            // 2. Se for mensagem enviada por nós (outgoing / echo do webhook), funde com a mensagem otimista
+            const incomingCleanText = (incoming.text || '')
+              .replace(/<!--[\s\S]*?-->/g, '')
+              .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+              .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+              .trim();
+
+            const isIncomingMe = incoming.senderId === currentUserId || incoming.senderId === 'u_matriz' || incoming.fromMe;
+
+            if (isIncomingMe && incomingCleanText) {
+              const optIdx = prevList.findIndex((m) => {
+                const isMMe = m.senderId === currentUserId || m.senderId === 'u_matriz' || m.fromMe;
+                if (!isMMe) return false;
+                const mCleanText = (m.text || '')
+                  .replace(/<!--[\s\S]*?-->/g, '')
+                  .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+                  .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+                  .trim();
+                return mCleanText === incomingCleanText;
+              });
+
+              if (optIdx !== -1) {
+                const next = [...prevList];
+                next[optIdx] = {
+                  ...next[optIdx],
+                  ...incoming,
+                  id: incoming.id,
+                  status: incoming.status || 'delivered'
+                };
+                return { ...prevMessages, [cKey]: next };
+              }
+            }
+
             return {
               ...prevMessages,
               [cKey]: [...prevList, incoming]
@@ -2358,17 +2403,21 @@ export default function App() {
     }
     payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
-    const saveOutgoingRow = (rowId) => {
-      // Grava no Supabase de forma não bloqueante com timeout seguro de 2.5s
+    const saveOutgoingRow = (rowId, customStatus = initialStatus) => {
+      // Grava no Supabase de forma não bloqueante com timeout seguro de 2.5s via upsert idempotente
       try {
-        const insertPromise = supabase.from('messages').insert([{
+        const textWithStatus = payloadText.includes('<!-- STATUS:')
+          ? payloadText.replace(/<!-- STATUS:[^\s>]+ -->/g, `<!-- STATUS:${customStatus} -->`)
+          : `${payloadText}\n<!-- STATUS:${customStatus} -->`;
+
+        const insertPromise = supabase.from('messages').upsert([{
           id: rowId,
           chat_id: currentChatKey,
           sender_id: newMsg.senderId,
           sender_name: newMsg.senderName,
-          text: payloadText,
+          text: textWithStatus,
           timestamp: newMsg.timestamp
-        }]);
+        }], { onConflict: 'id' });
         Promise.race([
           insertPromise,
           new Promise((resolve) => setTimeout(() => resolve({ error: 'timeout' }), 2500))
@@ -2399,7 +2448,8 @@ export default function App() {
     if (isWhatsAppSend) {
       sendWhatsAppText(primaryTarget, text, fallbackTarget).then((result) => {
         if (result.ok && result.messageId) {
-          const realId = 'wa_' + result.messageId;
+          const rawId = String(result.messageId);
+          const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
           setMessages((prev) => {
             const list = prev[currentChatKey] || [];
             const hasReal = list.some((m) => m.id === realId);
@@ -2408,7 +2458,7 @@ export default function App() {
               : list.map((m) => (m.id === newMsg.id ? { ...m, id: realId, status: 'sent' } : m));
             return { ...prev, [currentChatKey]: next };
           });
-          saveOutgoingRow(realId);
+          saveOutgoingRow(realId, 'sent');
         } else {
           console.warn('Falha ao enviar WhatsApp via Evolution API:', result.error);
           setMessages((prev) => ({
@@ -2417,13 +2467,13 @@ export default function App() {
               m.id === newMsg.id ? { ...m, status: 'failed', sendError: result.error } : m
             )
           }));
-          saveOutgoingRow(newMsg.id);
+          saveOutgoingRow(newMsg.id, 'failed');
         }
       });
     } else {
       // Comunicação Interna (Canais e DMs): publica imediatamente para todos os colaboradores em tempo real
       publishInternalMessage(currentChatKey, newMsg);
-      saveOutgoingRow(newMsg.id);
+      saveOutgoingRow(newMsg.id, initialStatus);
     }
 
     // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot

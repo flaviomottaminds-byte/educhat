@@ -482,7 +482,105 @@ Deno.serve(async (req: Request) => {
       const timeStr = formatSaoPauloTime(m?.messageTimestamp || body?.data?.messageTimestamp || Date.now());
       const randomSuffix = Math.random().toString(36).substring(2, 7);
       const rawId = keyObj.id || m?.id;
-      const messageId = rawId ? "wa_" + String(rawId) : "wa_in_" + Date.now() + "_" + randomSuffix;
+      const rawIdStr = rawId ? String(rawId) : "";
+      const messageId = rawIdStr ? (rawIdStr.startsWith("wa_") ? rawIdStr : "wa_" + rawIdStr) : "wa_in_" + Date.now() + "_" + randomSuffix;
+
+      // =========================================================================
+      // TRATAMENTO DE ATUALIZAÇÃO DE STATUS (MESSAGES_UPDATE: sent -> delivered -> read)
+      // =========================================================================
+      if (eventName.includes("UPDATE") || m?.update) {
+        const updateStatusNum = Number(m?.update?.status ?? body?.data?.update?.status ?? m?.status ?? 0);
+        let newStatus = "";
+        if (updateStatusNum >= 4) newStatus = "read";
+        else if (updateStatusNum >= 3) newStatus = "delivered";
+        else if (updateStatusNum >= 2) newStatus = "sent";
+
+        if (newStatus && messageId) {
+          const { data: targetMsg } = await supabase
+            .from("messages")
+            .select("id, text")
+            .eq("id", messageId)
+            .maybeSingle();
+
+          if (targetMsg) {
+            let updatedText = targetMsg.text || "";
+            if (updatedText.includes("<!-- STATUS:")) {
+              updatedText = updatedText.replace(/<!-- STATUS:[^\s>]+ -->/g, `<!-- STATUS:${newStatus} -->`);
+            } else {
+              updatedText = `${updatedText}\n<!-- STATUS:${newStatus} -->`;
+            }
+            await supabase.from("messages").update({ text: updatedText }).eq("id", messageId);
+            console.log(`✅ [Evolution Webhook] Status da mensagem ${messageId} atualizado para ${newStatus}`);
+          }
+        }
+        continue;
+      }
+
+      // =========================================================================
+      // DEDUPLICAÇÃO DE MENSAGENS ENVIADAS (ECHO DO WEBHOOK fromMe: true)
+      // =========================================================================
+      if (fromMe) {
+        // 1. Tenta achar pelo id exato
+        let { data: existingMsg } = await supabase
+          .from("messages")
+          .select("id, text, sender_id, sender_name, timestamp")
+          .eq("id", messageId)
+          .maybeSingle();
+
+        // 2. Se não achou pelo id exato, verifica se existe mensagem recente enviada no mesmo chat com o mesmo texto
+        if (!existingMsg && messageText) {
+          const cleanIncoming = messageText
+            .replace(/<!--[\s\S]*?-->/g, "")
+            .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, "")
+            .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, "")
+            .trim();
+
+          if (cleanIncoming) {
+            const { data: candidateMsgs } = await supabase
+              .from("messages")
+              .select("id, text, sender_id, sender_name, timestamp")
+              .eq("chat_id", chatId)
+              .order("created_at", { ascending: false })
+              .limit(5);
+
+            if (candidateMsgs && candidateMsgs.length > 0) {
+              existingMsg = candidateMsgs.find((cm: any) => {
+                const cleanCm = (cm.text || "")
+                  .replace(/<!--[\s\S]*?-->/g, "")
+                  .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, "")
+                  .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, "")
+                  .trim();
+                return cleanCm === cleanIncoming;
+              }) || null;
+            }
+          }
+        }
+
+        if (existingMsg) {
+          console.log(`ℹ️ [Evolution Webhook] Mensagem enviada ${messageId} já existe no banco (${existingMsg.id}). Atualizando apenas status para delivered...`);
+          let updatedText = existingMsg.text || "";
+          if (updatedText.includes("<!-- STATUS:")) {
+            updatedText = updatedText.replace(/<!-- STATUS:[^\s>]+ -->/g, "<!-- STATUS:delivered -->");
+          } else {
+            updatedText = `${updatedText}\n<!-- STATUS:delivered -->`;
+          }
+
+          if (existingMsg.id !== messageId) {
+            await supabase
+              .from("messages")
+              .update({ id: messageId, text: updatedText })
+              .eq("id", existingMsg.id);
+          } else {
+            await supabase
+              .from("messages")
+              .update({ text: updatedText })
+              .eq("id", messageId);
+          }
+
+          insertedMessages.push({ id: messageId, status: "delivered", updated: true });
+          continue; // Pula a inserção para NUNCA criar nova linha no banco!
+        }
+      }
 
       // =========================================================================
       // LOGS DETALHADOS DE CADA ETAPA DA EXTRAÇÃO (Item 2)
@@ -506,13 +604,18 @@ Deno.serve(async (req: Request) => {
         timeFormattedSP: timeStr,
       });
 
+      let textToInsert = messageText;
+      if (fromMe && !textToInsert.includes("<!-- STATUS:")) {
+        textToInsert = `${textToInsert}\n<!-- STATUS:delivered -->`;
+      }
+
       // 4. Inserção / Upsert idempotente na tabela 'messages' do EduChat
       const insertPayload = {
         id: messageId,
         chat_id: chatId,
         sender_id: senderId,
         sender_name: senderName,
-        text: messageText,
+        text: textToInsert,
         timestamp: timeStr,
       };
 
