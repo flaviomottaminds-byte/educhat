@@ -629,6 +629,61 @@ export default function App() {
     }
   }, []);
 
+  // Controle de Recibos de Leitura Persistidos (Canais e DMs)
+  const [channelReadReceipts, setChannelReadReceipts] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`educhat_channel_reads_${currentUser?.id || 'u1'}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    const defaults = {};
+    const now = new Date().toISOString();
+    INITIAL_CHANNELS.forEach((c) => {
+      defaults[c.id] = now;
+      defaults[c.name] = now;
+    });
+    return defaults;
+  });
+
+  const [dmReadReceipts, setDmReadReceipts] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`educhat_dm_reads_${currentUser?.id || 'u1'}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    const now = new Date().toISOString();
+    return { u2: now, u3: now };
+  });
+
+  const channelReadReceiptsRef = useRef(channelReadReceipts);
+  channelReadReceiptsRef.current = channelReadReceipts;
+
+  const dmReadReceiptsRef = useRef(dmReadReceipts);
+  dmReadReceiptsRef.current = dmReadReceipts;
+
+  useEffect(() => {
+    const userId = currentUser?.id || 'u1';
+    try {
+      const savedC = localStorage.getItem(`educhat_channel_reads_${userId}`);
+      if (savedC) {
+        setChannelReadReceipts(JSON.parse(savedC));
+      } else {
+        const defaults = {};
+        const now = new Date().toISOString();
+        INITIAL_CHANNELS.forEach((c) => {
+          defaults[c.id] = now;
+          defaults[c.name] = now;
+        });
+        setChannelReadReceipts(defaults);
+      }
+      const savedDm = localStorage.getItem(`educhat_dm_reads_${userId}`);
+      if (savedDm) {
+        setDmReadReceipts(JSON.parse(savedDm));
+      } else {
+        const now = new Date().toISOString();
+        setDmReadReceipts({ u2: now, u3: now });
+      }
+    } catch {}
+  }, [currentUser?.id]);
+
   // Modo da IA Autônoma (Se ativo, cria o card sozinho ao detectar intenção de tarefa)
   const [aiAutonomous, setAiAutonomous] = useState(true);
 
@@ -897,15 +952,132 @@ export default function App() {
     stopTaskbarBlink();
   };
 
-  // 2. AÇÃO DE LIMPEZA (MARK AS READ):
-  // Garante que a função acionada ao clicar em um contato da lista marque as mensagens pendentes como lidas
-  // no estado/banco e zere o badge verde imediatamente.
+  // 2. AÇÃO DE LIMPEZA E PERSISTÊNCIA REAL (MARK AS READ):
+  // Garante que a função acionada ao clicar em um canal, DM ou WhatsApp marque as mensagens como lidas
+  // no estado, execute o UPDATE real no banco Supabase e persista os recibos de leitura.
   const markMessagesAsRead = (chat) => {
     if (!chat) return;
     const currentUserId = currentUserRef.current?.id || 'u1';
     const cKey = getChatKey(chat, currentUserId);
+    const nowIso = new Date().toISOString();
     clearUnread(chat.id);
 
+    // 1. Controle de Leitura em Canais (Grupos)
+    if (chat.type === 'channel') {
+      const channelId = chat.id;
+      setChannelReadReceipts((prev) => {
+        const next = {
+          ...prev,
+          [channelId]: nowIso,
+          [channelId.replace(/^c-/, '')]: nowIso
+        };
+        try {
+          localStorage.setItem(`educhat_channel_reads_${currentUserId}`, JSON.stringify(next));
+        } catch {}
+        channelReadReceiptsRef.current = next;
+        return next;
+      });
+
+      // Persiste no Supabase (chat_id: 'sys_channel_reads')
+      supabase
+        .from('messages')
+        .upsert([{
+          id: `sys_cread_${currentUserId}_${channelId}`,
+          chat_id: 'sys_channel_reads',
+          sender_id: currentUserId,
+          sender_name: currentUserRef.current?.name || 'User',
+          text: nowIso,
+          timestamp: getSaoPauloTime(new Date())
+        }], { onConflict: 'id' })
+        .then(() => {})
+        .catch(() => {});
+    }
+
+    // 2. Controle de Leitura e UPDATE em Conversas 1-a-1 (DMs)
+    if (chat.type === 'dm') {
+      const contactId = chat.id;
+      const dmKey = getChatKey({ type: 'dm', id: contactId }, currentUserId);
+      const reverseDmKey = `dm-${contactId}-${currentUserId}`;
+
+      setDmReadReceipts((prev) => {
+        const next = {
+          ...prev,
+          [contactId]: nowIso,
+          [dmKey]: nowIso
+        };
+        try {
+          localStorage.setItem(`educhat_dm_reads_${currentUserId}`, JSON.stringify(next));
+        } catch {}
+        dmReadReceiptsRef.current = next;
+        return next;
+      });
+
+      // UPDATE no Supabase para todas as mensagens não lidas onde sender_id é o contato e recipient_id é o currentUser.id
+      supabase
+        .from('messages')
+        .select('id, text, sender_id, recipient_id')
+        .or(`chat_id.eq.${dmKey},chat_id.eq.${reverseDmKey},and(sender_id.eq.${contactId},recipient_id.eq.${currentUserId})`)
+        .eq('sender_id', contactId)
+        .not('text', 'like', '%<!-- STATUS:read -->%')
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            data.forEach((row) => {
+              const newText = row.text?.includes('<!-- STATUS:')
+                ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->')
+                : `${row.text || ''}\n<!-- STATUS:read -->`;
+
+              supabase
+                .from('messages')
+                .update({
+                  text: newText,
+                  recipient_id: currentUserId
+                })
+                .eq('id', row.id)
+                .then(() => {})
+                .catch(() => {});
+            });
+          }
+        })
+        .catch(() => {});
+
+      // Persiste recibo de leitura de DM no Supabase (chat_id: 'sys_dm_reads')
+      supabase
+        .from('messages')
+        .upsert([{
+          id: `sys_dmread_${currentUserId}_${contactId}`,
+          chat_id: 'sys_dm_reads',
+          sender_id: currentUserId,
+          sender_name: currentUserRef.current?.name || 'User',
+          recipient_id: contactId,
+          text: nowIso,
+          timestamp: getSaoPauloTime(new Date())
+        }], { onConflict: 'id' })
+        .then(() => {})
+        .catch(() => {});
+    }
+
+    // 3. Conversas de WhatsApp
+    if (chat.type === 'whatsapp') {
+      supabase
+        .from('messages')
+        .select('id, text')
+        .or(`chat_id.eq.${cKey},chat_id.eq.${chat.id}`)
+        .neq('sender_id', currentUserId)
+        .not('text', 'like', '%<!-- STATUS:read -->%')
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            data.forEach((row) => {
+              const newText = row.text.includes('<!-- STATUS:')
+                ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/, '<!-- STATUS:read -->')
+                : `${row.text}\n<!-- STATUS:read -->`;
+              supabase.from('messages').update({ text: newText }).eq('id', row.id).then(() => {}).catch(() => {});
+            });
+          }
+        })
+        .catch(() => {});
+    }
+
+    // 4. Atualiza estado em memória imediatamente
     setMessages((prev) => {
       const list = prev[cKey];
       if (!list || list.length === 0) return prev;
@@ -924,7 +1096,7 @@ export default function App() {
           let newText = m.text || '';
           if (typeof newText === 'string') {
             if (newText.includes('<!-- STATUS:')) {
-              newText = newText.replace(/<!-- STATUS:[^\s>]+ -->/, '<!-- STATUS:read -->');
+              newText = newText.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->');
             } else {
               newText = `${newText}\n<!-- STATUS:read -->`;
             }
@@ -933,32 +1105,14 @@ export default function App() {
             ...m,
             status: 'read',
             is_read: true,
-            text: newText
+            text: newText,
+            recipient_id: currentUserId
           };
         }
         return m;
       });
 
       if (!hasUnread) return prev;
-
-      // Atualiza também no Supabase de forma imediata e assíncrona
-      supabase
-        .from('messages')
-        .select('id, text')
-        .or(`chat_id.eq.${cKey},chat_id.eq.${chat.id}`)
-        .neq('sender_id', currentUserId)
-        .not('text', 'like', '%<!-- STATUS:read -->%')
-        .then(({ data }) => {
-          if (data && data.length > 0) {
-            data.forEach((row) => {
-              const newText = row.text.includes('<!-- STATUS:')
-                ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/, '<!-- STATUS:read -->')
-                : `${row.text}\n<!-- STATUS:read -->`;
-              supabase.from('messages').update({ text: newText }).eq('id', row.id).then(() => {});
-            });
-          }
-        });
-
       return { ...prev, [cKey]: updated };
     });
   };
@@ -1277,6 +1431,49 @@ export default function App() {
         }
       }
 
+      // 1A-3. Busca os recibos de leitura persistidos no Supabase para o usuário atual
+      try {
+        const { data: readReceipts } = await supabase
+          .from('messages')
+          .select('id, chat_id, text')
+          .in('chat_id', ['sys_channel_reads', 'sys_dm_reads'])
+          .eq('sender_id', activeUser.id);
+
+        if (Array.isArray(readReceipts) && readReceipts.length > 0) {
+          setChannelReadReceipts((prev) => {
+            const next = { ...prev };
+            readReceipts.forEach((row) => {
+              if (row.chat_id === 'sys_channel_reads' && row.text) {
+                const chId = row.id.replace(`sys_cread_${activeUser.id}_`, '');
+                if (chId) next[chId] = row.text;
+              }
+            });
+            try {
+              localStorage.setItem(`educhat_channel_reads_${activeUser.id}`, JSON.stringify(next));
+            } catch {}
+            channelReadReceiptsRef.current = next;
+            return next;
+          });
+
+          setDmReadReceipts((prev) => {
+            const next = { ...prev };
+            readReceipts.forEach((row) => {
+              if (row.chat_id === 'sys_dm_reads' && row.text) {
+                const uId = row.id.replace(`sys_dmread_${activeUser.id}_`, '');
+                if (uId) next[uId] = row.text;
+              }
+            });
+            try {
+              localStorage.setItem(`educhat_dm_reads_${activeUser.id}`, JSON.stringify(next));
+            } catch {}
+            dmReadReceiptsRef.current = next;
+            return next;
+          });
+        }
+      } catch (err) {
+        console.warn('Aviso ao carregar recibos de leitura do Supabase:', err);
+      }
+
       // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
       let recentDbMessages = null;
       try {
@@ -1343,6 +1540,30 @@ export default function App() {
             (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
 
           if (!isFromMe && !isRead && key !== currentActiveKey) {
+            // Se for canal, verifica contra o lastReadAt do canal
+            if (key.startsWith('c-')) {
+              const chReadAt = channelReadReceiptsRef.current?.[key] || channelReadReceiptsRef.current?.[key.replace('c-', '')];
+              if (chReadAt) {
+                const msgTime = new Date(m.created_at || m.timestamp || 0).getTime();
+                if (msgTime > 0 && msgTime <= new Date(chReadAt).getTime()) {
+                  return;
+                }
+              }
+            }
+
+            // Se for DM, verifica contra o dmReadAt
+            if (key.startsWith('dm-')) {
+              const parts = key.replace('dm-', '').split('-');
+              const partnerId = parts[0] === activeUser.id ? parts[1] : parts[0];
+              const dmReadAt = dmReadReceiptsRef.current?.[partnerId] || dmReadReceiptsRef.current?.[key];
+              if (dmReadAt) {
+                const msgTime = new Date(m.created_at || m.timestamp || 0).getTime();
+                if (msgTime > 0 && msgTime <= new Date(dmReadAt).getTime()) {
+                  return;
+                }
+              }
+            }
+
             let badgeKey = key;
             if (key.startsWith('dm-')) {
               const parts = key.replace('dm-', '').split('-');
@@ -4246,6 +4467,8 @@ export default function App() {
           whatsAppContacts={whatsAppContacts}
           activeChat={activeChat}
           messages={messages}
+          channelReadReceipts={channelReadReceipts}
+          dmReadReceipts={dmReadReceipts}
           onSelectChannel={(channelId) => {
             setActiveChat({ type: 'channel', id: channelId });
             setActiveView('chat');

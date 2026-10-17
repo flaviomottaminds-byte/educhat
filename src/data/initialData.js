@@ -188,6 +188,8 @@ export const INITIAL_MESSAGES = {
       senderName: 'Tatiane Salatinos',
       text: 'Flávio, bom dia! Conseguiu avaliar a solicitação de desconto especial para o fechamento corporativo da Fama?',
       timestamp: '09:12',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -196,6 +198,8 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Bom dia, Tatiane! Aprovado com 25% de margem. Pode fechar o contrato com eles hoje.',
       timestamp: '09:14',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -206,6 +210,8 @@ export const INITIAL_MESSAGES = {
       senderName: 'Gabriel Carvalho',
       text: 'Flávio, o lead Lucas Mendes do MBA fechou a matrícula à vista! Já criei a demanda no Kanban para a Secretaria.',
       timestamp: '13:20',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -214,6 +220,8 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Excelente trabalho, Gabriel! Mantenha a atenção aos demais contatos da carteira.',
       timestamp: '13:25',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ]

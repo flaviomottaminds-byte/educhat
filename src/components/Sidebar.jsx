@@ -33,19 +33,29 @@ import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
 import { formatRelativeChatTime, parseDateSafely } from '../lib/timezone';
 
-// 1. FILTRO DE NÃO LIDAS (UNREAD COUNT):
+// 1. FILTRO DE NÃO LIDAS (UNREAD COUNT) COM CONTROLE DE TIMESTAMP:
 // A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
-// A regra de contagem deve ser estritamente: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
-// AND o status é não lido (is_read === false ou status !== 'read'). Nunca conte o .length total do array.
-export function countUnreadMessages(messageList, currentUserId) {
+// A regra de contagem: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
+// AND o status é não lido (is_read === false ou status !== 'read')
+// AND se houver lastReadTimestamp persistido, apenas mensagens posteriores a esse timestamp.
+export function countUnreadMessages(messageList, currentUserId, lastReadTimestamp = null) {
   if (!Array.isArray(messageList) || messageList.length === 0) return 0;
   try {
+    const lastReadTime = lastReadTimestamp ? new Date(lastReadTimestamp).getTime() : 0;
     return messageList.filter((m) => {
       if (!m || typeof m !== 'object') return false;
-      // O remetente é o contato: sender_id !== currentUser.id ou fromMe === false
       const senderId = m.senderId || m.sender_id;
       const isFromMe = (senderId && currentUserId) ? senderId === currentUserId : Boolean(m.fromMe);
       if (isFromMe) return false;
+
+      // Se há um timestamp de última leitura persistido, descarta mensagens anteriores ou iguais
+      if (lastReadTime > 0) {
+        const rawTime = m.created_at || m.timestampRaw;
+        const msgTime = rawTime ? new Date(rawTime).getTime() : 0;
+        if (msgTime > 0 && msgTime <= lastReadTime) {
+          return false;
+        }
+      }
 
       // Status é não lido: is_read === false ou status !== 'read'
       const isRead =
@@ -69,6 +79,8 @@ export default function Sidebar({
   whatsAppContacts = [],
   activeChat = { type: 'channel', id: 'c-geral' }, // { type: 'channel' | 'dm' | 'whatsapp', id: string }
   messages = {},
+  channelReadReceipts = {},
+  dmReadReceipts = {},
   onSelectChannel,
   onSelectCollaborator,
   onSelectWhatsAppContact,
@@ -242,11 +254,8 @@ export default function Sidebar({
     if (!c) return sum;
     const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
     const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
-    const count = isChannelActive ? 0 : (
-      channelMessages.length > 0
-        ? countUnreadMessages(channelMessages, currentUserId)
-        : Number((c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0)
-    );
+    const lastReadAt = channelReadReceipts?.[c.id] || channelReadReceipts?.[c.name];
+    const count = isChannelActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
     return sum + Number(count || 0);
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
@@ -255,7 +264,8 @@ export default function Sidebar({
       ? messages[dmKey]
       : (Array.isArray(messages?.[u.id]) ? messages[u.id] : []);
     const isDmActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === u.id;
-    const count = isDmActive ? 0 : countUnreadMessages(sessionMessages, currentUserId);
+    const lastReadAt = dmReadReceipts?.[u.id] || dmReadReceipts?.[dmKey];
+    const count = isDmActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
     return sum + Number(count || 0);
   }, 0);
 
@@ -629,7 +639,8 @@ export default function Sidebar({
                     const botDmKey = getChatKey({ type: 'dm', id: botCollaborator?.id || 'u_ia_copilot' }, currentUserId);
                     const botMessages = Array.isArray(messages?.[botDmKey]) ? messages[botDmKey] : [];
                     const isBotActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === (botCollaborator?.id || 'u_ia_copilot');
-                    const botUnread = isBotActive ? 0 : countUnreadMessages(botMessages, currentUserId);
+                    const botLastRead = dmReadReceipts?.[botCollaborator?.id || 'u_ia_copilot'];
+                    const botUnread = isBotActive ? 0 : countUnreadMessages(botMessages, currentUserId, botLastRead);
 
                     return botUnread > 0 ? (
                       <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
@@ -667,11 +678,8 @@ export default function Sidebar({
                     if (!c) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === c.name);
                     const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
-                    const channelUnread = isActive ? 0 : (
-                      channelMessages.length > 0
-                        ? countUnreadMessages(channelMessages, currentUserId)
-                        : Number((c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0)
-                    );
+                    const lastReadAt = channelReadReceipts?.[c.id] || channelReadReceipts?.[c.name];
+                    const channelUnread = isActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
                     return (
                       <button
                         type="button"
@@ -740,11 +748,8 @@ export default function Sidebar({
                       ? messages[dmKey]
                       : (Array.isArray(messages?.[user.id]) ? messages[user.id] : []);
 
-                    // 1. FILTRO DE NÃO LIDAS (UNREAD COUNT):
-                    // A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
-                    // A regra de contagem deve ser estritamente: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
-                    // AND o status é não lido (is_read === false ou status !== 'read'). Nunca conte o .length total do array.
-                    const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId);
+                    const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey];
+                    const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
                     return (
                       <div
                         key={user.id}
