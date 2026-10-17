@@ -36,6 +36,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Equipe, sejam todos muito bem-vindos ao EduChat! 🎉\n\nA partir de hoje, todas as nossas comunicações internas, alinhamentos intersetoriais e demandas no quadro Kanban serão centralizados aqui. O WhatsApp continuará sendo utilizado apenas para o atendimento aos nossos alunos e polos externos.\n\nConto com a colaboração e o empenho de todos para uma gestão mais ágil e transparente!',
       timestamp: '09:00',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -44,6 +48,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Ana Paula',
       text: 'Excelente iniciativa, Flávio! O time da Secretaria já está operando 100% alinhado por aqui.',
       timestamp: '09:15',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -52,6 +60,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Tatiane Salatinos',
       text: 'Comercial a postos! Vamos manter os encaminhamentos das matrículas e pendências registradas diretamente no Kanban.',
       timestamp: '09:20',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -62,6 +74,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Gabriel Carvalho',
       text: 'Bom dia time! Hoje temos 45 leads de MBA e Graduação na esteira de negociação. Vamos focar nos contatos de ontem com retorno pendente.',
       timestamp: '08:45',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -70,6 +86,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Tatiane Salatinos',
       text: 'Perfeito, Gabriel! Estou em contato com a aluna Mariana Costa para Pedagogia EAD. Já apresentei a matriz e condições especiais.',
       timestamp: '08:52',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -78,6 +98,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Michele Cristina',
       text: 'Estou atendendo os novos polos e leads corporativos vindos da campanha de pós-graduação.',
       timestamp: '09:05',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -88,6 +112,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Ana Paula',
       text: 'Meninas, concluímos a validação dos 28 históricos do Polo Campinas. Todos aptos para certificação.',
       timestamp: '09:10',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -96,6 +124,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Gislaine Santos',
       text: 'Perfeito, Ana! Já estou emitindo as declarações de conclusão e atualizando o status dos alunos no EduControl.',
       timestamp: '09:18',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -104,6 +136,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Larissa Machado',
       text: 'Lembrando que os chamados de 2ª via de diploma com prazo de 48h foram todos protocolados no sistema.',
       timestamp: '09:30',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -114,6 +150,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Raquel Lopes',
       text: 'Plantão de tutoria aberto! Alunos com dúvidas no TCC de Gestão e nos exercícios de Pedagogia já estão sendo respondidos no AVA.',
       timestamp: '08:30',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -122,6 +162,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Paulo do Vale',
       text: 'Excelente, Raquel! Os materiais complementares do módulo 3 foram disponibilizados na biblioteca virtual.',
       timestamp: '08:45',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -132,6 +176,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Ana Livia',
       text: 'Criativos da campanha de inverno aprovados pela diretoria. Iniciaremos a veiculação no Meta Ads e Google Ads hoje às 14h.',
       timestamp: '10:00',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -140,6 +188,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Yasmin',
       text: 'Métricas da semana: CPL reduziu 18% na campanha de MBA Executivo. O volume de leads qualificados subiu para 68/dia.',
       timestamp: '10:15',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -150,6 +202,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Paulo do Vale',
       text: 'Revisão das ementas dos cursos de pós concluída de acordo com as novas diretrizes do MEC.',
       timestamp: '09:40',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     },
     {
@@ -158,6 +214,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Lindomar',
       text: 'Agendamos o alinhamento com os coordenadores de polo para quinta-feira às 15h.',
       timestamp: '09:55',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -168,6 +228,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Luiz Augusto',
       text: 'Alinhamento com o Polo Salvador e parceiros do Nordeste em andamento. Contratos do Plano Fixo em fase de assinatura.',
       timestamp: '10:30',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],
@@ -178,6 +242,10 @@ export const INITIAL_MESSAGES = {
       senderName: 'Flávio Motta',
       text: 'Pauta da semana: monitoramento diário da esteira de conversão e acompanhamento das metas de retenção e atendimento WhatsApp.',
       timestamp: '08:00',
+      created_at: '2026-01-01T00:00:00.000Z',
+      timestampRaw: '2026-01-01T00:00:00.000Z',
+      status: 'read',
+      is_read: true,
       actionExtracted: false
     }
   ],

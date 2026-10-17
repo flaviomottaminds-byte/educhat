@@ -672,18 +672,26 @@ export default function App() {
   useEffect(() => {
     const userId = currentUser?.id || 'u1';
     try {
+      const defaults = {};
+      const baselineNow = new Date().toISOString();
+      INITIAL_CHANNELS.forEach((c) => {
+        defaults[c.id] = baselineNow;
+        defaults[c.name] = baselineNow;
+        defaults[c.id.replace(/^c-/, '')] = baselineNow;
+        defaults[`c-${c.name}`] = baselineNow;
+      });
+
       const savedC = localStorage.getItem(`educhat_channel_reads_${userId}`);
+      let nextC = defaults;
       if (savedC) {
-        setChannelReadReceipts(JSON.parse(savedC));
-      } else {
-        const defaults = {};
-        const now = new Date().toISOString();
-        INITIAL_CHANNELS.forEach((c) => {
-          defaults[c.id] = now;
-          defaults[c.name] = now;
-        });
-        setChannelReadReceipts(defaults);
+        try {
+          const parsed = JSON.parse(savedC);
+          nextC = { ...defaults, ...parsed };
+        } catch {}
       }
+      setChannelReadReceipts(nextC);
+      channelReadReceiptsRef.current = nextC;
+
       const savedDm = localStorage.getItem(`educhat_dm_reads_${userId}`);
       if (savedDm) {
         setDmReadReceipts(JSON.parse(savedDm));
@@ -975,11 +983,15 @@ export default function App() {
     // 1. Controle de Leitura em Canais (Grupos)
     if (chat.type === 'channel') {
       const channelId = chat.id;
+      const strippedId = channelId.replace(/^c-/, '');
+      const prefixedId = `c-${strippedId}`;
+
       setChannelReadReceipts((prev) => {
         const next = {
           ...prev,
           [channelId]: nowIso,
-          [channelId.replace(/^c-/, '')]: nowIso
+          [strippedId]: nowIso,
+          [prefixedId]: nowIso
         };
         try {
           localStorage.setItem(`educhat_channel_reads_${currentUserId}`, JSON.stringify(next));
@@ -992,15 +1004,25 @@ export default function App() {
       supabase
         .from('messages')
         .upsert([{
-          id: `sys_cread_${currentUserId}_${channelId}`,
+          id: `sys_cread_${currentUserId}_${prefixedId}`,
           chat_id: 'sys_channel_reads',
           sender_id: currentUserId,
           sender_name: currentUserRef.current?.name || 'User',
+          recipient_id: prefixedId,
           text: nowIso,
           timestamp: getSaoPauloTime(new Date())
         }], { onConflict: 'id' })
-        .then(() => {})
-        .catch(() => {});
+        .then(() => {}, () => {});
+
+      // Persiste também na tabela dedicada channel_read_receipts se ela existir
+      supabase
+        .from('channel_read_receipts')
+        .upsert([{
+          user_id: currentUserId,
+          channel_id: prefixedId,
+          last_read_at: nowIso
+        }], { onConflict: 'user_id,channel_id' })
+        .then(() => {}, () => {});
     }
 
     // 2. Controle de Leitura e UPDATE em Conversas 1-a-1 (DMs)
@@ -1445,7 +1467,7 @@ export default function App() {
       try {
         const { data: readReceipts } = await supabase
           .from('messages')
-          .select('id, chat_id, text')
+          .select('id, chat_id, text, recipient_id')
           .in('chat_id', ['sys_channel_reads', 'sys_dm_reads'])
           .eq('sender_id', activeUser.id);
 
@@ -1454,8 +1476,14 @@ export default function App() {
             const next = { ...prev };
             readReceipts.forEach((row) => {
               if (row.chat_id === 'sys_channel_reads' && row.text) {
-                const chId = row.id.replace(`sys_cread_${activeUser.id}_`, '');
-                if (chId) next[chId] = row.text;
+                const chId = row.recipient_id || row.id.replace(`sys_cread_${activeUser.id}_`, '');
+                if (chId) {
+                  const stripped = chId.replace(/^c-/, '');
+                  const prefixed = `c-${stripped}`;
+                  next[chId] = row.text;
+                  next[stripped] = row.text;
+                  next[prefixed] = row.text;
+                }
               }
             });
             try {
@@ -1480,6 +1508,33 @@ export default function App() {
             return next;
           });
         }
+
+        // Tenta também buscar na tabela dedicada channel_read_receipts (se existir)
+        try {
+          const { data: dedicatedReceipts } = await supabase
+            .from('channel_read_receipts')
+            .select('channel_id, last_read_at')
+            .eq('user_id', activeUser.id);
+          if (Array.isArray(dedicatedReceipts) && dedicatedReceipts.length > 0) {
+            setChannelReadReceipts((prev) => {
+              const next = { ...prev };
+              dedicatedReceipts.forEach((r) => {
+                if (r.channel_id && r.last_read_at) {
+                  const stripped = r.channel_id.replace(/^c-/, '');
+                  const prefixed = `c-${stripped}`;
+                  next[r.channel_id] = r.last_read_at;
+                  next[stripped] = r.last_read_at;
+                  next[prefixed] = r.last_read_at;
+                }
+              });
+              try {
+                localStorage.setItem(`educhat_channel_reads_${activeUser.id}`, JSON.stringify(next));
+              } catch {}
+              channelReadReceiptsRef.current = next;
+              return next;
+            });
+          }
+        } catch {}
       } catch (err) {
         console.warn('Aviso ao carregar recibos de leitura do Supabase:', err);
       }
@@ -1552,10 +1607,21 @@ export default function App() {
           if (!isFromMe && !isRead && key !== currentActiveKey) {
             // Se for canal, verifica contra o lastReadAt do canal
             if (key.startsWith('c-')) {
-              const chReadAt = channelReadReceiptsRef.current?.[key] || channelReadReceiptsRef.current?.[key.replace('c-', '')];
+              const stripped = key.replace(/^c-/, '');
+              const chReadAt =
+                channelReadReceiptsRef.current?.[key] ||
+                channelReadReceiptsRef.current?.[stripped] ||
+                channelReadReceiptsRef.current?.[`c-${stripped}`];
               if (chReadAt) {
-                const msgTime = new Date(m.created_at || m.timestamp || 0).getTime();
-                if (msgTime > 0 && msgTime <= new Date(chReadAt).getTime()) {
+                const rawTime = m.created_at || m.timestampRaw;
+                let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
+                if (!msgTime || isNaN(msgTime)) {
+                  if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
+                    return;
+                  }
+                  return;
+                }
+                if (msgTime <= new Date(chReadAt).getTime()) {
                   return;
                 }
               }
@@ -1567,8 +1633,15 @@ export default function App() {
               const partnerId = parts[0] === activeUser.id ? parts[1] : parts[0];
               const dmReadAt = dmReadReceiptsRef.current?.[partnerId] || dmReadReceiptsRef.current?.[key];
               if (dmReadAt) {
-                const msgTime = new Date(m.created_at || m.timestamp || 0).getTime();
-                if (msgTime > 0 && msgTime <= new Date(dmReadAt).getTime()) {
+                const rawTime = m.created_at || m.timestampRaw;
+                let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
+                if (!msgTime || isNaN(msgTime)) {
+                  if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
+                    return;
+                  }
+                  return;
+                }
+                if (msgTime <= new Date(dmReadAt).getTime()) {
                   return;
                 }
               }

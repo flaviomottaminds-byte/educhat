@@ -32,7 +32,7 @@ import {
   Volume2,
   UserMinus
 } from 'lucide-react';
-import { hasFullPortfolioAccess, isChatAssignedToUser, matchesDepartment } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
@@ -909,7 +909,7 @@ export default function ChatArea({
 
   const isManager = hasFullPortfolioAccess(currentUser);
   const isAssignedToMe = isChatAssignedToUser(target, currentUser);
-  const hasAccessToChat = !isWhatsApp || isManager || isAssignedToMe;
+  const hasAccessToChat = !isWhatsApp || canUserViewChat(target, currentUser);
 
   if (isWhatsApp && !hasAccessToChat) {
     return (

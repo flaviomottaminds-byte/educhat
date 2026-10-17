@@ -48,22 +48,34 @@ export function countUnreadMessages(messageList, currentUserId, lastReadTimestam
       const isFromMe = (senderId && currentUserId) ? senderId === currentUserId : Boolean(m.fromMe);
       if (isFromMe) return false;
 
-      // Se há um timestamp de última leitura persistido, descarta mensagens anteriores ou iguais
-      if (lastReadTime > 0) {
-        const rawTime = m.created_at || m.timestampRaw;
-        const msgTime = rawTime ? new Date(rawTime).getTime() : 0;
-        if (msgTime > 0 && msgTime <= lastReadTime) {
-          return false;
-        }
-      }
-
-      // Status é não lido: is_read === false ou status !== 'read'
-      const isRead =
+      // Status explicitamente marcado como lido
+      const isExplicitRead =
         m.is_read === true ||
         m.status === 'read' ||
         (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
 
-      return !isRead;
+      if (isExplicitRead) return false;
+
+      // Se há um timestamp de última leitura persistido, descarta mensagens anteriores ou iguais
+      if (lastReadTime > 0) {
+        const rawTime = m.created_at || m.timestampRaw;
+        let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
+
+        if (!msgTime || isNaN(msgTime)) {
+          // Se não possui data ISO completa e é mensagem de semente/legada:
+          if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
+            return false;
+          }
+          // Se lastReadTime está registrado e a mensagem é antiga/legada
+          return false;
+        }
+
+        if (msgTime <= lastReadTime) {
+          return false;
+        }
+      }
+
+      return true;
     }).length;
   } catch (err) {
     console.warn('Erro ao calcular mensagens não lidas:', err);
@@ -255,7 +267,12 @@ export default function Sidebar({
     if (!c) return sum;
     const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
     const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
-    const lastReadAt = channelReadReceipts?.[c.id] || channelReadReceipts?.[c.name];
+    const strippedId = (c.id || '').replace(/^c-/, '');
+    const lastReadAt =
+      channelReadReceipts?.[c.id] ||
+      channelReadReceipts?.[c.name] ||
+      channelReadReceipts?.[strippedId] ||
+      channelReadReceipts?.[`c-${strippedId}`];
     const count = isChannelActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
     return sum + Number(count || 0);
   }, 0) + filteredCollaborators.reduce((sum, u) => {
@@ -327,15 +344,13 @@ export default function Sidebar({
             <Smartphone size={18} />
           </button>
 
-          {isDirector && (
-            <button
-              onClick={onOpenAIMemory}
-              title="Base de Conhecimento IA (Documentos e Regras)"
-              className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition cursor-pointer"
-            >
-              <Brain size={18} className="text-yellow-600 dark:text-yellow-400" />
-            </button>
-          )}
+          <button
+            onClick={onOpenAIMemory}
+            title="Base de Conhecimento IA (Documentos e Regras)"
+            className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition cursor-pointer"
+          >
+            <Brain size={18} className="text-yellow-600 dark:text-yellow-400" />
+          </button>
 
           <button
             onClick={onOpenAICopilot}
@@ -661,7 +676,7 @@ export default function Sidebar({
             <div>
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
                 <span>Canais ({accessibleChannels?.length || 0})</span>
-                {isDirector && (
+                {onOpenNewChannel && (
                   <button
                     type="button"
                     onClick={onOpenNewChannel}
@@ -679,7 +694,12 @@ export default function Sidebar({
                     if (!c) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === c.name);
                     const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
-                    const lastReadAt = channelReadReceipts?.[c.id] || channelReadReceipts?.[c.name];
+                    const strippedId = (c.id || '').replace(/^c-/, '');
+                    const lastReadAt =
+                      channelReadReceipts?.[c.id] ||
+                      channelReadReceipts?.[c.name] ||
+                      channelReadReceipts?.[strippedId] ||
+                      channelReadReceipts?.[`c-${strippedId}`];
                     const channelUnread = isActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
                     return (
                       <button
@@ -727,7 +747,7 @@ export default function Sidebar({
             <div>
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
                 <span>Conversas 1 a 1</span>
-                {isDirector && (
+                {onOpenNewCollaborator && (
                   <button
                     type="button"
                     onClick={onOpenNewCollaborator}
@@ -752,7 +772,7 @@ export default function Sidebar({
                     const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey];
                     const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
                     return (
-                      <div
+                       <div
                         key={user.id}
                         className="group/collab relative flex items-center"
                       >
@@ -800,7 +820,7 @@ export default function Sidebar({
                           </div>
                         </button>
 
-                        {isDirector && onEditCollaborator && (
+                        {onEditCollaborator && (
                           <button
                             type="button"
                             onClick={(e) => {
