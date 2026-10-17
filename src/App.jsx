@@ -629,6 +629,16 @@ export default function App() {
     }
   }, []);
 
+  // Histórico de Atribuição Round-Robin (para distribuir para o usuário há mais tempo sem receber atendimento)
+  const lastAssignmentMapRef = useRef({});
+  useEffect(() => {
+    try {
+      lastAssignmentMapRef.current = JSON.parse(localStorage.getItem('educhat_round_robin_history') || '{}');
+    } catch {
+      lastAssignmentMapRef.current = {};
+    }
+  }, []);
+
   // Controle de Recibos de Leitura Persistidos (Canais e DMs)
   const [channelReadReceipts, setChannelReadReceipts] = useState(() => {
     try {
@@ -1672,8 +1682,12 @@ export default function App() {
               existingIds.add(waKey);
               const asgn = storedAssignments[waKey];
               const initialContact = INITIAL_WHATSAPP_CONTACTS.find((c) => c.id === waKey);
-              const assignee = asgn?.assignee || initialContact?.assignee || 'Gabriel Carvalho';
-              const assignees = asgn?.assignees || (assignee ? [assignee] : ['Gabriel Carvalho']);
+              const assignee = asgn?.assignee || initialContact?.assignee || null;
+              const assignees = asgn?.assignees || (assignee ? [assignee] : []);
+              const assigned_to = asgn?.assigned_to || (collaboratorsRef.current.find((c) => c.name === assignee)?.id) || null;
+              const department = asgn?.department || initialContact?.department || 'Triagem URA';
+              const status = asgn?.status || initialContact?.status || (assignee ? 'carteira_ativa' : 'ura_inedito');
+              const statusLabel = asgn?.statusLabel || initialContact?.statusLabel || (assignee ? `Carteira • ${assignee}` : 'Fila • Triagem URA');
               const latestMsg = grouped[waKey]?.[grouped[waKey].length - 1];
               const rawDigits = waKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
@@ -1685,16 +1699,17 @@ export default function App() {
                 name: latestMsg?.senderName || `WhatsApp (${formattedPhone})`,
                 phone: formattedPhone,
                 avatar: '👤',
-                department: asgn?.department || 'Comercial',
+                department,
                 assignee,
                 assignees,
-                status: asgn?.status || 'ura_inedito',
-                statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
+                assigned_to,
+                status,
+                statusLabel,
                 aiActive: false,
                 lastInteraction: formatRelativeChatTime(rawLastTime),
                 lastMessageAt: rawLastTime,
                 triageContext: asgn
-                  ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}`
+                  ? (assignee ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}` : `Fila de ${department}: Aguardando atendente disponível.`)
                   : 'Histórico sincronizado do WhatsApp.',
                 unread_count: unreadCount,
                 unread: unreadCount
@@ -1857,6 +1872,7 @@ export default function App() {
                 online: p.is_bot ? true : p.online === true,
                 lastSeen: p.last_seen || null,
                 department: p.department || 'Comercial',
+                is_available: p.is_available !== false,
                 isBot: p.is_bot || false
               };
               const existingIdx = list.findIndex(
@@ -1874,6 +1890,38 @@ export default function App() {
             return list;
           });
         }
+
+        // 3B. Sincronização de Disponibilidade dos Usuários (Pausa / Almoço)
+        try {
+          const { data: availList } = await supabase
+            .from('messages')
+            .select('text')
+            .eq('chat_id', 'sys_user_availability');
+
+          if (Array.isArray(availList) && availList.length > 0) {
+            const availMap = {};
+            availList.forEach((row) => {
+              try {
+                const parsed = JSON.parse(row.text);
+                if (parsed.userId) availMap[parsed.userId] = parsed.is_available;
+              } catch {}
+            });
+
+            setCollaborators((prev) =>
+              prev.map((c) => ({
+                ...c,
+                is_available: availMap[c.id] !== undefined ? availMap[c.id] : (c.is_available !== false)
+              }))
+            );
+
+            setCurrentUser((prev) => {
+              if (prev?.id && availMap[prev.id] !== undefined) {
+                return { ...prev, is_available: availMap[prev.id] };
+              }
+              return prev;
+            });
+          }
+        } catch {}
       } catch {}
     } catch (err) {
       console.warn('Erro ao sincronizar dados com Supabase:', err);
@@ -2124,6 +2172,22 @@ export default function App() {
             };
           });
 
+          // Broadcast de disponibilidade de usuários em tempo real
+          if (row.chat_id === 'sys_user_availability') {
+            try {
+              const payload = JSON.parse(row.text);
+              if (payload.userId) {
+                setCollaborators((prev) =>
+                  prev.map((c) => (c.id === payload.userId ? { ...c, is_available: payload.is_available } : c))
+                );
+                if (currentUserRef.current?.id === payload.userId) {
+                  setCurrentUser((prev) => ({ ...prev, is_available: payload.is_available }));
+                }
+              }
+            } catch {}
+            return;
+          }
+
           // Se for contato WhatsApp: sobe para o topo da lista e soma +1 em unread_count se não estiver aberta
           if (cKey.startsWith('wa-')) {
             const asgnMatch = (row.text || '').match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
@@ -2175,12 +2239,13 @@ export default function App() {
                 updatedContact = {
                   ...existing,
                   department: asgnData?.department || existing.department,
-                  assignee: asgnData?.assignee || existing.assignee,
-                  assignees: asgnData?.assignees || existing.assignees || [asgnData?.assignee || existing.assignee].filter(Boolean),
+                  assignee: asgnData ? asgnData.assignee : existing.assignee,
+                  assignees: asgnData?.assignees || (asgnData ? (asgnData.assignee ? [asgnData.assignee] : []) : existing.assignees),
+                  assigned_to: asgnData?.assigned_to !== undefined ? asgnData.assigned_to : existing.assigned_to,
                   status: asgnData?.status || existing.status,
                   statusLabel: asgnData?.statusLabel || existing.statusLabel,
                   triageContext: asgnData?.updatedBy
-                    ? `Atribuído a ${asgnData.assignee} (${asgnData.department}) por ${asgnData.updatedBy}`
+                    ? (asgnData.assignee ? `Atribuído a ${asgnData.assignee} (${asgnData.department}) por ${asgnData.updatedBy}` : `Fila de ${asgnData.department}: Aguardando disponibilidade`)
                     : existing.triageContext,
                   lastInteraction: formatRelativeChatTime(incoming.created_at || incoming.timestampRaw || new Date().toISOString()),
                   lastMessageAt: incoming.created_at || incoming.timestampRaw || new Date().toISOString(),
@@ -2204,14 +2269,11 @@ export default function App() {
 
                 const finalName = matchedStudent?.name || incoming.senderName || `WhatsApp (${formattedPhone})`;
                 const finalAvatar = matchedStudent ? '🎓' : '👤';
-                const finalDept = matchedStudent?.department || asgnData?.department || cachedAsgn?.department || 'Comercial';
-                const finalAssignee = matchedStudent?.assignee || asgnData?.assignee || cachedAsgn?.assignee || 'Gabriel Carvalho';
-                const finalStatus = matchedStudent
-                  ? (matchedStudent.academicStatus === 'Certificado' || matchedStudent.academicStatus === 'Veterano' ? 'veterano_retencao' : 'carteira_ativa')
-                  : (asgnData?.status || cachedAsgn?.status || 'ura_inedito');
-                const finalStatusLabel = matchedStudent
-                  ? `${matchedStudent.academicStatus} • ${matchedStudent.course}`
-                  : (asgnData?.statusLabel || cachedAsgn?.statusLabel || 'Lead WhatsApp');
+                const finalDept = asgnData?.department || cachedAsgn?.department || 'Triagem URA';
+                const finalAssignee = asgnData?.assignee || cachedAsgn?.assignee || null;
+                const finalAssignedTo = asgnData?.assigned_to !== undefined ? asgnData.assigned_to : (cachedAsgn?.assigned_to || null);
+                const finalStatus = asgnData?.status || cachedAsgn?.status || (finalAssignee ? 'carteira_ativa' : 'ura_inedito');
+                const finalStatusLabel = asgnData?.statusLabel || cachedAsgn?.statusLabel || (finalAssignee ? `Carteira • ${finalAssignee}` : 'Fila • Triagem URA');
 
                 updatedContact = {
                   id: cKey,
@@ -2220,13 +2282,14 @@ export default function App() {
                   avatar: finalAvatar,
                   department: finalDept,
                   assignee: finalAssignee,
-                  assignees: [finalAssignee],
+                  assignees: finalAssignee ? [finalAssignee] : [],
+                  assigned_to: finalAssignedTo,
                   status: finalStatus,
                   statusLabel: finalStatusLabel,
                   aiActive: false,
                   lastInteraction: formatRelativeChatTime(incoming.created_at || incoming.timestampRaw || new Date().toISOString()),
                   lastMessageAt: incoming.created_at || incoming.timestampRaw || new Date().toISOString(),
-                  triageContext: 'Mensagem recebida via WhatsApp.',
+                  triageContext: finalAssignee ? `Atendimento atribuído a ${finalAssignee}` : 'Aguardando seleção de departamento na URA.',
                   unread_count: isCurrentActive ? 0 : 1,
                   unread: isCurrentActive ? 0 : 1
                 };
@@ -2278,36 +2341,36 @@ export default function App() {
               const contact = prevContacts.find((c) => c.id === cKey);
               if (!contact) return prevContacts;
 
-              if (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao') {
+              if (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao' || !contact.assignee) {
                 const triageResult = processTriageResponse(
                   incoming.text,
                   contact.status,
                   channelsRef.current,
-                  collaboratorsRef.current
+                  collaboratorsRef.current,
+                  lastAssignmentMapRef.current
                 );
                 if (triageResult) {
-                  setTimeout(() => {
-                    setWhatsAppContacts((list) =>
-                      list.map((c) =>
-                        c.id === cKey
-                          ? {
-                              ...c,
-                              department: triageResult.department,
-                              assignee: triageResult.assignee,
-                              status: 'carteira_ativa',
-                              statusLabel: 'Em Atendimento',
-                              aiActive: false,
-                              triageContext: `Encaminhado via URA: [${triageResult.triageLabel}] para ${triageResult.assignee}`
-                            }
-                          : c
-                      )
-                    );
+                  if (triageResult.assigned_to) {
+                    lastAssignmentMapRef.current[triageResult.assigned_to] = Date.now();
+                    try {
+                      localStorage.setItem('educhat_round_robin_history', JSON.stringify(lastAssignmentMapRef.current));
+                    } catch {}
+                  }
 
+                  handleUpdateChatAssignment(cKey, {
+                    department: triageResult.department,
+                    assignee: triageResult.assignee,
+                    assigned_to: triageResult.assigned_to,
+                    status: triageResult.assigned_to ? 'carteira_ativa' : 'fila_departamento',
+                    statusLabel: triageResult.assigned_to ? `Atendimento • ${triageResult.assignee}` : `Fila • ${triageResult.department}`
+                  });
+
+                  setTimeout(() => {
                     const botReply = {
                       id: 'bot_triage_' + Date.now(),
-                      senderId: 'bot',
-                      senderName: '🤖 Copiloto EduChat',
-                      text: `✅ ${triageResult.handOffMessage}`,
+                      senderId: 'u_matriz',
+                      senderName: 'EduChat Matriz (URA)',
+                      text: `✅ ${triageResult.handOffMessage}\n<!-- STATUS:delivered -->`,
                       timestamp: getSaoPauloTime(),
                       isWhatsApp: true,
                       fromStudent: false
@@ -2325,7 +2388,7 @@ export default function App() {
                       sender_name: botReply.senderName,
                       text: botReply.text,
                       timestamp: botReply.timestamp
-                    }]);
+                    }]).catch(() => {});
                   }, 500);
 
                   return prevContacts;
@@ -2999,26 +3062,25 @@ export default function App() {
       }
 
       // Se a mensagem enviada for a resposta de uma URA / Triagem (ex: "1", "2", "3", "4" ou texto correspondente)
-      if (contact && (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao')) {
-        const triageResult = processTriageResponse(text, contact.status, channels, collaborators);
+      if (contact && (contact.status === 'ura_inedito' || contact.status === 'veterano_retencao' || !contact.assignee)) {
+        const triageResult = processTriageResponse(text, contact.status, channels, collaborators, lastAssignmentMapRef.current);
         if (triageResult) {
+          if (triageResult.assigned_to) {
+            lastAssignmentMapRef.current[triageResult.assigned_to] = Date.now();
+            try {
+              localStorage.setItem('educhat_round_robin_history', JSON.stringify(lastAssignmentMapRef.current));
+            } catch {}
+          }
+
+          handleUpdateChatAssignment(contact.id, {
+            department: triageResult.department,
+            assignee: triageResult.assignee,
+            assigned_to: triageResult.assigned_to,
+            status: triageResult.assigned_to ? 'carteira_ativa' : 'fila_departamento',
+            statusLabel: triageResult.assigned_to ? `Atendimento • ${triageResult.assignee}` : `Fila • ${triageResult.department}`
+          });
+
           setTimeout(() => {
-            // 1. Atualizar contato
-            setWhatsAppContacts((prev) =>
-              prev.map((c) =>
-                c.id === contact.id
-                  ? {
-                      ...c,
-                      department: triageResult.department,
-                      assignee: triageResult.assignee,
-                      status: 'carteira_ativa',
-                      statusLabel: 'Em Atendimento',
-                      aiActive: false,
-                      triageContext: `Encaminhado via URA: [${triageResult.triageLabel}] para ${triageResult.assignee}`
-                    }
-                  : c
-              )
-            );
 
             // 2. Criar card no Kanban do setor correspondente
             const newTask = {
@@ -4269,22 +4331,25 @@ export default function App() {
     playMessageSound();
   };
 
-  // Reatribuição Manual de Fila e Consultor Responsável com Suporte a Co-atribuição Multi-departamental (Itens 2 e 3)
-  const handleUpdateChatAssignment = async (chatId, { department, assignee, assignees = [], status, statusLabel }) => {
+  // Reatribuição Manual / Automática de Fila e Consultor Responsável com Suporte a Round-Robin e Co-atribuição
+  const handleUpdateChatAssignment = async (chatId, { department, assignee, assignees = [], assigned_to, status, statusLabel }) => {
     if (!chatId) return;
     const timeStr = getSaoPauloTime();
 
     const allAssignees = Array.isArray(assignees) && assignees.length > 0
       ? Array.from(new Set(assignees.filter(Boolean)))
-      : [assignee || 'Gabriel Carvalho'];
-    const primaryAssignee = allAssignees[0] || assignee || 'Gabriel Carvalho';
+      : (assignee ? [assignee] : []);
+    const primaryAssignee = allAssignees[0] || assignee || null;
+    const assignedToId = assigned_to || (collaboratorsRef.current.find((c) => c.name === primaryAssignee)?.id) || null;
 
     // 1. Atualizar contatos locais imediatamente (Optimistic Update)
     setWhatsAppContacts((prev) => {
       const exists = prev.some((c) => c.id === chatId);
-      const triageContextText = allAssignees.length > 1
-        ? `Co-atribuído a ${allAssignees.join(' e ')} (${department}) por ${currentUser?.name || 'Gestão'}.`
-        : `Atribuído a ${primaryAssignee} (${department}) por ${currentUser?.name || 'Gestão'}.`;
+      const triageContextText = primaryAssignee
+        ? (allAssignees.length > 1
+            ? `Co-atribuído a ${allAssignees.join(' e ')} (${department}) por ${currentUser?.name || 'Gestão'}.`
+            : `Atribuído a ${primaryAssignee} (${department}) por ${currentUser?.name || 'Gestão'}.`)
+        : `Fila de ${department || 'Triagem'}: Aguardando atendente disponível.`;
 
       if (exists) {
         return prev.map((c) => {
@@ -4294,8 +4359,9 @@ export default function App() {
             department: department || c.department,
             assignee: primaryAssignee,
             assignees: allAssignees,
-            status: status || c.status || 'carteira_ativa',
-            statusLabel: statusLabel || (department ? `Carteira • ${department}` : c.statusLabel),
+            assigned_to: assignedToId,
+            status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
+            statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : c.statusLabel)),
             triageContext: triageContextText
           };
         });
@@ -4309,11 +4375,12 @@ export default function App() {
           name: `WhatsApp (${formattedPhone})`,
           phone: formattedPhone,
           avatar: '👤',
-          department: department || 'Comercial',
+          department: department || 'Triagem URA',
           assignee: primaryAssignee,
           assignees: allAssignees,
-          status: status || 'carteira_ativa',
-          statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+          assigned_to: assignedToId,
+          status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
+          statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
           aiActive: false,
           lastInteraction: 'Agora',
           triageContext: triageContextText
@@ -4332,6 +4399,7 @@ export default function App() {
             ...s,
             assignee: primaryAssignee,
             assignees: allAssignees,
+            assigned_to: assignedToId,
             department: department || s.department
           };
         }
@@ -4352,8 +4420,9 @@ export default function App() {
         department,
         assignee: primaryAssignee,
         assignees: allAssignees,
-        status: status || 'carteira_ativa',
-        statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+        assigned_to: assignedToId,
+        status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
+        statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
         updatedBy: currentUser?.name || 'Gestão',
         updatedAt: new Date().toISOString()
       };
@@ -4369,15 +4438,18 @@ export default function App() {
       department,
       assignee: primaryAssignee,
       assignees: allAssignees,
-      status: status || 'carteira_ativa',
-      statusLabel: statusLabel || (department ? `Carteira • ${department}` : 'Carteira Ativa'),
+      assigned_to: assignedToId,
+      status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
+      statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
       updatedBy: currentUser?.name || 'Gestão',
       timestamp: timeStr
     };
 
-    const auditNotice = allAssignees.length > 1
-      ? `📌 [Co-atribuição de Fila & Responsáveis] Atendimento compartilhado entre ${allAssignees.join(' e ')} (Fila: ${department}) por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
-      : `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${primaryAssignee}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
+    const auditNotice = primaryAssignee
+      ? (allAssignees.length > 1
+          ? `📌 [Co-atribuição de Fila & Responsáveis] Atendimento compartilhado entre ${allAssignees.join(' e ')} (Fila: ${department}) por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
+          : `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${primaryAssignee}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`)
+      : `📌 [Fila de Espera URA] Atendimento encaminhado para a fila "${department}" (Nenhum consultor disponível no momento).\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
 
     const systemMsg = {
       id: 'asgn_' + Date.now(),
@@ -4441,7 +4513,7 @@ export default function App() {
       (a) => normalizeName(a) !== normalizeName(userNameToRemove)
     );
 
-    const newPrimary = remaining[0] || 'Aguardando';
+    const newPrimary = remaining[0] || null;
 
     handleUpdateChatAssignment(chatId, {
       department: contact.department,
@@ -4450,6 +4522,59 @@ export default function App() {
       status: contact.status,
       statusLabel: contact.statusLabel
     });
+  };
+
+  // 2. CONTROLE DE DISPONIBILIDADE: Alternar entre "Disponível" e "Em Pausa" (Almoço/Folga)
+  const handleToggleAvailability = async () => {
+    if (!currentUser?.id) return;
+    const currentVal = currentUser?.is_available !== false;
+    const nextVal = !currentVal;
+
+    const updatedUser = { ...currentUser, is_available: nextVal };
+    setCurrentUser(updatedUser);
+    currentUserRef.current = updatedUser;
+
+    setCollaborators((prev) =>
+      prev.map((c) => (c.id === currentUser.id ? { ...c, is_available: nextVal } : c))
+    );
+
+    try {
+      localStorage.setItem('educhat_user_id', currentUser.id);
+      const savedList = JSON.parse(localStorage.getItem('educhat_collaborators') || '[]');
+      const nextList = savedList.map((c) =>
+        c.id === currentUser.id ? { ...c, is_available: nextVal } : c
+      );
+      localStorage.setItem('educhat_collaborators', JSON.stringify(nextList));
+    } catch {}
+
+    // Atualiza no Supabase imediatamente (profiles, collaborators e broadcast em messages)
+    try {
+      await supabase.from('profiles').update({ is_available: nextVal }).eq('id', currentUser.id);
+    } catch {}
+    try {
+      await supabase.from('collaborators').update({ is_available: nextVal }).eq('id', currentUser.id);
+    } catch {}
+
+    try {
+      await supabase.from('messages').upsert([
+        {
+          id: `sys_avail_${currentUser.id}`,
+          chat_id: 'sys_user_availability',
+          sender_id: currentUser.id,
+          sender_name: currentUser.name,
+          text: JSON.stringify({
+            userId: currentUser.id,
+            userName: currentUser.name,
+            department: currentUser.department,
+            is_available: nextVal,
+            updatedAt: new Date().toISOString()
+          }),
+          timestamp: getSaoPauloTime()
+        }
+      ], { onConflict: 'id' });
+    } catch (err) {
+      console.warn('Aviso ao sincronizar disponibilidade no Supabase:', err);
+    }
   };
 
   return (
@@ -4505,6 +4630,7 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           currentUser={currentUser}
+          onToggleAvailability={handleToggleAvailability}
           realtimeStatus={realtimeStatus}
           onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
           unreadCounts={unreadCounts}

@@ -24,6 +24,36 @@ const KNOWN_CONTACTS: Record<string, { id: string; name: string }> = {
   "551130594591": { id: "wa-5511930594591", name: "Flávio Alexandre Motta" },
 };
 
+// Departamentos e opções da URA
+const DEPARTMENTS_INFO: Record<string, { name: string; label: string; num: string; keywords: string[] }> = {
+  "1": { name: "Tutoria", label: "Tutoria e Apoio Pedagógico", num: "1️⃣", keywords: ["tutoria", "tutor", "duvida", "aula", "ead", "professor"] },
+  "2": { name: "Secretaria", label: "Secretaria Acadêmica e Documentos", num: "2️⃣", keywords: ["secretaria", "documento", "diploma", "certificado", "historico", "declaracao", "certidao"] },
+  "3": { name: "Pedagógico", label: "Coordenação Pedagógica", num: "3️⃣", keywords: ["pedagogico", "pedagogica", "coordenacao", "grade", "disciplina", "ementa", "matriz"] },
+  "4": { name: "Comercial", label: "Comercial e Novas Matrículas", num: "4️⃣", keywords: ["comercial", "matricula", "curso", "pos", "mba", "graduacao", "valor", "inscricao", "preco", "venda"] },
+  "5": { name: "Expansão", label: "Expansão e Polos Parceiros", num: "5️⃣", keywords: ["expansao", "polo", "parceria", "unidade", "convenio"] },
+  "6": { name: "Financeiro", label: "Financeiro e Boletos", num: "6️⃣", keywords: ["financeiro", "boleto", "pagamento", "fatura", "acordo", "mensalidade", "segunda via"] },
+  "7": { name: "Marketing", label: "Marketing e Comunicação", num: "7️⃣", keywords: ["marketing", "comunicacao", "imprensa", "divulgacao"] },
+};
+
+// Base de Colaboradores por Departamento (com suporte ao status is_available)
+const BASE_COLLABORATORS = [
+  { id: "u1", name: "Flávio Motta", department: "Diretoria", is_available: true },
+  { id: "u2", name: "Tatiane Salatinos", department: "Comercial", is_available: true },
+  { id: "u3", name: "Gabriel Carvalho", department: "Comercial", is_available: true },
+  { id: "u4", name: "Michele Cristina", department: "Comercial", is_available: true },
+  { id: "u5", name: "Clarice Oliveira", department: "Comercial", is_available: true },
+  { id: "u6", name: "Raquel Lopes", department: "Tutoria", is_available: true },
+  { id: "u7", name: "Ana Paula", department: "Secretaria", is_available: true },
+  { id: "u8", name: "Larissa Machado", department: "Secretaria", is_available: true },
+  { id: "u9", name: "Gislaine Santos", department: "Secretaria", is_available: true },
+  { id: "u10", name: "Ana Livia", department: "Marketing", is_available: true },
+  { id: "u11", name: "Paulo do Vale", department: "Pedagógico", is_available: true },
+  { id: "u12", name: "Luiz Augusto", department: "Expansão", is_available: true },
+  { id: "u13", name: "Wagner", department: "Comercial", is_available: true },
+  { id: "u14", name: "Yasmin", department: "Marketing", is_available: true },
+  { id: "u15", name: "Lindomar", department: "Pedagógico", is_available: true },
+];
+
 // Normalização canônica do número de WhatsApp (padrão único com 9º dígito móvel)
 function canonicalizeWhatsAppPhone(raw?: string | null): string {
   if (!raw) return "";
@@ -830,6 +860,261 @@ Deno.serve(async (req: Request) => {
       }
 
       const timeInfo = getBrasiliaTime(m?.messageTimestamp || Date.now());
+
+      // =========================================================================
+      // ETAPA 5A: ROTEAMENTO SEQUENCIAL URA + ROUND-ROBIN + CONTROLE DE DISPONIBILIDADE
+      // REQUISITO: A atribuição de um atendente DEVE ocorrer estritamente APÓS a escolha
+      // do departamento na URA. NENHUM atendente é atribuído antes da interação.
+      // =========================================================================
+      let isAlreadyAssigned = false;
+      try {
+        const { data: asgnRows } = await supabase
+          .from("messages")
+          .select("text")
+          .eq("chat_id", chatId)
+          .like("text", "%<!-- ASSIGNMENT:%")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (asgnRows && asgnRows.length > 0) {
+          const match = asgnRows[0].text.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
+          if (match) {
+            const parsedAsgn = JSON.parse(match[1]);
+            if (parsedAsgn.assigned_to || (parsedAsgn.assignee && !parsedAsgn.assignee.includes("URA") && !parsedAsgn.assignee.includes("Aguardando"))) {
+              isAlreadyAssigned = true;
+            }
+          }
+        }
+      } catch (_e) {}
+
+      // Se ainda NÃO está atribuído a um atendente, verifica se a mensagem é a ESCOLHA DA URA
+      if (!isAlreadyAssigned) {
+        const rawLower = (messageText || "").toLowerCase().trim();
+        let chosenDeptKey: string | null = null;
+
+        const numMatch = rawLower.match(/\b([1-7])\b/);
+        if (numMatch && DEPARTMENTS_INFO[numMatch[1]]) {
+          chosenDeptKey = numMatch[1];
+        } else {
+          for (const [key, d] of Object.entries(DEPARTMENTS_INFO)) {
+            if (rawLower.includes(d.name.toLowerCase()) || d.keywords.some((k) => rawLower.includes(k))) {
+              chosenDeptKey = key;
+              break;
+            }
+          }
+        }
+
+        // CASO 1: O aluno respondeu com a escolha do departamento na URA!
+        if (chosenDeptKey) {
+          const deptInfo = DEPARTMENTS_INFO[chosenDeptKey];
+          console.log(`🎯 [Roteamento URA] Aluno escolheu departamento: ${deptInfo.name}`);
+
+          // 1. Busca mapa de disponibilidade dos usuários no Supabase (sys_user_availability)
+          const { data: availRows } = await supabase
+            .from("messages")
+            .select("text")
+            .eq("chat_id", "sys_user_availability");
+
+          const availabilityMap: Record<string, boolean> = {};
+          if (Array.isArray(availRows)) {
+            for (const r of availRows) {
+              try {
+                const p = JSON.parse(r.text);
+                if (p.userId) availabilityMap[p.userId] = p.is_available;
+              } catch {}
+            }
+          }
+
+          // 2. Colaboradores do departamento escolhido
+          const deptUsers = BASE_COLLABORATORS.filter((c) => {
+            const cD = c.department.toLowerCase();
+            const tD = deptInfo.name.toLowerCase();
+            return cD.includes(tD) || tD.includes(cD);
+          });
+
+          // 3. Filtra apenas os que estão DISPONÍVEIS (is_available !== false)
+          const availableUsers = deptUsers.filter((c) => {
+            if (availabilityMap[c.id] !== undefined) return availabilityMap[c.id] === true;
+            return c.is_available !== false;
+          });
+
+          let assignedCollab: any = null;
+          let assignedId: string | null = null;
+          let assignedName: string | null = null;
+
+          if (availableUsers.length === 0) {
+            // SE TODOS estiverem em pausa: o chat fica assigned_to = null na fila do departamento, aguardando alguém ficar online
+            console.log(`⏸️ [Roteamento URA] Todos os consultores de ${deptInfo.name} estão em pausa. Chat permanece na fila (assigned_to = null).`);
+            assignedCollab = null;
+            assignedId = null;
+            assignedName = null;
+          } else if (availableUsers.length === 1) {
+            // Se 1 utilizador disponível: atribui a ele (assigned_to = ID)
+            assignedCollab = availableUsers[0];
+            assignedId = assignedCollab.id;
+            assignedName = assignedCollab.name;
+            console.log(`👤 [Roteamento URA] 1 consultor disponível em ${deptInfo.name}: Atribuído a ${assignedName} (${assignedId})`);
+          } else {
+            // Se múltiplos disponíveis: distribui via Round-Robin (para o utilizador há mais tempo sem receber atendimento)
+            const { data: recentAsgns } = await supabase
+              .from("messages")
+              .select("text, created_at")
+              .like("text", "%<!-- ASSIGNMENT:%")
+              .order("created_at", { ascending: false })
+              .limit(50);
+
+            const lastAssignedAt: Record<string, number> = {};
+            if (Array.isArray(recentAsgns)) {
+              for (const row of recentAsgns) {
+                try {
+                  const mText = row.text || "";
+                  const match = mText.match(/<!-- ASSIGNMENT:([\s\S]*?) -->/);
+                  if (match) {
+                    const data = JSON.parse(match[1]);
+                    const uId = data.assigned_to;
+                    if (uId && !lastAssignedAt[uId]) {
+                      lastAssignedAt[uId] = new Date(row.created_at).getTime();
+                    }
+                  }
+                } catch {}
+              }
+            }
+
+            const sorted = [...availableUsers].sort((a, b) => {
+              const tA = lastAssignedAt[a.id] || 0;
+              const tB = lastAssignedAt[b.id] || 0;
+              return tA - tB; // menor timestamp = há mais tempo sem receber atendimento
+            });
+
+            assignedCollab = sorted[0];
+            assignedId = assignedCollab.id;
+            assignedName = assignedCollab.name;
+            console.log(`🔄 [Roteamento URA] Round-Robin aplicado entre ${availableUsers.length} consultores. Selecionado: ${assignedName} (${assignedId})`);
+          }
+
+          // 4. Insere auditoria de atribuição no Supabase
+          const assignmentPayload = {
+            chatId,
+            department: deptInfo.name,
+            assignee: assignedName,
+            assigned_to: assignedId,
+            status: assignedId ? "carteira_ativa" : "fila_departamento",
+            statusLabel: assignedId ? `Atendimento • ${assignedName}` : `Fila • ${deptInfo.name}`,
+            updatedBy: "URA WhatsApp",
+            timestamp: timeInfo.timeStr
+          };
+
+          const auditNotice = assignedId
+            ? `📌 [Roteamento URA + Round-Robin] Atendimento direcionado para o setor "${deptInfo.name}" com o consultor "${assignedName}".\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
+            : `📌 [Roteamento URA] Atendimento direcionado para a fila do setor "${deptInfo.name}" (Todos os consultores em pausa/almoço).\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
+
+          await supabase.from("messages").insert([{
+            id: "asgn_" + Date.now(),
+            chat_id: chatId,
+            sender_id: "system",
+            sender_name: "EduChat (Sistema)",
+            text: auditNotice,
+            timestamp: timeInfo.timeStr
+          }]);
+
+          // 5. Envia mensagem de confirmação para o aluno no WhatsApp
+          const targetNumber = cleanPhone || remoteJid.replace("@s.whatsapp.net", "").replace("@lid", "");
+          const evoUrl = Deno.env.get("EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app";
+          const evoKey = Deno.env.get("EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
+          const evoInstance = Deno.env.get("EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
+
+          const confirmText = assignedId
+            ? `✅ Perfeito! Seu atendimento foi direcionado para o setor de *${deptInfo.name}* com o consultor(a) *${assignedName}*.\n\nO consultor já recebeu seu histórico e continuará seu atendimento em instantes!`
+            : `✅ Sua solicitação foi direcionada para a fila de *${deptInfo.name}*.\n\nNo momento todos os nossos consultores deste setor estão em intervalo/pausa (almoço). Seu atendimento está reservado com prioridade e você será atendido assim que um consultor retornar!`;
+
+          let sentConfirmId = "";
+          try {
+            const sendRes = await fetch(`${evoUrl}/message/sendText/${evoInstance}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", apikey: evoKey },
+              body: JSON.stringify({ number: targetNumber, text: confirmText })
+            });
+            if (sendRes.ok) {
+              const sData = await sendRes.json().catch(() => ({}));
+              sentConfirmId = sData?.key?.id || sData?.id || "";
+            }
+          } catch (_e) {}
+
+          const botConfirmMsg = {
+            id: sentConfirmId ? (sentConfirmId.startsWith("wa_") ? sentConfirmId : "wa_" + sentConfirmId) : "wa_ura_conf_" + Date.now(),
+            chat_id: chatId,
+            sender_id: "u_matriz",
+            sender_name: "EduChat Matriz (URA)",
+            text: `${confirmText}\n<!-- STATUS:delivered -->`,
+            timestamp: timeInfo.timeStr
+          };
+
+          await supabase.from("messages").upsert([botConfirmMsg], { onConflict: "id" });
+          insertedMessages.push(botConfirmMsg);
+
+          continue;
+        }
+
+        // CASO 2: Mensagem recebida antes de passar pela URA (primeiro contato / saudação)
+        // Se estiver em horário comercial, envia o menu de opções da URA
+        if (!timeInfo.isAfterHours) {
+          let sentUraRecently = false;
+          try {
+            const { data: recentUra } = await supabase
+              .from("messages")
+              .select("created_at")
+              .eq("chat_id", chatId)
+              .eq("sender_id", "u_matriz")
+              .like("text", "%Para agilizarmos seu atendimento%")
+              .order("created_at", { ascending: false })
+              .limit(1);
+
+            if (recentUra && recentUra.length > 0) {
+              const lastUraTime = new Date(recentUra[0].created_at).getTime();
+              if (Date.now() - lastUraTime < 15 * 60 * 1000) {
+                sentUraRecently = true;
+              }
+            }
+          } catch (_e) {}
+
+          if (!sentUraRecently) {
+            const uraMenu = `Olá! Seja muito bem-vindo(a) à nossa instituição! 👋\n\nPara agilizarmos seu atendimento com o consultor ideal, por favor digite o número da opção desejada:\n\n1️⃣ Tutoria e Apoio Pedagógico\n2️⃣ Secretaria Acadêmica e Documentos\n3️⃣ Coordenação Pedagógica\n4️⃣ Comercial e Novas Matrículas\n5️⃣ Expansão e Polos Parceiros\n6️⃣ Financeiro e Boletos\n7️⃣ Marketing e Comunicação`;
+
+            const targetNumber = cleanPhone || remoteJid.replace("@s.whatsapp.net", "").replace("@lid", "");
+            const evoUrl = Deno.env.get("EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app";
+            const evoKey = Deno.env.get("EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
+            const evoInstance = Deno.env.get("EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
+
+            let sentMenuId = "";
+            try {
+              const sRes = await fetch(`${evoUrl}/message/sendText/${evoInstance}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", apikey: evoKey },
+                body: JSON.stringify({ number: targetNumber, text: uraMenu })
+              });
+              if (sRes.ok) {
+                const sData = await sRes.json().catch(() => ({}));
+                sentMenuId = sData?.key?.id || sData?.id || "";
+              }
+            } catch (_e) {}
+
+            const botMenuMsg = {
+              id: sentMenuId ? (sentMenuId.startsWith("wa_") ? sentMenuId : "wa_" + sentMenuId) : "wa_ura_menu_" + Date.now(),
+              chat_id: chatId,
+              sender_id: "u_matriz",
+              sender_name: "EduChat Matriz (URA)",
+              text: `${uraMenu}\n<!-- STATUS:delivered -->`,
+              timestamp: timeInfo.timeStr
+            };
+
+            await supabase.from("messages").upsert([botMenuMsg], { onConflict: "id" });
+            insertedMessages.push(botMenuMsg);
+
+            // Chat permanece aguardando escolha na URA (assigned_to = null)
+            continue;
+          }
+        }
+      }
 
       // LOGS DE DIAGNÓSTICO OBRIGATÓRIOS (Item 3)
       if (!timeInfo.isAfterHours) {

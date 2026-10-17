@@ -100,6 +100,7 @@ export default function Sidebar({
   theme = 'light',
   onToggleTheme,
   currentUser = {},
+  onToggleAvailability,
   realtimeStatus = 'connected',
   onOpenUserSelectModal,
   unreadCounts = {},
@@ -826,8 +827,38 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* Rodapé: Perfil Ativo (Foto, Nome, Cargo, Trocar e Alternador de Tema) */}
+      {/* Rodapé: Perfil Ativo (Disponibilidade, Foto, Nome, Cargo, Trocar e Alternador de Tema) */}
       <div className="p-3 bg-chatPanel border-t border-chatBorder">
+        {/* 2. CONTROLE DE DISPONIBILIDADE: Alternador Visual entre "Disponível" e "Em Pausa" */}
+        <button
+          type="button"
+          onClick={onToggleAvailability}
+          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition cursor-pointer mb-2.5 ${
+            currentUser?.is_available !== false
+              ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+              : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+          }`}
+          title={
+            currentUser?.is_available !== false
+              ? 'Status atual: Disponível. Clique para entrar Em Pausa (almoço/folga)'
+              : 'Status atual: Em Pausa. Clique para ficar Disponível para receber atendimentos'
+          }
+        >
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                currentUser?.is_available !== false ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+              }`}
+            />
+            <span className="font-medium">
+              {currentUser?.is_available !== false ? 'Disponível' : 'Em Pausa (Almoço)'}
+            </span>
+          </div>
+          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-white/70 dark:bg-black/40 shadow-xs">
+            {currentUser?.is_available !== false ? 'Pausar' : 'Ativar'}
+          </span>
+        </button>
+
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 truncate">
             <div className="w-8 h-8 rounded-full bg-brand-700 flex items-center justify-center text-base shadow-xs shrink-0">

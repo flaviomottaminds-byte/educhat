@@ -358,6 +358,8 @@ export function generateDynamicURAMenu(channels = [], collaborators = []) {
 }
 
 // Motor Central de Decisão do Webhook
+// REGRA REESTRUTURADA: Nenhuma auto-atribuição de atendente ocorre antes da escolha da URA.
+// A atribuição DEVE ocorrer estritamente APÓS a escolha do departamento na URA.
 export function routeIncomingWhatsAppWebhook({
   fromPhone,
   senderName = 'Contato WhatsApp',
@@ -372,22 +374,11 @@ export function routeIncomingWhatsAppWebhook({
   const cleanPhone = (fromPhone || '').replace(/\D/g, '');
   const timeInfo = getBrasiliaTime();
 
-  // =========================================================================
-  // LOGS DE DIAGNÓSTICO (Item 3)
-  // =========================================================================
   if (!timeInfo.isAfterHours) {
-    console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
+    console.log(`⏸️ [Decisão Webhook] Horário Comercial (Hora Brasília: ${timeInfo.timeStr})`);
   } else {
-    console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
+    console.log(`🤖 [Decisão Webhook] Fora de Expediente (Hora Brasília: ${timeInfo.timeStr})`);
   }
-
-  // 1. Procura cards no Kanban atrelados a este telefone
-  const matchingTasks = tasks.filter((t) => {
-    const tPhone = (t.clientPhone || '').replace(/\D/g, '');
-    const inDesc = (t.desc || '').includes(cleanPhone) || (t.sourceMessage || '').includes(cleanPhone);
-    const inTitle = (t.title || '').toLowerCase().includes(senderName.toLowerCase().split(' ')[0]);
-    return (tPhone && tPhone === cleanPhone) || inDesc || inTitle;
-  });
 
   const existingContact = (contacts || []).find((c) => {
     if (!c) return false;
@@ -396,128 +387,84 @@ export function routeIncomingWhatsAppWebhook({
     return (cPhone && cPhone === cleanPhone) || (cIdDigits && cIdDigits === cleanPhone);
   });
 
-  // REGRA 2: Verifica se a conversa já está vinculada e "Aberta" por um colaborador humano
-  const isHumanInProgress = matchingTasks.some(
-    (t) => t.status === 'in_progress' && t.assignee && t.assignee !== 'Assistente IA' && t.assignee !== 'Bot de Triagem URA'
-  );
+  // Se o contato JÁ FOI explicitamente atendido/atribuído pós-URA por um consultor humano,
+  // mantém o atendimento com ele (sem reatribuir desnecessariamente a cada mensagem recebida)
+  const isAlreadyAssigned =
+    existingContact &&
+    existingContact.assignee &&
+    existingContact.assignee !== 'Bot de Triagem URA' &&
+    existingContact.assignee !== 'Assistente IA' &&
+    existingContact.assignee !== 'Aguardando' &&
+    existingContact.assignee !== 'Aguardando URA' &&
+    existingContact.status !== 'ura_inedito';
 
-  // SE FOR FORA DE EXPEDIENTE (após as 19h, antes das 8h ou fim de semana):
-  // A IA assume a conversa independentemente do número que envia a mensagem de teste,
-  // a menos que a conversa já esteja vinculada e "Aberta" em andamento por um colaborador humano.
-  if (timeInfo.isAfterHours && !isHumanInProgress) {
+  if (isAlreadyAssigned) {
+    const consultant = collaborators.find((c) => c.name === existingContact.assignee || c.id === existingContact.assigned_to);
+    return {
+      routeType: 'EXISTING_ASSIGNMENT',
+      door: 1,
+      doorName: 'Atendimento em Andamento (Já Atribuído Pós-URA)',
+      isDirectToConsultant: true,
+      targetAssignee: existingContact.assignee,
+      assigned_to: existingContact.assigned_to || consultant?.id || null,
+      targetDepartment: existingContact.department || 'Comercial',
+      consultantId: consultant?.id || existingContact.assigned_to || null,
+      notificationText: `📌 Mensagem de ${senderName} (${existingContact.assignee})`,
+      badgeNotificationUserIds: consultant ? [consultant.id] : [],
+      autoReply: null
+    };
+  }
+
+  // Se for fora de expediente e NÃO houver atendimento humano em andamento:
+  if (timeInfo.isAfterHours) {
     return {
       routeType: 'AFTER_HOURS_AI',
       door: 4,
       doorName: 'Porta Noturna: Autoatendimento IA Fora de Expediente',
       isDirectToConsultant: false,
-      targetAssignee: 'Assistente IA (Noturno)',
-      targetDepartment: existingContact?.department || 'Atendimento IA',
-      taskId: null,
+      targetAssignee: null,
+      assigned_to: null,
+      targetDepartment: existingContact?.department || 'Triagem URA',
       notificationText: `🌙 [Fora de Expediente] Mensagem de ${senderName} recebida pela IA.`,
       badgeNotificationUserIds: [],
       aiActive: true,
       systemMessage: `Fora de Expediente: IA assumiu o atendimento de ${senderName} (${timeInfo.timeStr} BRT).`,
-      autoReply: null // Gerado pelo Gemini dinamicamente no App
-    };
-  }
-
-  // =========================================================================
-  // HORÁRIO COMERCIAL (OU HUMANO ATIVO): REGRA DE PERMANÊNCIA DE CARTEIRA (STICKY ASSIGNMENT)
-  // =========================================================================
-  if (
-    existingContact &&
-    existingContact.assignee &&
-    existingContact.assignee !== 'Bot de Triagem URA' &&
-    existingContact.assignee !== 'Assistente IA' &&
-    existingContact.assignee !== 'Aguardando'
-  ) {
-    const consultant = collaborators.find((c) => c.name === existingContact.assignee);
-    return {
-      routeType: 'STICKY_PORTFOLIO',
-      door: 1,
-      doorName: 'Porta 1: Permanência de Carteira (Sticky Assignment)',
-      isDirectToConsultant: true,
-      targetAssignee: existingContact.assignee,
-      targetDepartment: existingContact.department || 'Comercial',
-      consultantId: consultant?.id || null,
-      taskId: null,
-      taskTitle: `Atendimento Contínuo: ${senderName}`,
-      notificationText: `📌 Mensagem de rechamada do seu lead ${senderName} (${existingContact.assignee})`,
-      badgeNotificationUserIds: consultant ? [consultant.id] : [],
-      kanbanBadgeUpdate: '🔥 Mensagem de Rechamada',
-      systemMessage: `Permanência de Carteira: Rechamada de ${senderName} mantida diretamente com ${existingContact.assignee} (${existingContact.department || 'Comercial'}).`,
       autoReply: null
     };
   }
 
-  // PORTA 1: Existe Card ATIVO com Consultor Específico (Carteira Ativa)
-  const activeTask = matchingTasks.find(
-    (t) => t.status !== 'done' && t.status !== 'concluido'
-  );
-
-  if (activeTask) {
-    const consultant = collaborators.find((c) => c.name === activeTask.assignee);
-    return {
-      routeType: 'ACTIVE_PORTFOLIO',
-      door: 1,
-      doorName: 'Porta 1: Carteira Ativa',
-      isDirectToConsultant: true,
-      targetAssignee: activeTask.assignee,
-      targetDepartment: activeTask.department,
-      consultantId: consultant?.id || null,
-      taskId: activeTask.id,
-      taskTitle: activeTask.title,
-      notificationText: `🔥 Mensagem do seu lead ${senderName} (${activeTask.title})`,
-      badgeNotificationUserIds: consultant ? [consultant.id] : [],
-      kanbanBadgeUpdate: '🔥 Mensagem Nova do Aluno',
-      systemMessage: `Mensagem roteada diretamente para a fila de ${activeTask.assignee} (Carteira Ativa). A triagem geral foi poupada de notificações.`,
-      autoReply: null
-    };
-  }
-
-  // PORTA 2: Existe Card CONCLUÍDO (Aluno Veterano / Opção C - Retenção via IA)
-  const concludedTask = matchingTasks.find(
-    (t) => t.status === 'done' || t.status === 'concluido'
-  );
-
+  // ENTRADA NORMAL: Qualquer nova mensagem antes da URA entra SEM atendente atribuído (assigned_to = null)
   const uraMenuText = generateDynamicURAMenu(channels, collaborators);
-
-  if (concludedTask) {
-    return {
-      routeType: 'VETERAN_RETENTION',
-      door: 2,
-      doorName: 'Porta 2: Aluno Veterano (Opção C)',
-      isDirectToConsultant: false,
-      targetAssignee: 'Assistente IA (Retenção)',
-      targetDepartment: 'Autoatendimento IA',
-      taskId: concludedTask.id,
-      notificationText: `🎓 Aluno veterano ${senderName} em autoatendimento IA.`,
-      badgeNotificationUserIds: [],
-      autoReply: `Olá, ${senderName}! Que bom falar com você novamente! 🎓\n\nIdentifiquei em nosso sistema que você já é nosso aluno(a). Para direcionarmos seu atendimento com rapidez, escolha uma opção:\n\n${uraMenuText.replace(/Olá! Seja muito bem-vindo\(a\) à nossa instituição! 👋\n\nPara agilizarmos seu atendimento com o consultor ideal, por favor digite o número da opção desejada:\n\n/, '')}`,
-      triagePrompt: 'Aguardando seleção do veterano no menu da URA'
-    };
-  }
-
-  // PORTA 3: Número Inédito (Primeiro Contato / URA Dinâmica de Entrada)
   return {
     routeType: 'BRAND_NEW_URA',
     door: 3,
-    doorName: 'Porta 3: Número Inédito (URA de Entrada)',
+    doorName: 'Triagem URA (Aguardando Seleção de Departamento)',
     isDirectToConsultant: false,
-    targetAssignee: 'Bot de Triagem URA',
-    targetDepartment: 'Triagem Inicial',
-    taskId: null,
-    notificationText: `✨ Novo lead inédito ${senderName} recebido na URA.`,
+    targetAssignee: null,
+    assigned_to: null,
+    targetDepartment: 'Triagem URA',
+    notificationText: `✨ Novo contato ${senderName} aguardando escolha na URA.`,
     badgeNotificationUserIds: [],
     autoReply: uraMenuText,
-    triagePrompt: 'URA de Entrada disparada. Aguardando escolha do lead.'
+    triagePrompt: 'URA disparada. Aguardando escolha de departamento do aluno.'
   };
 }
 
 /**
- * Processador de Resposta da URA ou Menu da IA com resolução dinâmica de departamentos e canais
+ * Processador de Resposta da URA com Round-Robin e Controle de Disponibilidade:
+ * 1. O motor de roteamento SÓ DEVE ser acionado quando o webhook/chat receber a seleção do departamento feita pelo aluno.
+ * 2. O sistema busca utilizadores do departamento selecionado onde is_available === true.
+ * 3. Se 1 utilizador disponível: atribui a ele (assigned_to = ID).
+ * 4. Se múltiplos disponíveis: distribui via Round-Robin (para o utilizador há mais tempo sem receber atendimento).
+ * 5. Se TODOS estiverem em pausa: o chat fica assigned_to = null na fila do departamento, aguardando alguém ficar online.
  */
-export function processTriageResponse(userChoiceText, contextType = 'ura_inedito', channels = [], collaborators = []) {
+export function processTriageResponse(
+  userChoiceText,
+  contextType = 'ura_inedito',
+  channels = [],
+  collaborators = [],
+  lastAssignmentMap = {}
+) {
   const text = (userChoiceText || '').toLowerCase().trim();
   const departments = getAvailableURADepartments(channels, collaborators);
 
@@ -551,26 +498,40 @@ export function processTriageResponse(userChoiceText, contextType = 'ura_inedito
     return null;
   }
 
-  // Localiza consultor do departamento nos colaboradores cadastrados
-  const deptCollab = (collaborators || []).find(
+  // 3. Busca utilizadores do departamento selecionado
+  const deptCollabs = (collaborators || []).filter(
     (c) => !c.isBot && matchesDepartment(c.department, matchedDept.name)
   );
 
-  // Fallback inteligente de consultores por setor caso não haja colaborador cadastrado na fila
-  const fallbackConsultants = {
-    'tutoria': { name: 'Raquel Lopes', id: 'u6' },
-    'secretaria': { name: 'Ana Paula', id: 'u7' },
-    'pedagógico': { name: 'Flávio Motta', id: 'u1' },
-    'comercial': { name: 'Gabriel Carvalho', id: 'u3' },
-    'expansão': { name: 'Luiz Augusto', id: 'u4' },
-    'marketing': { name: 'Yasmin', id: 'u_yasmin' },
-    'financeiro': { name: 'Flávio Motta', id: 'u1' }
-  };
+  // 4. Filtra apenas os que estão DISPONÍVEIS (is_available !== false)
+  const availableCollabs = deptCollabs.filter(
+    (c) => c.is_available !== false
+  );
 
-  const assignedUser = deptCollab || fallbackConsultants[normalizeName(matchedDept.name)] || {
-    name: deptCollab?.name || `Fila ${matchedDept.name}`,
-    id: deptCollab?.id || 'u1'
-  };
+  let assignedUser = null;
+  let isAllPaused = false;
+  let handOffMessage = '';
+
+  if (availableCollabs.length === 0) {
+    // SE TODOS estiverem em pausa (ou nenhum colaborador cadastrado):
+    // o chat fica assigned_to = null na fila do departamento, aguardando alguém ficar online.
+    isAllPaused = true;
+    assignedUser = null;
+    handOffMessage = `Sua solicitação foi direcionada para a fila de **${matchedDept.name}**. No momento todos os consultores deste setor estão em intervalo/pausa (almoço). Seu atendimento está reservado e você será atendido com prioridade assim que um consultor retornar!`;
+  } else if (availableCollabs.length === 1) {
+    // Se 1 utilizador disponível: atribui a ele (assigned_to = ID)
+    assignedUser = availableCollabs[0];
+    handOffMessage = `🎯 Demanda classificada e encaminhada para o setor de **${matchedDept.name}** com o consultor(a) **${assignedUser.name}**. O consultor já recebeu seu histórico!`;
+  } else {
+    // Se múltiplos disponíveis: distribui via Round-Robin (para o utilizador há mais tempo sem receber atendimento)
+    const sorted = [...availableCollabs].sort((a, b) => {
+      const timeA = typeof lastAssignmentMap[a.id] === 'number' ? lastAssignmentMap[a.id] : 0;
+      const timeB = typeof lastAssignmentMap[b.id] === 'number' ? lastAssignmentMap[b.id] : 0;
+      return timeA - timeB; // menor timestamp = há mais tempo sem receber atendimento
+    });
+    assignedUser = sorted[0];
+    handOffMessage = `🎯 Demanda classificada e encaminhada para o setor de **${matchedDept.name}** com o consultor(a) **${assignedUser.name}**. O consultor já recebeu seu histórico!`;
+  }
 
   // Localiza canal correspondente
   const matchingChannel = (channels || []).find(
@@ -581,13 +542,16 @@ export function processTriageResponse(userChoiceText, contextType = 'ura_inedito
 
   return {
     department: matchedDept.name,
-    assignee: assignedUser.name,
-    assigneeId: assignedUser.id,
+    assignee: assignedUser ? assignedUser.name : null,
+    assigneeId: assignedUser ? assignedUser.id : null,
+    assigned_to: assignedUser ? assignedUser.id : null,
+    isAllPaused,
+    availableCount: availableCollabs.length,
     channelId: matchingChannel?.id || `c-${normalizeName(matchedDept.name)}`,
     triageLabel: `${numEmoji} ${matchedDept.label}`,
     taskTitle: `Novo Atendimento: ${matchedDept.name}`,
     priority: matchedDept.name === 'Financeiro' || matchedDept.name === 'Comercial' ? 'alta' : 'media',
     isUpsell: contextType === 'veterano_retencao',
-    handOffMessage: `🎯 Demanda classificada e encaminhada para a fila de **${matchedDept.name}** com **${assignedUser.name}**. O consultor já recebeu seu histórico!`
+    handOffMessage
   };
 }
