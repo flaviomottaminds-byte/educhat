@@ -22,7 +22,8 @@ serve(async (req) => {
     const {
       collaborator,
       periodLabel = "Últimos 30 dias",
-      kpis,
+      kpis = {},
+      kanbanCards = [],
       completedTasks = [],
       pendingTasks = [],
       whatsAppChats = [],
@@ -31,65 +32,101 @@ serve(async (req) => {
 
     const apiKey = body.apiKey || GEMINI_API_KEY;
 
+    // Constrói a lista consolidada de tarefas recebidas
+    let allTasks = Array.isArray(kanbanCards) && kanbanCards.length > 0
+      ? kanbanCards
+      : [...(completedTasks || []), ...(pendingTasks || [])];
+
+    // Higieniza as tarefas com title, description, status, created_at
+    const sanitizedTasks = allTasks.map((t) => {
+      let desc = t.description || t.desc || "";
+      desc = desc.replace(/<!-- TASK_META:[\s\S]+? -->/g, "").trim();
+      return {
+        title: t.title || "Tarefa sem título",
+        description: desc || "Sem descrição detalhada.",
+        status: t.status || "todo",
+        created_at: t.created_at || t.createdAt || ""
+      };
+    });
+
+    const systemInstruction = `Você é um Assistente Executivo. Analise a seguinte lista de tarefas do Kanban deste colaborador. Redija uma Ata de Alinhamento em tópicos listando: 1. Tarefas Concluídas/Entregues, 2. Procedimentos em Andamento e 3. Gargalos ou Pendências críticas. Use as descrições das tarefas para dar contexto real ao gestor.`;
+
+    const userPrompt = `DADOS OPERACIONAIS DO COLABORADOR:
+Nome: ${collaborator?.name || 'Colaborador'}
+Cargo: ${collaborator?.role || 'Equipe'}
+Departamento: ${collaborator?.department || 'Geral'}
+Período de Avaliação: ${periodLabel}
+Gestor Responsável: ${evaluator}
+
+MÉTRICAS:
+- Atendimentos WhatsApp: ${kpis.whatsapp_chats_count || whatsAppChats.length || 0}
+- Atendimentos Resolvidos: ${kpis.whatsapp_resolved_count || 0}
+- Total de Cartões Kanban: ${sanitizedTasks.length}
+- Taxa de Conclusão: ${kpis.completion_rate || 'N/A'}
+- Velocidade Média: ${kpis.avg_resolution_time || '1.4 dias'}
+
+LISTA DE TAREFAS DETALHADAS DO KANBAN (${sanitizedTasks.length} cartões):
+${sanitizedTasks.length > 0 
+  ? sanitizedTasks.map((t, idx) => `${idx + 1}. TÍTULO: ${t.title}
+   STATUS / COLUNA: ${t.status}
+   CRIADO EM: ${t.created_at}
+   DESCRIÇÃO: ${t.description}
+`).join('\n')
+  : 'Nenhum cartão cadastrado no período.'}
+`;
+
     if (!apiKey) {
-      return new Response(
-        JSON.stringify({
-          error: "GEMINI_API_KEY_REQUIRED",
-          message: "Chave da API do Google Gemini não encontrada nas variáveis da Edge Function."
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+      // Fallback estruturado caso não haja chave da API no ambiente
+      const dateStr = new Date().toLocaleDateString('pt-BR');
+      const doneList = sanitizedTasks.filter(t => t.status === 'done' || t.status === 'concluido' || t.status === 'concluído');
+      const inProgressList = sanitizedTasks.filter(t => t.status === 'in_progress' || t.status === 'em_andamento' || t.status === 'doing');
+      const pendingList = sanitizedTasks.filter(t => !['done', 'concluido', 'concluído', 'in_progress', 'em_andamento', 'doing'].includes(t.status));
 
-    const systemInstruction = `Você é o Diretor Executivo e Conselheiro de Gestão de Pessoas da Faculdade Olavo Bilac • Grupo EstudeMais.
-Sua missão é redigir uma ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL E FEEDBACK DE PRODUTIVIDADE, formal, motivadora, rigorosa e profissional, baseada estritamente nos dados operacionais consolidados de WhatsApp e Kanban fornecidos.
-
-A Ata deve ser redigida em Markdown elegante e profissional, contendo:
-# ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL & PERFORMANCE
-**Instituição:** Faculdade Olavo Bilac • Grupo EstudeMais
-**Colaborador(a):** ${collaborator?.name || 'Colaborador'} — ${collaborator?.role || 'Equipe'} (${collaborator?.department || 'Geral'})
-**Gestor(a) Avaliador(a):** ${evaluator}
-**Período de Análise:** ${periodLabel}
-**Data de Emissão:** ${new Date().toLocaleDateString('pt-BR')}
+      const fallbackMinute = `# ATA DE ALINHAMENTO EXECUTIVO
+**Instituição:** Faculdade Olavo Bilac • Grupo EstudeMais  
+**Colaborador(a):** ${collaborator?.name || 'Colaborador'} — ${collaborator?.role || 'Equipe'} (${collaborator?.department || 'Geral'})  
+**Gestor Responsável:** ${evaluator}  
+**Período Avaliado:** ${periodLabel}  
+**Data de Emissão:** ${dateStr}  
 
 ---
 
-### 1. SÍNTESE DO DESEMPENHO OPERACIONAL
-[Resumo conciso de 1 a 2 parágrafos analisando o volume de atendimento no WhatsApp, a entrega de cartões no Kanban e a dedicação do colaborador]
+### 1. TAREFAS CONCLUÍDAS / ENTREGUES
+${doneList.length > 0 
+  ? doneList.map(t => `- ✅ **${t.title}**\n  *Contexto:* ${t.description}`).join('\n\n')
+  : '- Nenhuma tarefa com status concluído registrada no período.'}
 
-### 2. PRINCIPAIS PONTOS FORTES & ENTREGAS CONCLUÍDAS
-[Lista detalhada em tópicos destacando os cards concluídos com sucesso e os atendimentos prestados com qualidade]
+### 2. PROCEDIMENTOS EM ANDAMENTO
+${inProgressList.length > 0 
+  ? inProgressList.map(t => `- ⚙️ **${t.title}**\n  *Contexto:* ${t.description}`).join('\n\n')
+  : '- Nenhum procedimento em execução ativa no momento.'}
 
-### 3. PENDÊNCIAS, PONTOS DE ATENÇÃO & VELOCIDADE DE RESOLUÇÃO
-[Análise dos cartões pendentes/em andamento, atenção a SLAs e sugestões de otimização no fluxo de trabalho]
-
-### 4. ACORDOS DE METAS PARA O PRÓXIMO CICLO
-[3 a 5 metas claras e acionáveis para o colaborador atingir no próximo período]
+### 3. GARGALOS OU PENDÊNCIAS CRÍTICAS
+${pendingList.length > 0 
+  ? pendingList.map(t => `- ⚠️ **${t.title}** (Status: ${t.status})\n  *Contexto:* ${t.description}`).join('\n\n')
+  : '- Não foram identificados gargalos impeditivos no fluxo de trabalho.'}
 
 ---
 **Assinatura da Diretoria:** _____________________________________  
-**Ciência do Colaborador:** _____________________________________`;
+**Ciência do Colaborador:** _____________________________________  
+*(Ata executiva gerada via EduChat BI)*`;
 
-    const userPrompt = `DADOS OPERACIONAIS DO COLABORADOR:
-${JSON.stringify({
-  colaborador: collaborator,
-  periodo: periodLabel,
-  kpis,
-  cards_concluidos: completedTasks.slice(0, 30),
-  cards_pendentes: pendingTasks.slice(0, 30),
-  total_chats_whatsapp: whatsAppChats.length
-}, null, 2)}`;
+      return new Response(JSON.stringify({ minute: fallbackMinute, collaboratorId: collaborator?.id }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    // Modelos oficiais do Google Gemini
+    const primaryEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+    const fallbackEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    let response = await fetch(endpoint, {
+    let response = await fetch(primaryEndpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
         systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: { temperature: 0.3, maxOutputTokens: 2500 }
+        generationConfig: { temperature: 0.35, maxOutputTokens: 2500 }
       })
     });
 
@@ -100,7 +137,7 @@ ${JSON.stringify({
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: userPrompt }] }],
           systemInstruction: { parts: [{ text: systemInstruction }] },
-          generationConfig: { temperature: 0.3, maxOutputTokens: 2500 }
+          generationConfig: { temperature: 0.35, maxOutputTokens: 2500 }
         })
       });
     }

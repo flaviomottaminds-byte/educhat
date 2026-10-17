@@ -4,8 +4,8 @@
 import { supabase } from './supabase';
 
 const GEMINI_ENDPOINT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-const PRIMARY_GEMINI_MODEL = 'gemini-2.5-flash';
-const FALLBACK_GEMINI_MODEL = 'gemini-2.0-flash';
+const PRIMARY_GEMINI_MODEL = 'gemini-2.0-flash';
+const FALLBACK_GEMINI_MODEL = 'gemini-1.5-flash';
 
 export function getGeminiApiKey() {
   if (typeof window === 'undefined') return '';
@@ -1234,6 +1234,7 @@ export async function generateCollaboratorAlignmentMinute({
   collaborator,
   periodLabel = 'Últimos 30 dias',
   kpis = {},
+  kanbanCards = [],
   completedTasks = [],
   pendingTasks = [],
   whatsAppChats = [],
@@ -1244,54 +1245,125 @@ export async function generateCollaboratorAlignmentMinute({
     apiKey = await syncGeminiApiKeyFromCloud();
   }
 
-  // 1. Tenta invocar via Edge Function do Supabase se disponível
+  // Consolidação e higienização dos cartões Kanban com os campos requeridos:
+  // title, description, status, created_at
+  let rawTasks = Array.isArray(kanbanCards) && kanbanCards.length > 0
+    ? kanbanCards
+    : [...(completedTasks || []), ...(pendingTasks || [])];
+
+  const sanitizedTasks = rawTasks.map((t) => {
+    let desc = t.description || t.desc || '';
+    desc = desc.replace(/<!-- TASK_META:[\s\S]+? -->/g, '').trim();
+    return {
+      title: t.title || 'Demanda Operacional',
+      description: desc || 'Sem descrição detalhada cadastrada.',
+      status: t.status || 'todo',
+      created_at: t.created_at || t.createdAt || ''
+    };
+  });
+
+  const payload = {
+    collaborator,
+    periodLabel,
+    kpis,
+    kanbanCards: sanitizedTasks,
+    completedTasks: sanitizedTasks.filter((t) => t.status === 'done' || t.status === 'concluido' || t.status === 'concluído'),
+    pendingTasks: sanitizedTasks.filter((t) => !['done', 'concluido', 'concluído'].includes(t.status)),
+    whatsAppChats,
+    evaluator,
+    apiKey
+  };
+
+  // 1. Tenta invocar via Edge Function do Supabase (tenta generate-executive-minute e depois generate-alignment-minute)
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
     if (supabaseUrl && anonKey) {
-      const edgeRes = await fetch(`${supabaseUrl}/functions/v1/generate-alignment-minute`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${anonKey}`,
-          'apikey': anonKey
-        },
-        body: JSON.stringify({
-          collaborator,
-          periodLabel,
-          kpis,
-          completedTasks,
-          pendingTasks,
-          whatsAppChats,
-          evaluator,
-          apiKey
-        })
-      });
+      const endpointsToTry = [
+        `${supabaseUrl}/functions/v1/generate-executive-minute`,
+        `${supabaseUrl}/functions/v1/generate-alignment-minute`
+      ];
 
-      if (edgeRes.ok) {
-        const data = await edgeRes.json();
-        if (data?.minute) {
-          return data.minute;
+      for (const endpoint of endpointsToTry) {
+        try {
+          const edgeRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${anonKey}`,
+              'apikey': anonKey
+            },
+            body: JSON.stringify(payload)
+          });
+
+          if (edgeRes.ok) {
+            const data = await edgeRes.json();
+            if (data?.minute) {
+              return data.minute;
+            }
+          }
+        } catch (callErr) {
+          console.warn(`[Edge Function] Tentativa em ${endpoint} não respondeu:`, callErr);
         }
       }
     }
   } catch (err) {
-    console.warn('[Edge Function] Falha ao invocar generate-alignment-minute, utilizando fallback direto:', err);
+    console.warn('[Edge Function] Falha geral ao invocar Edge Functions, prosseguindo com fallback direto:', err);
   }
 
-  // 2. Fallback direto oficial via callGeminiEndpoint
-  if (!apiKey) {
-    // Fallback estruturado inteligente caso não haja chave da API configurada no ambiente
-    const dateStr = new Date().toLocaleDateString('pt-BR');
-    const tasksDoneList = completedTasks.length > 0
-      ? completedTasks.map((t) => `- ✅ **${t.title}** (Prioridade: ${t.priority || 'Média'})`).join('\n')
-      : '- Nenhum cartão concluído registrado neste período.';
+  // 2. Fallback direto oficial via Gemini API
+  const systemInstruction = `Você é um Assistente Executivo. Analise a seguinte lista de tarefas do Kanban deste colaborador. Redija uma Ata de Alinhamento em tópicos listando: 1. Tarefas Concluídas/Entregues, 2. Procedimentos em Andamento e 3. Gargalos ou Pendências críticas. Use as descrições das tarefas para dar contexto real ao gestor.`;
 
-    const tasksPendingList = pendingTasks.length > 0
-      ? pendingTasks.map((t) => `- ⏳ **${t.title}** (Status: ${t.status || 'Pendente'} • Prazo: ${t.dueDate || 'A definir'})`).join('\n')
-      : '- Nenhuma pendência em aberto registrada.';
+  const userPrompt = `DADOS OPERACIONAIS DO COLABORADOR:
+Nome: ${collaborator?.name || 'Colaborador'}
+Cargo: ${collaborator?.role || 'Equipe'}
+Departamento: ${collaborator?.department || 'Geral'}
+Período de Avaliação: ${periodLabel}
+Gestor Responsável: ${evaluator}
 
-    return `# ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL & PERFORMANCE
+MÉTRICAS:
+- Atendimentos WhatsApp Atribuídos: ${kpis.whatsapp_chats_count || whatsAppChats.length || 0}
+- Atendimentos Resolvidos: ${kpis.whatsapp_resolved_count || 0}
+- Total de Cartões no Kanban: ${sanitizedTasks.length}
+- Taxa de Conclusão: ${kpis.completion_rate || 'N/A'}
+- Velocidade Média: ${kpis.avg_resolution_time || '1.4 dias'}
+
+LISTA DE TAREFAS DETALHADAS DO KANBAN (${sanitizedTasks.length} cartões):
+${sanitizedTasks.length > 0 
+  ? sanitizedTasks.map((t, idx) => `${idx + 1}. TÍTULO: ${t.title}
+   STATUS / COLUNA: ${t.status}
+   CRIADO EM: ${t.created_at}
+   DESCRIÇÃO: ${t.description}
+`).join('\n')
+  : 'Nenhum cartão cadastrado no período.'}
+`;
+
+  if (apiKey) {
+    try {
+      const rawResponse = await callGeminiEndpoint({
+        apiKey,
+        contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+        systemInstruction,
+        generationConfig: {
+          temperature: 0.35,
+          maxOutputTokens: 2500
+        }
+      });
+      if (rawResponse && rawResponse.trim().length > 50) {
+        return rawResponse.trim();
+      }
+    } catch (apiErr) {
+      console.warn('[Gemini API] Falha na chamada direta, utilizando gerador estruturado executivo:', apiErr);
+    }
+  }
+
+  // 3. Gerador Estruturado Executivo de Alta Fidelidade (Garante 100% de disponibilidade mesmo sem API externa ou offline)
+  const dateStr = new Date().toLocaleDateString('pt-BR');
+  const doneTasks = sanitizedTasks.filter((t) => t.status === 'done' || t.status === 'concluido' || t.status === 'concluído');
+  const inProgressTasks = sanitizedTasks.filter((t) => t.status === 'in_progress' || t.status === 'em_andamento' || t.status === 'doing');
+  const pendingTasksList = sanitizedTasks.filter((t) => !['done', 'concluido', 'concluído', 'in_progress', 'em_andamento', 'doing'].includes(t.status));
+
+  return `# ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL & PERFORMANCE
 **Instituição:** Faculdade Olavo Bilac • Grupo EstudeMais  
 **Colaborador(a):** ${collaborator?.name || 'Colaborador'} — ${collaborator?.role || 'Equipe'} (${collaborator?.department || 'Geral'})  
 **Gestor(a) Responsável:** ${evaluator}  
@@ -1300,95 +1372,25 @@ export async function generateCollaboratorAlignmentMinute({
 
 ---
 
-### 1. SÍNTESE DO DESEMPENHO OPERACIONAL
-Durante o período avaliado (${periodLabel}), o(a) colaborador(a) **${collaborator?.name}** demonstrou consistência nas operações do setor **${collaborator?.department}**. Registrou um volume expressivo de interações, mantendo **${kpis.whatsapp_chats_count || whatsAppChats.length} atendimentos no WhatsApp** sob sua responsabilidade e gerenciando **${kpis.kanban_total || (completedTasks.length + pendingTasks.length)} demandas no Kanban**.
+### 1. TAREFAS CONCLUÍDAS / ENTREGUES
+${doneTasks.length > 0
+  ? doneTasks.map((t) => `- ✅ **${t.title}** (Criado em: ${t.created_at ? new Date(t.created_at).toLocaleDateString('pt-BR') : 'Período ativo'})\n  *Contexto Operacional:* ${t.description}`).join('\n\n')
+  : '- Nenhum cartão concluído registrado neste período.'}
 
-A velocidade estimada de resolução operacional foi de **${kpis.avg_resolution_time || '1.4 dias'}**, mantendo uma taxa de entrega de **${kpis.completion_rate || '85%'}** das demandas planejadas.
+### 2. PROCEDIMENTOS EM ANDAMENTO
+${inProgressTasks.length > 0
+  ? inProgressTasks.map((t) => `- ⚙️ **${t.title}** (Status: Em Andamento)\n  *Contexto Operacional:* ${t.description}`).join('\n\n')
+  : '- Nenhum procedimento em execução ativa no momento.'}
 
-### 2. PRINCIPAIS PONTOS FORTES & ENTREGAS CONCLUÍDAS
-Entre as entregas de maior relevância operacional concluídas com sucesso pelo colaborador no período, destacam-se:
-${tasksDoneList}
-
-- Prontidão nas respostas e atendimento dedicado aos alunos e polos.
-- Cumprimento dos acordos de serviço (SLA) para solicitações críticas.
-
-### 3. PENDÊNCIAS, PONTOS DE ATENÇÃO & VELOCIDADE DE RESOLUÇÃO
-As seguintes demandas requerem priorização e atenção para fechamento imediato:
-${tasksPendingList}
-
-- Reduzir gargalos de resposta em horários de pico.
-- Garantir a atualização ágil dos status dos cartões na esteira Kanban.
-
-### 4. ACORDOS E METAS PARA O PRÓXIMO CICLO
-1. Manter taxa de conclusão de cartões no Kanban acima de 90%.
-2. Tempo de primeira resposta no WhatsApp inferior a 5 minutos durante o turno ativo.
-3. Concluir 100% das pendências listadas no tópico 3 até o final da próxima semana.
-4. Manter o status de disponibilidade ("Em Pausa" / "Disponível") sempre sincronizado para o roteamento correto da URA.
+### 3. GARGALOS OU PENDÊNCIAS CRÍTICAS
+${pendingTasksList.length > 0
+  ? pendingTasksList.map((t) => `- ⏳ **${t.title}** (Status: ${t.status || 'Pendente'})\n  *Contexto Operacional:* ${t.description}`).join('\n\n')
+  : '- Nenhuma pendência impeditiva registrada para o colaborador.'}
 
 ---
 **Assinatura da Diretoria:** _____________________________________  
 **Ciência do Colaborador:** _____________________________________  
-*(Ata gerada com base nos dados consolidados do EduChat BI)*`;
-  }
-
-  const systemInstruction = `Você é o Diretor Executivo e Conselheiro de Gestão de Pessoas da Faculdade Olavo Bilac • Grupo EstudeMais.
-Sua missão é redigir uma ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL E FEEDBACK DE PRODUTIVIDADE, formal, motivadora, analítica e profissional, baseada estritamente nos dados operacionais consolidados de WhatsApp e Kanban fornecidos.
-
-A Ata DEVE ser formatada estritamente no formato Markdown abaixo, mantendo clareza, alta elegância e precisão executiva:
-# ATA EXECUTIVA DE ALINHAMENTO INDIVIDUAL & PERFORMANCE
-**Instituição:** Faculdade Olavo Bilac • Grupo EstudeMais  
-**Colaborador(a):** ${collaborator?.name || 'Colaborador'} — ${collaborator?.role || 'Equipe'} (${collaborator?.department || 'Geral'})  
-**Gestor(a) Responsável:** ${evaluator}  
-**Período de Avaliação:** ${periodLabel}  
-**Data de Emissão:** ${new Date().toLocaleDateString('pt-BR')}  
-
----
-
-### 1. SÍNTESE DO DESEMPENHO OPERACIONAL
-[Resumo conciso de 1 a 2 parágrafos analisando o volume de atendimentos no WhatsApp, a entrega de cartões no Kanban e a postura operacional]
-
-### 2. PRINCIPAIS PONTOS FORTES & ENTREGAS CONCLUÍDAS
-[Lista detalhada em tópicos destacando os cards concluídos com sucesso e os atendimentos prestados com qualidade]
-
-### 3. PENDÊNCIAS, PONTOS DE ATENÇÃO & VELOCIDADE DE RESOLUÇÃO
-[Análise dos cartões pendentes/em andamento, atenção a prazos de SLA e tempo médio de fechamento]
-
-### 4. ACORDOS DE METAS PARA O PRÓXIMO CICLO
-[3 a 5 metas claras e acionáveis para o colaborador atingir no próximo período]
-
----
-**Assinatura da Diretoria:** _____________________________________  
-**Ciência do Colaborador:** _____________________________________`;
-
-  const userPrompt = `DADOS OPERACIONAIS DO COLABORADOR:
-Nome: ${collaborator?.name}
-Cargo: ${collaborator?.role}
-Departamento: ${collaborator?.department}
-Período: ${periodLabel}
-Métricas Consolidadas:
-- Atendimentos WhatsApp Atribuídos: ${kpis.whatsapp_chats_count || whatsAppChats.length}
-- Atendimentos Resolvidos: ${kpis.whatsapp_resolved_count || 0}
-- Cards Kanban Concluídos: ${kpis.kanban_done_count || completedTasks.length}
-- Cards Kanban Pendentes: ${kpis.kanban_pending_count || pendingTasks.length}
-- Taxa de Conclusão: ${kpis.completion_rate || '0%'}
-- Velocidade Média de Resolução: ${kpis.avg_resolution_time || '1.5 dias'}
-
-CARTÕES CONCLUÍDOS RECENTEMENTE (${completedTasks.length}):
-${completedTasks.length > 0 ? completedTasks.map((t) => `- "${t.title}" (Prioridade: ${t.priority || 'media'})`).join('\n') : 'Nenhum'}
-
-CARTÕES PENDENTES / EM ANDAMENTO (${pendingTasks.length}):
-${pendingTasks.length > 0 ? pendingTasks.map((t) => `- "${t.title}" (Status: ${t.status || 'backlog'} • Prazo: ${t.dueDate || 'Pendente'})`).join('\n') : 'Nenhum'}`;
-
-  const rawResponse = await callGeminiEndpoint({
-    apiKey,
-    contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-    systemInstruction,
-    generationConfig: {
-      temperature: 0.35,
-      maxOutputTokens: 2500
-    }
-  });
-
-  return rawResponse.trim();
+*(Ata gerada com base nos dados reais do Kanban e WhatsApp — EduChat BI)*`;
 }
+
 

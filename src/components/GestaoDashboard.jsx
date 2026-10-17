@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from '../lib/portfolioAccess';
 import { generateCollaboratorAlignmentMinute } from '../lib/gemini';
+import { supabase } from '../lib/supabase';
 
 export default function GestaoDashboard({
   tasks = [],
@@ -226,6 +227,57 @@ export default function GestaoDashboard({
           ? 'Últimos 30 dias'
           : 'Todo o Período Histórico';
 
+      // 1. Busca os cartões reais daquele colaborador no Supabase (assigned_to === selectedUser.id)
+      let fetchedCards = [];
+      if (supabase && targetCollab?.id) {
+        try {
+          const { data: dbCards, error: dbErr } = await supabase
+            .from('tasks')
+            .select('title, description, status, created_at, assigned_to')
+            .eq('assigned_to', targetCollab.id);
+
+          if (!dbErr && Array.isArray(dbCards) && dbCards.length > 0) {
+            fetchedCards = dbCards;
+          } else {
+            // Tentativa complementar buscando por assignee (nome ou email)
+            const { data: nameCards, error: nameErr } = await supabase
+              .from('tasks')
+              .select('title, description, status, created_at, assignee')
+              .ilike('assignee', `%${targetCollab.name}%`);
+            if (!nameErr && Array.isArray(nameCards) && nameCards.length > 0) {
+              fetchedCards = nameCards;
+            }
+          }
+        } catch (queryErr) {
+          console.warn('[Dashboard] Aviso na consulta direta de tarefas do colaborador no Supabase:', queryErr);
+        }
+      }
+
+      // Se não retornou cartões da query remota (ou offline), recorre aos cartões em memória filtrados
+      if (!fetchedCards || fetchedCards.length === 0) {
+        const collabName = normalizeName(targetCollab.name || '');
+        const memoryCards = (tasks || []).filter((t) => {
+          if (!t) return false;
+          if (t.assigned_to && t.assigned_to === targetCollab.id) return true;
+          if (t.assigneeId && t.assigneeId === targetCollab.id) return true;
+          const taskAssignee = normalizeName(t.assignee || '');
+          return taskAssignee.includes(collabName) || collabName.includes(taskAssignee);
+        });
+        fetchedCards = memoryCards;
+      }
+
+      // 2. Extrai estritamente os campos: title, description, status, created_at
+      const enrichedCards = (fetchedCards || []).map((t) => {
+        let cleanDesc = t.description || t.desc || '';
+        cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]+? -->/g, '').trim();
+        return {
+          title: t.title || 'Demanda Operacional',
+          description: cleanDesc || 'Sem descrição detalhada.',
+          status: t.status || 'todo',
+          created_at: t.created_at || t.createdAt || new Date().toISOString()
+        };
+      });
+
       const minute = await generateCollaboratorAlignmentMinute({
         collaborator: targetCollab,
         periodLabel,
@@ -238,6 +290,7 @@ export default function GestaoDashboard({
           completion_rate: `${collabData.completionRate}%`,
           avg_resolution_time: avgResolutionTime
         },
+        kanbanCards: enrichedCards,
         completedTasks: collabData.completedTasksList,
         pendingTasks: collabData.pendingTasksList,
         whatsAppChats: collabData.chatsList,
