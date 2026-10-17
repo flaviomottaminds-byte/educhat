@@ -430,12 +430,13 @@ export default function App() {
 
   const [whatsAppContacts, setWhatsAppContacts] = useState(() => {
     try {
-      // RESET GERAL DE CARTEIRAS: limpa caches locais com atribuições desatualizadas
-      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v2');
+      // RESET GERAL: limpa caches locais com atribuições desatualizadas e timestamps de mensagens fantasmas
+      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v3');
       if (!resetFlag) {
         localStorage.removeItem('educhat_whatsapp_contacts');
         localStorage.removeItem('educhat_chat_assignments');
-        localStorage.setItem('educhat_reset_carteiras_v2', 'true');
+        localStorage.removeItem('educhat_messages_cache');
+        localStorage.setItem('educhat_reset_carteiras_v3', 'true');
         return INITIAL_WHATSAPP_CONTACTS;
       }
       const saved = localStorage.getItem('educhat_whatsapp_contacts');
@@ -1655,6 +1656,11 @@ export default function App() {
 
         dbMessages.forEach((m) => {
           if (!m.chat_id || m.chat_id.startsWith('sys_')) return;
+          // Ignora mensagens fantasmas vazias geradas por acks indevidos
+          const rawText = (m.text || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+          if (rawText === 'Mensagem recebida' || rawText === '💬 Mensagem recebida' || rawText === '') {
+            return;
+          }
           const key = normalizeChatKey(m.chat_id, activeUser.id);
 
           if (!grouped[key]) grouped[key] = [];
@@ -2247,6 +2253,12 @@ export default function App() {
                 return;
               }
             }
+          }
+
+          // Ignora mensagens fantasmas vazias geradas por acks indevidos
+          const rawRowText = (row.text || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+          if (rawRowText === 'Mensagem recebida' || rawRowText === '💬 Mensagem recebida' || rawRowText === '') {
+            return;
           }
 
           const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });

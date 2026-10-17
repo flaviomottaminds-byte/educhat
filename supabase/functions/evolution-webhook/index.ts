@@ -529,7 +529,7 @@ function extractMessageContent(
     return { text: msg.trim(), isAudio: false, isMedia: false };
   }
 
-  return { text: "💬 Mensagem recebida", isAudio: false, isMedia: false };
+  return { text: "", isAudio: false, isMedia: false };
 }
 
 Deno.serve(async (req: Request) => {
@@ -570,13 +570,15 @@ Deno.serve(async (req: Request) => {
     console.log("📥 [Evolution Webhook] Nova requisição recebida: " + formatSaoPauloTime() + " (SP) | " + new Date().toISOString() + " (UTC)");
     console.log("🏷️ Evento bruto: " + String(body?.event) + " | Instância: " + String(body?.instance));
 
-    const eventName = String(body?.event || "").toUpperCase();
+    const rawEvent = String(body?.event || "").toLowerCase().replace(/[-_]/g, ".");
+    const isNewMessageEvent = rawEvent === "messages.upsert" || rawEvent === "message.upsert";
 
-    // Filtra eventos que não envolvam mensagem
-    if (eventName.includes("CONNECTION") || eventName.includes("QRCODE")) {
-      console.log("ℹ️ Evento de estado de conexão ignorado para inserção de mensagens: " + eventName);
+    // 1. FILTRO RIGOROSO NO WEBHOOK: Apenas mensagens reais entrantes (messages.upsert)
+    // IGNORE e retorne 200 OK silenciosamente para eventos de messages.update, ack (recibos de entrega/leitura), presence.update, connection, etc.
+    if (!isNewMessageEvent) {
+      console.log(`ℹ️ [Evolution Webhook] Evento de status/ack/presença/sistema ignorado silenciosamente: ${body?.event}`);
       return new Response(
-        JSON.stringify({ success: true, message: "Evento " + eventName + " recebido com sucesso." }),
+        JSON.stringify({ success: true, message: `Evento ${body?.event} ignorado silenciosamente (apenas messages.upsert é persistido).` }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -623,6 +625,14 @@ Deno.serve(async (req: Request) => {
         body?.data?.fromMe === true ||
         String(body?.data?.fromMe) === "true"
       );
+
+      // 2. BLOQUEIO DE LOOP (PREVENÇÃO):
+      // Mensagens enviadas pela própria instância/API (fromMe: true) não devem ser reinseridas como novas mensagens nem gerar loops
+      if (fromMe) {
+        console.log("ℹ️ [Evolution Webhook] Ignorando evento com fromMe: true para evitar loops de sistema e mensagens fantasmas.");
+        continue;
+      }
+
       const isGroup = Boolean(
         remoteJid.endsWith("@g.us") ||
         remoteJidAlt.endsWith("@g.us") ||
@@ -647,34 +657,19 @@ Deno.serve(async (req: Request) => {
       }
 
       // Nome do remetente
-      let senderId = "";
-      let senderName = "";
-
-      if (fromMe) {
-        senderId = "u_matriz";
-        senderName = "EduChat Matriz (Oficial)";
-      } else {
-        senderId = chatId;
-        const pushName = String(m?.pushName || body?.data?.pushName || body?.pushName || "").trim();
-        senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
-      }
-
-      const isBotOrSystem = Boolean(
-        fromMe ||
-        senderId === "u_matriz" ||
-        senderId === "u_ia_copilot" ||
-        senderId === "bot" ||
-        senderId === "system" ||
-        senderId.startsWith("u_") ||
-        String(senderName).toLowerCase().includes("assistente ia") ||
-        String(senderName).toLowerCase().includes("educhat") ||
-        String(m?.pushName || "").toLowerCase().includes("educhat") ||
-        String(m?.pushName || "").toLowerCase().includes("assistente ia")
-      );
+      const pushName = String(m?.pushName || body?.data?.pushName || body?.pushName || "").trim();
+      const senderId = chatId;
+      const senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
 
       // Conteúdo da mensagem com unwrap completo e prioridades
       const content = extractMessageContent(m?.message || m, m, body);
-      const messageText = content.text;
+      const messageText = (content.text || "").trim();
+
+      // Descarte estrito de mensagens sem conteúdo real (evita gravar "Mensagem recebida" fantasma)
+      if (!messageText || messageText === "💬 Mensagem recebida" || messageText === "Mensagem recebida") {
+        console.log("⚠️ [Evolution Webhook] Mensagem sem conteúdo real de texto ou mídia descartada.");
+        continue;
+      }
 
       // Horário formatado estritamente no fuso oficial de São Paulo (America/Sao_Paulo)
       const timeStr = formatSaoPauloTime(m?.messageTimestamp || body?.data?.messageTimestamp || Date.now());
@@ -682,103 +677,6 @@ Deno.serve(async (req: Request) => {
       const rawId = keyObj.id || m?.id;
       const rawIdStr = rawId ? String(rawId) : "";
       const messageId = rawIdStr ? (rawIdStr.startsWith("wa_") ? rawIdStr : "wa_" + rawIdStr) : "wa_in_" + Date.now() + "_" + randomSuffix;
-
-      // =========================================================================
-      // TRATAMENTO DE ATUALIZAÇÃO DE STATUS (MESSAGES_UPDATE: sent -> delivered -> read)
-      // =========================================================================
-      if (eventName.includes("UPDATE") || m?.update) {
-        const updateStatusNum = Number(m?.update?.status ?? body?.data?.update?.status ?? m?.status ?? 0);
-        let newStatus = "";
-        if (updateStatusNum >= 4) newStatus = "read";
-        else if (updateStatusNum >= 3) newStatus = "delivered";
-        else if (updateStatusNum >= 2) newStatus = "sent";
-
-        if (newStatus && messageId) {
-          const { data: targetMsg } = await supabase
-            .from("messages")
-            .select("id, text")
-            .eq("id", messageId)
-            .maybeSingle();
-
-          if (targetMsg) {
-            let updatedText = targetMsg.text || "";
-            if (updatedText.includes("<!-- STATUS:")) {
-              updatedText = updatedText.replace(/<!-- STATUS:[^\s>]+ -->/g, `<!-- STATUS:${newStatus} -->`);
-            } else {
-              updatedText = `${updatedText}\n<!-- STATUS:${newStatus} -->`;
-            }
-            await supabase.from("messages").update({ text: updatedText }).eq("id", messageId);
-            console.log(`✅ [Evolution Webhook] Status da mensagem ${messageId} atualizado para ${newStatus}`);
-          }
-        }
-        continue;
-      }
-
-      // =========================================================================
-      // DEDUPLICAÇÃO DE MENSAGENS ENVIADAS (ECHO DO WEBHOOK fromMe: true)
-      // =========================================================================
-      if (fromMe) {
-        // 1. Tenta achar pelo id exato
-        let { data: existingMsg } = await supabase
-          .from("messages")
-          .select("id, text, sender_id, sender_name, timestamp")
-          .eq("id", messageId)
-          .maybeSingle();
-
-        // 2. Se não achou pelo id exato, verifica se existe mensagem recente enviada no mesmo chat com o mesmo texto
-        if (!existingMsg && messageText) {
-          const cleanIncoming = messageText
-            .replace(/<!--[\s\S]*?-->/g, "")
-            .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, "")
-            .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, "")
-            .trim();
-
-          if (cleanIncoming) {
-            const { data: candidateMsgs } = await supabase
-              .from("messages")
-              .select("id, text, sender_id, sender_name, timestamp")
-              .eq("chat_id", chatId)
-              .order("created_at", { ascending: false })
-              .limit(5);
-
-            if (candidateMsgs && candidateMsgs.length > 0) {
-              existingMsg = candidateMsgs.find((cm: any) => {
-                const cleanCm = (cm.text || "")
-                  .replace(/<!--[\s\S]*?-->/g, "")
-                  .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, "")
-                  .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, "")
-                  .trim();
-                return cleanCm === cleanIncoming;
-              }) || null;
-            }
-          }
-        }
-
-        if (existingMsg) {
-          console.log(`ℹ️ [Evolution Webhook] Mensagem enviada ${messageId} já existe no banco (${existingMsg.id}). Atualizando apenas status para delivered...`);
-          let updatedText = existingMsg.text || "";
-          if (updatedText.includes("<!-- STATUS:")) {
-            updatedText = updatedText.replace(/<!-- STATUS:[^\s>]+ -->/g, "<!-- STATUS:delivered -->");
-          } else {
-            updatedText = `${updatedText}\n<!-- STATUS:delivered -->`;
-          }
-
-          if (existingMsg.id !== messageId) {
-            await supabase
-              .from("messages")
-              .update({ id: messageId, text: updatedText })
-              .eq("id", existingMsg.id);
-          } else {
-            await supabase
-              .from("messages")
-              .update({ text: updatedText })
-              .eq("id", messageId);
-          }
-
-          insertedMessages.push({ id: messageId, status: "delivered", updated: true });
-          continue; // Pula a inserção para NUNCA criar nova linha no banco!
-        }
-      }
 
       // =========================================================================
       // LOGS DETALHADOS DE CADA ETAPA DA EXTRAÇÃO (Item 2)
