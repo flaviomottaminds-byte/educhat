@@ -829,6 +829,10 @@ export default function App() {
       return next;
     });
 
+    setCollaborators((prev) =>
+      prev.map((u) => (u.id === targetId || u.name === targetId ? { ...u, unread: 0, unread_count: 0 } : u))
+    );
+
     setWhatsAppContacts((prev) =>
       prev.map((c) => {
         const cPhoneDigits = (c.phone || '').replace(/\D/g, '');
@@ -845,7 +849,9 @@ export default function App() {
     stopTaskbarBlink();
   };
 
-  // Helper para marcar mensagens da conversa ativa como lidas no banco e no estado
+  // 2. AÇÃO DE LIMPEZA (MARK AS READ):
+  // Garante que a função acionada ao clicar em um contato da lista marque as mensagens pendentes como lidas
+  // no estado/banco e zere o badge verde imediatamente.
   const markMessagesAsRead = (chat) => {
     if (!chat) return;
     const currentUserId = currentUserRef.current?.id || 'u1';
@@ -858,19 +864,40 @@ export default function App() {
 
       let hasUnread = false;
       const updated = list.map((m) => {
-        if (m.senderId !== currentUserId && m.status !== 'read') {
+        const senderId = m.senderId || m.sender_id;
+        const isFromContact = senderId ? senderId !== currentUserId : !m.fromMe;
+        const isRead =
+          m.is_read === true ||
+          m.status === 'read' ||
+          (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+
+        if (isFromContact && !isRead) {
           hasUnread = true;
-          return { ...m, status: 'read' };
+          let newText = m.text || '';
+          if (typeof newText === 'string') {
+            if (newText.includes('<!-- STATUS:')) {
+              newText = newText.replace(/<!-- STATUS:[^\s>]+ -->/, '<!-- STATUS:read -->');
+            } else {
+              newText = `${newText}\n<!-- STATUS:read -->`;
+            }
+          }
+          return {
+            ...m,
+            status: 'read',
+            is_read: true,
+            text: newText
+          };
         }
         return m;
       });
 
       if (!hasUnread) return prev;
 
+      // Atualiza também no Supabase de forma imediata e assíncrona
       supabase
         .from('messages')
         .select('id, text')
-        .eq('chat_id', cKey)
+        .or(`chat_id.eq.${cKey},chat_id.eq.${chat.id}`)
         .neq('sender_id', currentUserId)
         .not('text', 'like', '%<!-- STATUS:read -->%')
         .then(({ data }) => {
@@ -1243,7 +1270,10 @@ export default function App() {
           grouped[key].push(parsedMsg);
 
           const isFromMe = m.sender_id === activeUser.id;
-          const isRead = m.text?.includes('<!-- STATUS:read -->');
+          const isRead =
+            m.is_read === true ||
+            m.status === 'read' ||
+            (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
 
           if (!isFromMe && !isRead && key !== currentActiveKey) {
             let badgeKey = key;
@@ -1299,6 +1329,17 @@ export default function App() {
             const count = unreadMap[c.id] || unreadMap[c.name] || 0;
             return {
               ...c,
+              unread: count,
+              unread_count: count
+            };
+          })
+        );
+
+        setCollaborators((prev) =>
+          prev.map((u) => {
+            const count = unreadMap[u.id] || 0;
+            return {
+              ...u,
               unread: count,
               unread_count: count
             };
@@ -4049,20 +4090,24 @@ export default function App() {
         collaborators={resolvedCollaborators}
         whatsAppContacts={whatsAppContacts}
         activeChat={activeChat}
+        messages={messages}
         onSelectChannel={(channelId) => {
           setActiveChat({ type: 'channel', id: channelId });
           setActiveView('chat');
           clearUnread(channelId);
+          markMessagesAsRead({ type: 'channel', id: channelId });
         }}
         onSelectCollaborator={(userId) => {
           setActiveChat({ type: 'dm', id: userId });
           setActiveView('chat');
           clearUnread(userId);
+          markMessagesAsRead({ type: 'dm', id: userId });
         }}
         onSelectWhatsAppContact={(contactId) => {
           setActiveChat({ type: 'whatsapp', id: contactId });
           setActiveView('chat');
           clearUnread(contactId);
+          markMessagesAsRead({ type: 'whatsapp', id: contactId });
         }}
         onOpenNewWhatsAppContact={() => setIsNewWhatsAppChatOpen(true)}
         onDeleteChat={handleDeleteChat}

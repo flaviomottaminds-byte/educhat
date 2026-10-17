@@ -28,9 +28,32 @@ import {
   Edit2
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
-import { getCanonicalPhoneKey } from '../data/initialData';
+import { getCanonicalPhoneKey, getChatKey } from '../data/initialData';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
+
+// 1. FILTRO DE NÃO LIDAS (UNREAD COUNT):
+// A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
+// A regra de contagem deve ser estritamente: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
+// AND o status é não lido (is_read === false ou status !== 'read'). Nunca conte o .length total do array.
+export function countUnreadMessages(messageList, currentUserId) {
+  if (!Array.isArray(messageList) || messageList.length === 0) return 0;
+  return messageList.filter((m) => {
+    if (!m) return false;
+    // O remetente é o contato: sender_id !== currentUser.id ou fromMe === false
+    const senderId = m.senderId || m.sender_id;
+    const isFromMe = (senderId && currentUserId) ? senderId === currentUserId : Boolean(m.fromMe);
+    if (isFromMe) return false;
+
+    // Status é não lido: is_read === false ou status !== 'read'
+    const isRead =
+      m.is_read === true ||
+      m.status === 'read' ||
+      (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+
+    return !isRead;
+  }).length;
+}
 
 export default function Sidebar({
   activeView = 'chat',
@@ -39,6 +62,7 @@ export default function Sidebar({
   collaborators = [],
   whatsAppContacts = [],
   activeChat = { type: 'channel', id: 'c-geral' }, // { type: 'channel' | 'dm' | 'whatsapp', id: string }
+  messages = {},
   onSelectChannel,
   onSelectCollaborator,
   onSelectWhatsAppContact,
@@ -192,13 +216,27 @@ export default function Sidebar({
     return sum + Number(count || 0);
   }, 0);
 
+  const currentUserId = currentUser?.id || 'u1';
+
   const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
     if (!c) return sum;
-    const count = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0;
+    const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
+    const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
+    const count = isChannelActive ? 0 : (
+      channelMessages.length > 0
+        ? countUnreadMessages(channelMessages, currentUserId)
+        : Number((c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0)
+    );
     return sum + Number(count || 0);
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
-    return sum + Number((u.id && safeUnread[u.id]) || u.unread_count || u.unread || 0);
+    const dmKey = getChatKey({ type: 'dm', id: u.id }, currentUserId);
+    const sessionMessages = Array.isArray(messages?.[dmKey])
+      ? messages[dmKey]
+      : (Array.isArray(messages?.[u.id]) ? messages[u.id] : []);
+    const isDmActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === u.id;
+    const count = isDmActive ? 0 : countUnreadMessages(sessionMessages, currentUserId);
+    return sum + Number(count || 0);
   }, 0);
 
   return (
@@ -563,15 +601,22 @@ export default function Sidebar({
                     </div>
                   </div>
 
-                  {(safeUnread[botCollaborator.id] || 0) > 0 ? (
-                    <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
-                      {safeUnread[botCollaborator.id]}
-                    </span>
-                  ) : (
-                    <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
-                      Perguntar →
-                    </span>
-                  )}
+                  {(() => {
+                    const botDmKey = getChatKey({ type: 'dm', id: botCollaborator.id }, currentUserId);
+                    const botMessages = Array.isArray(messages?.[botDmKey]) ? messages[botDmKey] : [];
+                    const isBotActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === botCollaborator.id;
+                    const botUnread = isBotActive ? 0 : countUnreadMessages(botMessages, currentUserId);
+
+                    return botUnread > 0 ? (
+                      <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                        {botUnread}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-purple-600 dark:text-purple-300 font-bold">
+                        Perguntar →
+                      </span>
+                    );
+                  })()}
                 </button>
               </div>
             )}
@@ -596,8 +641,12 @@ export default function Sidebar({
                 {filteredChannels && filteredChannels.length > 0 ? (
                   filteredChannels.map((c) => {
                     if (!c) return null;
-                    const isActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
-                    const channelUnread = (c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0;
+                    const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
+                    const channelUnread = isActive ? 0 : (
+                      channelMessages.length > 0
+                        ? countUnreadMessages(channelMessages, currentUserId)
+                        : Number((c.id && safeUnread[c.id]) || (c.name && safeUnread[c.name]) || (c.name && safeUnread[`#${c.name}`]) || c.unread_count || c.unread || 0)
+                    );
                     return (
                       <button
                         type="button"
@@ -661,7 +710,16 @@ export default function Sidebar({
                   filteredCollaborators.map((user) => {
                     if (!user) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === user.id;
-                    const dmUnread = (user.id && safeUnread[user.id]) || user.unread_count || user.unread || 0;
+                    const dmKey = getChatKey({ type: 'dm', id: user.id }, currentUserId);
+                    const sessionMessages = Array.isArray(messages?.[dmKey])
+                      ? messages[dmKey]
+                      : (Array.isArray(messages?.[user.id]) ? messages[user.id] : []);
+
+                    // 1. FILTRO DE NÃO LIDAS (UNREAD COUNT):
+                    // A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
+                    // A regra de contagem deve ser estritamente: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
+                    // AND o status é não lido (is_read === false ou status !== 'read'). Nunca conte o .length total do array.
+                    const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId);
                     return (
                       <div
                         key={user.id}
