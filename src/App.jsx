@@ -4127,7 +4127,6 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         currentUser={currentUser}
-        onSwitchUser={handleSwitchUser}
         realtimeStatus={realtimeStatus}
         onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
         unreadCounts={unreadCounts}
@@ -4201,20 +4200,14 @@ export default function App() {
               <p className="text-xs text-chatTextMuted leading-relaxed">
                 O Painel de Gestão e Inteligência Operacional é confidencial e exclusivo para a Diretoria Executiva da empresa.
                 <br /><br />
-                Você está simulando o acesso como <strong>{currentUser.name}</strong> ({currentUser.department}).
+                Você está conectado como <strong>{currentUser.name}</strong> ({currentUser.department}).
               </p>
-              <div className="pt-2 flex justify-center gap-2">
+              <div className="pt-2 flex justify-center">
                 <button
                   onClick={() => setActiveView('chat')}
-                  className="px-4 py-2 bg-slate-100 dark:bg-chatSidebar hover:bg-slate-200 text-chatTextTitle text-xs font-semibold rounded-lg transition"
-                >
-                  Voltar para Conversas
-                </button>
-                <button
-                  onClick={() => handleSwitchUser(resolvedCollaborators[0] || collaborators[0])}
                   className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"
                 >
-                  Alternar para Flávio Motta (Diretor)
+                  Voltar para Conversas
                 </button>
               </div>
             </div>

@@ -82,7 +82,6 @@ export default function Sidebar({
   theme = 'light',
   onToggleTheme,
   currentUser = {},
-  onSwitchUser,
   realtimeStatus = 'connected',
   onOpenUserSelectModal,
   unreadCounts = {},
@@ -796,8 +795,8 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* Rodapé: Perfil Ativo + Simulador de Usuário (Apenas Humanos) + Alternador Sol/Lua */}
-      <div className="p-3 bg-chatPanel border-t border-chatBorder space-y-2">
+      {/* Rodapé: Perfil Ativo (Foto, Nome, Cargo, Trocar e Alternador de Tema) */}
+      <div className="p-3 bg-chatPanel border-t border-chatBorder">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 truncate">
             <div className="w-8 h-8 rounded-full bg-brand-700 flex items-center justify-center text-base shadow-xs shrink-0">
@@ -832,29 +831,6 @@ export default function Sidebar({
               {theme === 'light' ? <Moon size={15} /> : <Sun size={15} className="text-yellow-400" />}
             </button>
           </div>
-        </div>
-
-        {/* Simulador de Acesso: Permite ao Diretor testar a visão de qualquer colaborador humano */}
-        <div className="flex items-center gap-1.5 bg-white dark:bg-chatCard p-1 rounded-lg border border-slate-300 dark:border-chatBorder shadow-xs">
-          <span className="text-[10px] text-chatTextMuted font-medium px-1 shrink-0 flex items-center gap-1">
-            <Users size={11} /> Simular:
-          </span>
-          <select
-            value={currentUser?.id || ''}
-            onChange={(e) => {
-              const selected = safeCollaborators.find((u) => u && u.id === e.target.value);
-              if (selected && onSwitchUser) onSwitchUser(selected);
-            }}
-            className="w-full bg-transparent text-[11px] text-chatTextTitle font-semibold focus:outline-none cursor-pointer"
-          >
-            {safeCollaborators
-              .filter((u) => u && !u.isBot)
-              .map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name || 'Colaborador'} ({u.roleType === 'diretor' ? 'Diretor' : (u.department || 'Geral')})
-                </option>
-              ))}
-          </select>
         </div>
       </div>
     </aside>
