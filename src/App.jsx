@@ -131,7 +131,19 @@ const withTimeout = (promise, ms = 2500, fallback = { data: null, error: 'timeou
   ]);
 
 export default function App() {
-  const [activeView, setActiveView] = useState('chat'); // 'chat' | 'kanban' | 'gestao'
+  const [activeView, setActiveView] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const path = (window.location.pathname || '').toLowerCase();
+      const hash = (window.location.hash || '').toLowerCase();
+      if (path === '/dashboard' || path === '/relatorios' || hash === '#dashboard' || hash === '#relatorios') {
+        return 'dashboard';
+      }
+      if (path === '/kanban' || hash === '#kanban') {
+        return 'kanban';
+      }
+    }
+    return 'chat';
+  }); // 'chat' | 'kanban' | 'dashboard' | 'gestao'
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   const [collaborators, setCollaborators] = useState(() => {
@@ -197,6 +209,40 @@ export default function App() {
     }
     supabase.from('profiles').update({ last_seen: nowIso }).eq('id', u.id).then(() => {}, () => {});
   }, [currentUser?.id]);
+
+  // 1. SINCRONIZAÇÃO DE ROTAS E NAVEGAÇÃO (/dashboard, /kanban, /)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const currentPath = window.location.pathname;
+    let targetPath = '/';
+    if (activeView === 'dashboard' || activeView === 'gestao') {
+      targetPath = '/dashboard';
+    } else if (activeView === 'kanban') {
+      targetPath = '/kanban';
+    }
+
+    if (currentPath !== targetPath && (currentPath === '/' || currentPath === '/dashboard' || currentPath === '/relatorios' || currentPath === '/kanban')) {
+      try {
+        window.history.pushState({ view: activeView }, '', targetPath);
+      } catch {}
+    }
+  }, [activeView]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = (window.location.pathname || '').toLowerCase();
+      const hash = (window.location.hash || '').toLowerCase();
+      if (path === '/dashboard' || path === '/relatorios' || hash === '#dashboard' || hash === '#relatorios') {
+        setActiveView('dashboard');
+      } else if (path === '/kanban' || hash === '#kanban') {
+        setActiveView('kanban');
+      } else {
+        setActiveView('chat');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Fallback: sincroniza last_seen de toda a equipe direto da tabela profiles a cada 30s
   useEffect(() => {
@@ -4767,31 +4813,33 @@ export default function App() {
         />
       )}
 
-      {activeView === 'gestao' && (
-        currentUser.roleType === 'diretor' ? (
+      {(activeView === 'gestao' || activeView === 'dashboard') && (
+        hasFullPortfolioAccess(currentUser) ? (
           <GestaoDashboard
             tasks={tasks}
             channels={channels}
             collaborators={resolvedCollaborators}
+            whatsAppContacts={whatsAppContacts}
+            currentUser={currentUser}
             onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
             onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
           />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center bg-[#f0f2f5] dark:bg-chatBg p-8 text-center transition-colors">
             <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
-              <div className="w-14 h-14 bg-purple-100 dark:bg-purple-950/40 text-purple-600 dark:text-purple-300 rounded-full flex items-center justify-center mx-auto">
+              <div className="w-14 h-14 bg-red-100 dark:bg-red-950/40 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mx-auto">
                 <Shield size={28} />
               </div>
-              <h3 className="text-lg font-bold text-chatTextTitle">Acesso Restrito à Diretoria</h3>
+              <h3 className="text-lg font-bold text-chatTextTitle">Acesso Restrito ao Gestor / Administrador</h3>
               <p className="text-xs text-chatTextMuted leading-relaxed">
-                O Painel de Gestão e Inteligência Operacional é confidencial e exclusivo para a Diretoria Executiva da empresa.
+                O Painel de Gestão (BI), métricas da equipe e a emissão de Atas Executivas são exclusivos para a Diretoria Executiva da instituição.
                 <br /><br />
                 Você está conectado como <strong>{currentUser.name}</strong> ({currentUser.department}).
               </p>
               <div className="pt-2 flex justify-center">
                 <button
                   onClick={() => setActiveView('chat')}
-                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition"
+                  className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-lg shadow-sm transition cursor-pointer"
                 >
                   Voltar para Conversas
                 </button>

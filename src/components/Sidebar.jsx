@@ -362,7 +362,7 @@ export default function Sidebar({
         </div>
       </div>
 
-      {/* Navegação Principal das Visões (Apenas Conversas e Kanban) */}
+      {/* Navegação Principal das Visões (Apenas Gestor/Admin tem acesso à Gestão) */}
       <div className="p-2 border-b border-chatBorder flex gap-1 bg-chatSidebar">
         <button
           onClick={() => setActiveView('chat')}
@@ -386,6 +386,20 @@ export default function Sidebar({
           <CheckSquare size={15} />
           Kanban
         </button>
+        {isManager && (
+          <button
+            onClick={() => setActiveView('dashboard')}
+            className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+              activeView === 'dashboard' || activeView === 'gestao'
+                ? 'bg-brand-600 text-white shadow-sm'
+                : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
+            }`}
+            title="Painel do Gestor (BI, Indicadores e Atas Executivas)"
+          >
+            <BarChart3 size={15} />
+            Gestão
+          </button>
+        )}
       </div>
 
       {/* Alternador de Abas de Conversas: WhatsApp Alunos vs Equipe Interna */}
