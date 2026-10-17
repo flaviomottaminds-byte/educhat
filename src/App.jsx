@@ -314,68 +314,10 @@ export default function App() {
                   } else {
                     console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
 
-                    // Ativa a IA no contato
+                    // Ativa visualmente o indicador de IA no contato (o atendimento é processado no servidor/webhook)
                     setWhatsAppContacts((prevContacts) =>
                       prevContacts.map((c) => (c.id === chatKey ? { ...c, aiActive: true } : c))
                     );
-
-                    const latestMsg = studentMessages[studentMessages.length - 1];
-                    setTimeout(async () => {
-                      try {
-                        const contactObj = whatsAppContactsRef.current?.find((c) => c.id === chatKey);
-                        const currentList = messagesRef.current?.[chatKey] || [];
-                        const lastInChat = currentList[currentList.length - 1];
-                        // Se a última mensagem já é uma resposta nossa, não duplica
-                        if (lastInChat && !lastInChat.fromStudent && lastInChat.senderId === 'u_ia_copilot') return;
-
-                        const matchedStudent = matchStudentByPhone(chatKey, eduControlStudentsRef.current);
-                        const chatHistory = currentList.slice(-10);
-                        const reply = await generateGeminiChatReply({
-                          message: latestMsg.text,
-                          history: chatHistory,
-                          student: matchedStudent,
-                          learnedDocuments: learnedDocumentsRef.current,
-                          pops: [],
-                          slas: INITIAL_SLAS,
-                          customPrompt: customAIPromptRef.current,
-                          department: contactObj?.department || 'Geral',
-                          userName: latestMsg.senderName || contactObj?.name || 'Aluno'
-                        });
-
-                        const botMsg = {
-                          id: 'gemini_' + Date.now(),
-                          senderId: 'u_ia_copilot',
-                          senderName: '🤖 Assistente IA (Gemini)',
-                          text: reply,
-                          timestamp: getSaoPauloTime(),
-                          isWhatsApp: true,
-                          fromStudent: false
-                        };
-
-                        setMessages((p) => ({
-                          ...p,
-                          [chatKey]: [...(p[chatKey] || []), botMsg]
-                        }));
-
-                        const targetPhone = contactObj?.preferredTarget || contactObj?.phone || chatKey.replace(/^wa-/, '');
-                        if (targetPhone) {
-                          sendWhatsAppText(targetPhone, reply).catch((err) => {
-                            console.warn('Erro ao disparar WhatsApp da IA:', err);
-                          });
-                        }
-
-                        supabase.from('messages').insert([{
-                          id: botMsg.id,
-                          chat_id: chatKey,
-                          sender_id: botMsg.senderId,
-                          sender_name: botMsg.senderName,
-                          text: botMsg.text,
-                          timestamp: botMsg.timestamp
-                        }]);
-                      } catch (err) {
-                        console.warn('Erro ao responder com Gemini no LiveSync:', err);
-                      }
-                    }, 1000);
                   }
                 }
               }

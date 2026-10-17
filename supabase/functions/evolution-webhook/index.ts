@@ -585,7 +585,23 @@ Deno.serve(async (req: Request) => {
         continue;
       }
 
-      const fromMe = Boolean(keyObj.fromMe ?? m?.fromMe ?? false);
+      const fromMe = Boolean(
+        keyObj.fromMe === true ||
+        String(keyObj.fromMe) === "true" ||
+        m?.fromMe === true ||
+        String(m?.fromMe) === "true" ||
+        body?.data?.fromMe === true ||
+        String(body?.data?.fromMe) === "true"
+      );
+      const isGroup = Boolean(
+        remoteJid.endsWith("@g.us") ||
+        remoteJidAlt.endsWith("@g.us") ||
+        remoteJid.includes("-") ||
+        Boolean(keyObj.participant) ||
+        Boolean(m?.participant) ||
+        Boolean(m?.isGroup) ||
+        Boolean(body?.data?.isGroup)
+      );
       const rawPhone = extractCleanPhone(remoteJid, remoteJidAlt);
       const cleanPhone = canonicalizeWhatsAppPhone(rawPhone || remoteJid);
 
@@ -612,6 +628,19 @@ Deno.serve(async (req: Request) => {
         const pushName = String(m?.pushName || body?.data?.pushName || body?.pushName || "").trim();
         senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
       }
+
+      const isBotOrSystem = Boolean(
+        fromMe ||
+        senderId === "u_matriz" ||
+        senderId === "u_ia_copilot" ||
+        senderId === "bot" ||
+        senderId === "system" ||
+        senderId.startsWith("u_") ||
+        String(senderName).toLowerCase().includes("assistente ia") ||
+        String(senderName).toLowerCase().includes("educhat") ||
+        String(m?.pushName || "").toLowerCase().includes("educhat") ||
+        String(m?.pushName || "").toLowerCase().includes("assistente ia")
+      );
 
       // Conteúdo da mensagem com unwrap completo e prioridades
       const content = extractMessageContent(m?.message || m, m, body);
@@ -791,108 +820,148 @@ Deno.serve(async (req: Request) => {
       // =========================================================================
       // ETAPA 5: DECISÃO DE ATENDIMENTO IA (HORÁRIO DE EXPEDIENTE)
       // =========================================================================
-      if (!fromMe) {
-        const timeInfo = getBrasiliaTime(m?.messageTimestamp || Date.now());
+      // 1. BLOQUEIO ABSOLUTO DE AUTO-RESPOSTA (IGNORAR FROM_ME, GRUPOS E BOTS):
+      // O gatilho que aciona o Google Gemini NUNCA deve ser disparado se a mensagem
+      // recebida pelo webhook for do próprio sistema (fromMe === true), grupo (isGroup)
+      // ou se o autor for bot/sistema (u_matriz, u_ia_copilot, etc).
+      if (fromMe || isGroup || isBotOrSystem) {
+        console.log(`🛑 [Decisão Webhook] Auto-resposta bloqueada: Mensagem de sistema/fromMe/grupo/bot não aciona IA (fromMe: ${fromMe}, isGroup: ${isGroup}, senderId: ${senderId}).`);
+        continue;
+      }
 
-        // LOGS DE DIAGNÓSTICO OBRIGATÓRIOS (Item 3)
-        if (!timeInfo.isAfterHours) {
-          console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
-        } else {
-          console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
-        }
+      const timeInfo = getBrasiliaTime(m?.messageTimestamp || Date.now());
 
-        // REGRA 2: A IA assume a conversa independentemente do número que envia a mensagem de teste,
-        // a menos que a conversa já esteja vinculada e "Aberta" por um colaborador humano.
-        let isHumanOpen = false;
-        try {
-          const { data: recentHumanMsgs } = await supabase
-            .from("messages")
-            .select("sender_id, created_at")
-            .eq("chat_id", chatId)
-            .not("sender_id", "in", `("${chatId}","u_ia_copilot","bot","bot_ura","bot_retencao","system")`)
-            .order("created_at", { ascending: false })
-            .limit(1);
+      // LOGS DE DIAGNÓSTICO OBRIGATÓRIOS (Item 3)
+      if (!timeInfo.isAfterHours) {
+        console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
+      } else {
+        console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
+      }
 
-          if (recentHumanMsgs && recentHumanMsgs.length > 0) {
-            const lastHumanTime = new Date(recentHumanMsgs[0].created_at).getTime();
-            // Aberta se humano atendeu nos últimos 20 minutos
-            if (Date.now() - lastHumanTime < 20 * 60 * 1000) {
-              isHumanOpen = true;
-              console.log(`👤 [Decisão Webhook] Conversa com atendimento humano recente: IA não intervirá.`);
-            }
+      // REGRA 2: A IA assume a conversa independentemente do número que envia a mensagem de teste,
+      // a menos que a conversa já esteja vinculada e "Aberta" por um colaborador humano.
+      let isHumanOpen = false;
+      try {
+        const { data: recentHumanMsgs } = await supabase
+          .from("messages")
+          .select("sender_id, created_at")
+          .eq("chat_id", chatId)
+          .not("sender_id", "in", `("${chatId}","u_ia_copilot","bot","bot_ura","bot_retencao","system")`)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (recentHumanMsgs && recentHumanMsgs.length > 0) {
+          const lastHumanTime = new Date(recentHumanMsgs[0].created_at).getTime();
+          // Aberta se humano atendeu nos últimos 20 minutos
+          if (Date.now() - lastHumanTime < 20 * 60 * 1000) {
+            isHumanOpen = true;
+            console.log(`👤 [Decisão Webhook] Conversa com atendimento humano recente: IA não intervirá.`);
           }
-        } catch (_err) {
-          isHumanOpen = false;
         }
+      } catch (_err) {
+        isHumanOpen = false;
+      }
 
-        if (timeInfo.isAfterHours && !isHumanOpen) {
-          console.log(`✨ [Decisão Webhook] Fora de Expediente: IA disparando resposta para ${senderName} (${cleanPhone || remoteJid})`);
+      if (timeInfo.isAfterHours && !isHumanOpen) {
+        console.log(`✨ [Decisão Webhook] Fora de Expediente: IA disparando resposta para ${senderName} (${cleanPhone || remoteJid})`);
 
-          const evoUrl = Deno.env.get("EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app";
-          const evoKey = Deno.env.get("EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
-          const evoInstance = Deno.env.get("EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
+        const evoUrl = Deno.env.get("EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app";
+        const evoKey = Deno.env.get("EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f";
+        const evoInstance = Deno.env.get("EVOLUTION_INSTANCE") || "EduChat-Matriz-01";
 
-          let aiReplyText = `Olá, ${senderName}! Nosso horário de atendimento comercial encerrou-se às 19h.\n\nEu sou o Assistente IA de Plantão do EduChat e assumi seu atendimento para não deixar você esperando! 🌙\n\nComo posso te ajudar agora? (Você pode tirar dúvidas sobre cursos, matrículas, notas fiscais ou deixar uma solicitação para a equipe amanhecer com ela pronta).`;
+        let aiReplyText = `Olá, ${senderName}! Nosso horário de atendimento comercial encerrou-se às 19h.\n\nEu sou o Assistente IA de Plantão do EduChat e assumi seu atendimento para não deixar você esperando! 🌙\n\nComo posso te ajudar agora? (Você pode tirar dúvidas sobre cursos, matrículas, notas fiscais ou deixar uma solicitação para a equipe amanhecer com ela pronta).`;
 
-          const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
-          if (geminiApiKey && messageText) {
-            try {
-              const gPrompt = `Você é o Assistente Virtual Oficial do EduChat (Faculdade Olavo Bilac • Grupo EstudeMais).
+        const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
+        if (geminiApiKey && messageText) {
+          try {
+            const gPrompt = `Você é o Assistente Virtual Oficial do EduChat (Faculdade Olavo Bilac • Grupo EstudeMais).
 Horário atual em Brasília: ${timeInfo.timeStr} (Fora do expediente comercial de 08h às 19h).
 Aja com cordialidade e acolhimento. Informe gentilmente que o atendimento dos consultores humanos encerrou-se às 19h, mas que você assumiu o atendimento de plantão para ajudar imediatamente.
 Responda de forma clara e objetiva à mensagem do aluno/lead:
 "${messageText}"`;
 
-              const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  contents: [{ role: "user", parts: [{ text: gPrompt }] }],
-                  generationConfig: { maxOutputTokens: 250, temperature: 0.7 }
-                })
-              });
-              if (gRes.ok) {
-                const gData = await gRes.json();
-                const gen = gData?.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (gen) aiReplyText = gen.trim();
-              }
-            } catch (gemErr) {
-              console.warn("Aviso ao gerar resposta Gemini no Webhook:", gemErr);
+            const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: [{ role: "user", parts: [{ text: gPrompt }] }],
+                generationConfig: { maxOutputTokens: 250, temperature: 0.7 }
+              })
+            });
+            if (gRes.ok) {
+              const gData = await gRes.json();
+              const gen = gData?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (gen) aiReplyText = gen.trim();
             }
+          } catch (gemErr) {
+            console.warn("Aviso ao gerar resposta Gemini no Webhook:", gemErr);
           }
-
-          // Dispara a mensagem via Evolution API de volta para o WhatsApp
-          const targetNumber = cleanPhone || remoteJid.replace("@s.whatsapp.net", "").replace("@lid", "");
-          if (targetNumber) {
-            try {
-              const sendRes = await fetch(`${evoUrl}/message/sendText/${evoInstance}`, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "apikey": evoKey
-                },
-                body: JSON.stringify({
-                  number: targetNumber,
-                  text: aiReplyText
-                })
-              });
-              console.log(`📤 [Evolution Webhook] Resposta IA enviada via WhatsApp para ${targetNumber} (Status ${sendRes.status})`);
-            } catch (sErr) {
-              console.warn("Erro ao disparar WhatsApp na Evolution API:", sErr);
-            }
-          }
-
-          // Grava a resposta da IA no banco de mensagens
-          const botId = "ia_reply_" + Date.now();
-          await supabase.from("messages").upsert([{
-            id: botId,
-            chat_id: chatId,
-            sender_id: "u_ia_copilot",
-            sender_name: "🤖 Assistente IA (Plantão)",
-            text: aiReplyText,
-            timestamp: timeInfo.timeStr
-          }], { onConflict: "id" });
         }
+
+        // Dispara a mensagem via Evolution API de volta para o WhatsApp
+        const targetNumber = cleanPhone || remoteJid.replace("@s.whatsapp.net", "").replace("@lid", "");
+        let evoSentId = "";
+        if (targetNumber) {
+          try {
+            const sendRes = await fetch(`${evoUrl}/message/sendText/${evoInstance}`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "apikey": evoKey
+              },
+              body: JSON.stringify({
+                number: targetNumber,
+                text: aiReplyText
+              })
+            });
+            if (sendRes.ok) {
+              const sendData = await sendRes.json().catch(() => ({}));
+              evoSentId = sendData?.key?.id || sendData?.id || sendData?.messageId || (Array.isArray(sendData) && sendData[0]?.key?.id) || "";
+            }
+            console.log(`📤 [Evolution Webhook] Resposta IA enviada via WhatsApp para ${targetNumber} (Status ${sendRes.status}, ID: ${evoSentId})`);
+          } catch (sErr) {
+            console.warn("Erro ao disparar WhatsApp na Evolution API:", sErr);
+          }
+        }
+
+        // =========================================================================
+        // 2. REGISTRO ÚNICO (FIM DA CAIXA AMARELA):
+        // Registra no banco de dados APENAS UMA VEZ como mensagem ENVIADA pelo sistema
+        // (sender_id: 'u_matriz', status: delivered -> renderiza como balão verde no lado direito).
+        // NUNCA inserir como remetente 'u_ia_copilot' simulando mensagem recebida!
+        // =========================================================================
+        const botId = evoSentId ? (evoSentId.startsWith("wa_") ? evoSentId : "wa_" + evoSentId) : "wa_ia_" + Date.now();
+        const aiMessagePayload = {
+          id: botId,
+          chat_id: chatId,
+          sender_id: "u_matriz",
+          sender_name: "EduChat Matriz (Assistente IA)",
+          text: `${aiReplyText}\n<!-- STATUS:delivered -->`,
+          timestamp: timeInfo.timeStr
+        };
+
+        const { error: aiInsertErr } = await supabase
+          .from("messages")
+          .upsert([aiMessagePayload], { onConflict: "id" });
+
+        if (aiInsertErr) {
+          console.error("❌ Erro ao registrar resposta da IA no Supabase:", aiInsertErr);
+        } else {
+          console.log(`✅ [Supabase] Resposta IA registrada como mensagem ENVIADA única: ${botId}`);
+          insertedMessages.push(aiMessagePayload);
+        }
+
+        // Atualiza last_message na conversa
+        try {
+          await supabase.from("chats").upsert([
+            {
+              id: chatId,
+              phone: cleanPhone,
+              last_message: aiReplyText.length > 250 ? aiReplyText.slice(0, 247) + "..." : aiReplyText,
+              updated_at: new Date().toISOString()
+            }
+          ], { onConflict: "id" });
+        } catch (_cErr) {}
       }
     }
 

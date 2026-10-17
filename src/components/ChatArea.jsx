@@ -676,7 +676,11 @@ export default function ChatArea({
         continue;
       }
 
-      const isMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
+      const isMe =
+        m.senderId === currentUser?.id ||
+        m.senderId === 'u_matriz' ||
+        Boolean(m.fromMe) ||
+        (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
       const cleanBody = (m.text || '')
         .replace(/<!--[\s\S]*?-->/g, '')
         .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
@@ -1306,8 +1310,12 @@ export default function ChatArea({
               );
             }
 
-            const isMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
-            const isBot = m.senderId === 'bot' || m.senderId === 'u_ia_copilot';
+            const isMe =
+              m.senderId === currentUser?.id ||
+              m.senderId === 'u_matriz' ||
+              Boolean(m.fromMe) ||
+              (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
+            const isBot = !isWhatsApp && (m.senderId === 'bot' || m.senderId === 'u_ia_copilot');
 
             return (
               <div
