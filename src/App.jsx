@@ -54,6 +54,7 @@ import {
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat } from './lib/portfolioAccess';
+import { fetchKnowledgeBaseDocs } from './lib/knowledgeBase';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
 import {
@@ -476,10 +477,10 @@ export default function App() {
   const [realtimeStatus, setRealtimeStatus] = useState('connected'); // 'connected' | 'connecting' | 'error'
   const [lastSyncTime, setLastSyncTime] = useState(() => getSaoPauloTime());
 
-  // Documentos e Memorandos Aprendidos pela IA (Item 3)
+  // Documentos e Base de Conhecimento da IA (Knowledge Base)
   const [learnedDocuments, setLearnedDocuments] = useState(() => {
     try {
-      const saved = localStorage.getItem('educhat_learned_docs');
+      const saved = localStorage.getItem('educhat_knowledge_base') || localStorage.getItem('educhat_learned_docs');
       return saved ? JSON.parse(saved) : INITIAL_LEARNED_DOCS;
     } catch {
       return INITIAL_LEARNED_DOCS;
@@ -487,8 +488,21 @@ export default function App() {
   });
 
   useEffect(() => {
+    let active = true;
+    fetchKnowledgeBaseDocs().then((docs) => {
+      if (active && Array.isArray(docs) && docs.length > 0) {
+        setLearnedDocuments(docs);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     try {
       localStorage.setItem('educhat_learned_docs', JSON.stringify(learnedDocuments));
+      localStorage.setItem('educhat_knowledge_base', JSON.stringify(learnedDocuments));
     } catch {}
   }, [learnedDocuments]);
 

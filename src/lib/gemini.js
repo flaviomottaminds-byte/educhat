@@ -732,12 +732,12 @@ export function buildSystemInstruction({
     prompt += `\n`;
   }
 
-  // 4. RAG Inteligente para Documentos e Planilhas do Centro de Aprendizado
+  // 4. RAG Inteligente para Documentos e Base de Conhecimento da IA
   if (learnedDocuments && learnedDocuments.length > 0) {
     const scoredDocs = learnedDocuments.map((doc) => ({
       doc,
       score: scoreTextRelevance(
-        `${doc.title || ''} ${doc.department || ''} ${doc.summary || ''} ${(doc.keywords || []).join(' ')} ${(doc.textContent || '').slice(0, 4000)}`,
+        `${doc.title || ''} ${doc.category || doc.department || ''} ${doc.summary || ''} ${(doc.keywords || []).join(' ')} ${(doc.content || doc.textContent || '').slice(0, 4000)}`,
         keywords,
         department
       )
@@ -745,26 +745,27 @@ export function buildSystemInstruction({
 
     const relevantDocs = scoredDocs
       .sort((a, b) => b.score - a.score)
-      .slice(0, 4)
+      .slice(0, 5)
       .map((item) => item.doc);
 
-    prompt += `=== DOCUMENTOS E PLANILHAS DO CENTRO DE APRENDIZADO (Total: ${learnedDocuments.length} | Selecionados via RAG: ${relevantDocs.length}) ===\n`;
+    prompt += `=== BASE DE CONHECIMENTO IA (DOCUMENTOS, CURSOS E DIRETRIZES) ===\n`;
     relevantDocs.forEach((doc, idx) => {
-      prompt += `[DOC ${idx + 1}: ${doc.title} | Setor: ${doc.department || 'Geral'}]\n`;
-      if (doc.summary) prompt += `Resumo: ${String(doc.summary).slice(0, 260)}\n`;
+      prompt += `[DOC ${idx + 1}: ${doc.title} | Categoria: ${doc.category || doc.department || 'Geral'}]\n`;
+      if (doc.summary) prompt += `Resumo: ${String(doc.summary).slice(0, 300)}\n`;
       if (doc.rules && doc.rules.length > 0) {
         prompt += `Regras: ${doc.rules.slice(0, 5).join(' | ').slice(0, 300)}\n`;
       }
       if (doc.deadlines && doc.deadlines.length > 0) {
         prompt += `Prazos: ${doc.deadlines.slice(0, 5).join(' | ').slice(0, 250)}\n`;
       }
-      if (doc.textContent) {
-        const relevantExcerpt = extractRelevantContextFromText(doc.textContent, keywords, {
-          maxChars: 1200,
-          maxRows: 15,
+      const rawText = doc.content || doc.textContent;
+      if (rawText) {
+        const relevantExcerpt = extractRelevantContextFromText(rawText, keywords, {
+          maxChars: 2000,
+          maxRows: 30,
           department
         });
-        prompt += `Trechos Relevantes:\n${relevantExcerpt}\n`;
+        prompt += `Conteúdo/Trecho Oficial:\n${relevantExcerpt}\n`;
       }
       prompt += `\n`;
     });

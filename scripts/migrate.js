@@ -17,7 +17,8 @@ const accessToken = process.env.SUPABASE_ACCESS_TOKEN || '';
 const migrationFiles = [
   'fix_storage_permissions.sql',
   'fix_channel_notifications_trigger.sql',
-  'create_bug_reports.sql'
+  'create_bug_reports.sql',
+  'create_ai_knowledge_base.sql'
 ];
 
 async function runViaManagementApi(token) {

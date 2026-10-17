@@ -874,10 +874,55 @@ Deno.serve(async (req: Request) => {
         const geminiApiKey = Deno.env.get("GEMINI_API_KEY") || "";
         if (geminiApiKey && messageText) {
           try {
+            // 3. ALIMENTAÇÃO DINÂMICA DO PROMPT VIA BASE DE CONHECIMENTO IA:
+            // Busca os blocos de texto/documentos gravados no Supabase e injeta no prompt da IA
+            let knowledgeContext = "";
+            try {
+              const { data: kbDocs, error: kbErr } = await supabase
+                .from("ai_knowledge_base")
+                .select("title, category, content, summary")
+                .limit(15);
+
+              if (!kbErr && Array.isArray(kbDocs) && kbDocs.length > 0) {
+                knowledgeContext = kbDocs
+                  .map((d: any) => `### DOCUMENTO: ${d.title} (Setor: ${d.category || 'Geral'})\n${d.summary ? `Resumo: ${d.summary}\n` : ''}${d.content}`)
+                  .join("\n\n---\n\n");
+              } else {
+                // Fallback para registros em sys_knowledge na tabela messages
+                const { data: fallbackDocs } = await supabase
+                  .from("messages")
+                  .select("text")
+                  .eq("chat_id", "sys_knowledge")
+                  .limit(15);
+                if (Array.isArray(fallbackDocs) && fallbackDocs.length > 0) {
+                  knowledgeContext = fallbackDocs
+                    .map((r: any) => {
+                      try {
+                        const parsed = JSON.parse(r.text);
+                        return `### DOCUMENTO: ${parsed.title}\n${parsed.content || parsed.textContent || ''}`;
+                      } catch {
+                        return '';
+                      }
+                    })
+                    .filter(Boolean)
+                    .join("\n\n---\n\n");
+                }
+              }
+            } catch (err) {
+              console.warn("Aviso ao buscar base de conhecimento para o prompt:", err);
+            }
+
             const gPrompt = `Você é o Assistente Virtual Oficial do EduChat (Faculdade Olavo Bilac • Grupo EstudeMais).
 Horário atual em Brasília: ${timeInfo.timeStr} (Fora do expediente comercial de 08h às 19h).
-Aja com cordialidade e acolhimento. Informe gentilmente que o atendimento dos consultores humanos encerrou-se às 19h, mas que você assumiu o atendimento de plantão para ajudar imediatamente.
-Responda de forma clara e objetiva à mensagem do aluno/lead:
+Aja com cordialidade, acolhimento e profissionalismo. Informe gentilmente que o atendimento dos consultores humanos encerrou-se às 19h, mas que você assumiu o atendimento de plantão para ajudar imediatamente.
+
+${knowledgeContext ? `=== BASE DE CONHECIMENTO OFICIAL (DOCUMENTOS, CURSOS E REGRAS) ===
+Utilize com prioridade absoluta as informações oficiais abaixo para sanar dúvidas sobre catálogo de cursos, valores, prazos, matrículas e diretrizes institucionais:
+
+${knowledgeContext.slice(0, 32000)}
+
+================================================================================\n` : ''}
+Responda de forma clara, prestativa e objetiva à mensagem do aluno/lead:
 "${messageText}"`;
 
             const gRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`, {
@@ -885,7 +930,7 @@ Responda de forma clara e objetiva à mensagem do aluno/lead:
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 contents: [{ role: "user", parts: [{ text: gPrompt }] }],
-                generationConfig: { maxOutputTokens: 250, temperature: 0.7 }
+                generationConfig: { maxOutputTokens: 350, temperature: 0.6 }
               })
             });
             if (gRes.ok) {

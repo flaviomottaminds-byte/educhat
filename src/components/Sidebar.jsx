@@ -303,7 +303,7 @@ export default function Sidebar({
           {isDirector && (
             <button
               onClick={onOpenAIMemory}
-              title="Upload de Documentos & Regras da IA"
+              title="Base de Conhecimento IA (Documentos e Regras)"
               className="p-1.5 rounded-full text-[#54656f] dark:text-[#aebac1] hover:bg-slate-200/80 dark:hover:bg-chatBorder/80 transition cursor-pointer"
             >
               <Brain size={18} className="text-yellow-600 dark:text-yellow-400" />
