@@ -792,7 +792,7 @@ export default function App() {
       isAudio = true;
     }
 
-    if (cleanText.includes('🎙️') || cleanText.includes('[Áudio recebido') || cleanText.includes('Mensagem de voz')) {
+    if (cleanText.includes('🎙️') || cleanText.includes('🎵') || cleanText.includes('Áudio recebido') || cleanText.includes('Mensagem de voz')) {
       isAudio = true;
       const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
       if (durMatch) duration = durMatch[1];

@@ -217,28 +217,139 @@ function extractRawMessages(body: any): any[] {
   return [];
 }
 
+// Desembrulha containers do Baileys/WhatsApp Web (ephemeral, viewOnce, documentWithCaption, etc.)
+function unwrapBaileysMessage(rawMsg: any): any {
+  if (!rawMsg) return {};
+  let msg = rawMsg;
+  if (typeof msg === "string") {
+    try {
+      msg = JSON.parse(msg);
+    } catch {
+      return { conversation: msg };
+    }
+  }
+
+  // Desempacota camadas aninhadas comuns do WhatsApp Web / Baileys
+  for (let i = 0; i < 6; i++) {
+    if (msg?.ephemeralMessage?.message) {
+      msg = msg.ephemeralMessage.message;
+    } else if (msg?.viewOnceMessage?.message) {
+      msg = msg.viewOnceMessage.message;
+    } else if (msg?.viewOnceMessageV2?.message) {
+      msg = msg.viewOnceMessageV2.message;
+    } else if (msg?.viewOnceMessageV2Extension?.message) {
+      msg = msg.viewOnceMessageV2Extension.message;
+    } else if (msg?.documentWithCaptionMessage?.message) {
+      msg = msg.documentWithCaptionMessage.message;
+    } else if (msg?.message && typeof msg.message === "object") {
+      msg = msg.message;
+    } else {
+      break;
+    }
+  }
+  return msg;
+}
+
 // Extrator universal de conteúdo textual e mídia do WhatsApp
-function extractMessageContent(msg: any, rawItem?: any): { text: string; isAudio: boolean; isMedia: boolean; audioUrl?: string; duration?: string } {
-  if (!msg && !rawItem) return { text: "Mensagem vazia", isAudio: false, isMedia: false };
+function extractMessageContent(
+  rawMsg: any,
+  rawItem?: any,
+  bodyContext?: any
+): { text: string; isAudio: boolean; isMedia: boolean; audioUrl?: string; duration?: string } {
+  // Desembrulha mensagem e camadas
+  const msg = unwrapBaileysMessage(rawMsg);
+  const item = rawItem || {};
 
-  // 1. Mensagem de texto simples
-  if (typeof msg?.conversation === "string" && msg.conversation.trim()) {
-    return { text: msg.conversation.trim(), isAudio: false, isMedia: false };
+  // =========================================================================
+  // 1. MAPEAMENTO DE TEXTO NA ORDEM ESTRITA DE PRIORIDADE (Item 1)
+  // =========================================================================
+
+  // a) message.conversation (texto simples)
+  const convText =
+    (typeof msg?.conversation === "string" && msg.conversation.trim()) ||
+    (typeof item?.conversation === "string" && item.conversation.trim()) ||
+    (typeof item?.message?.conversation === "string" && item.message.conversation.trim());
+
+  if (convText) {
+    return { text: convText, isAudio: false, isMedia: false };
   }
 
-  // 2. Mensagem de texto estendida
-  if (typeof msg?.extendedTextMessage?.text === "string" && msg.extendedTextMessage.text.trim()) {
-    return { text: msg.extendedTextMessage.text.trim(), isAudio: false, isMedia: false };
+  // b) message.extendedTextMessage.text (texto em resposta a outra mensagem ou com link)
+  const extendedText =
+    (typeof msg?.extendedTextMessage?.text === "string" && msg.extendedTextMessage.text.trim()) ||
+    (typeof item?.extendedTextMessage?.text === "string" && item.extendedTextMessage.text.trim()) ||
+    (typeof item?.message?.extendedTextMessage?.text === "string" && item.message.extendedTextMessage.text.trim()) ||
+    (typeof msg?.extendedTextMessage?.description === "string" && msg.extendedTextMessage.description.trim());
+
+  if (extendedText) {
+    return { text: extendedText, isAudio: false, isMedia: false };
   }
 
-  // 3. Áudio (Push-to-Talk ou arquivo de áudio)
-  const isAudioType = Boolean(msg?.audioMessage || rawItem?.messageType === "audioMessage" || rawItem?.mediaType === "audio");
+  // c) message.imageMessage.caption / message.videoMessage.caption / documentMessage.caption (texto em legendas de mídia)
+  const imageCaption =
+    (typeof msg?.imageMessage?.caption === "string" && msg.imageMessage.caption.trim()) ||
+    (typeof item?.imageMessage?.caption === "string" && item.imageMessage.caption.trim()) ||
+    (typeof item?.caption === "string" && (msg?.imageMessage || item?.messageType === "imageMessage") && item.caption.trim());
+
+  const videoCaption =
+    (typeof msg?.videoMessage?.caption === "string" && msg.videoMessage.caption.trim()) ||
+    (typeof item?.videoMessage?.caption === "string" && item.videoMessage.caption.trim()) ||
+    (typeof item?.caption === "string" && (msg?.videoMessage || item?.messageType === "videoMessage") && item.caption.trim());
+
+  const docCaption =
+    (typeof msg?.documentMessage?.caption === "string" && msg.documentMessage.caption.trim()) ||
+    (typeof msg?.documentWithCaptionMessage?.message?.documentMessage?.caption === "string" && msg.documentWithCaptionMessage.message.documentMessage.caption.trim()) ||
+    (typeof item?.documentMessage?.caption === "string" && item.documentMessage.caption.trim());
+
+  // d) Respostas de botões, listas e enquetes
+  const buttonText =
+    (typeof msg?.buttonsResponseMessage?.selectedDisplayText === "string" && msg.buttonsResponseMessage.selectedDisplayText.trim()) ||
+    (typeof msg?.templateButtonReplyMessage?.selectedDisplayText === "string" && msg.templateButtonReplyMessage.selectedDisplayText.trim()) ||
+    (typeof msg?.listResponseMessage?.title === "string" && msg.listResponseMessage.title.trim()) ||
+    (typeof msg?.interactiveResponseMessage?.body?.text === "string" && msg.interactiveResponseMessage.body.text.trim());
+
+  if (buttonText) {
+    return { text: buttonText, isAudio: false, isMedia: false };
+  }
+
+  // e) Reações a mensagens
+  if (msg?.reactionMessage?.text) {
+    return { text: `[Reação: ${msg.reactionMessage.text}]`, isAudio: false, isMedia: false };
+  }
+
+  // f) Contato Compartilhado
+  if (msg?.contactMessage?.displayName) {
+    return { text: `👤 Contato compartilhado: ${msg.contactMessage.displayName}`, isAudio: false, isMedia: false };
+  }
+  if (msg?.contactsArrayMessage) {
+    return { text: "👥 [Contatos compartilhados]", isAudio: false, isMedia: false };
+  }
+
+  // g) Localização
+  if (msg?.locationMessage || msg?.liveLocationMessage) {
+    return { text: "📍 Localização compartilhada", isAudio: false, isMedia: false };
+  }
+
+  // =========================================================================
+  // 2. TRATAMENTO DE MÍDIAS (Item 2)
+  // Se for estritamente áudio, figurinha, imagem ou documento sem texto,
+  // grava algo descritivo como "🎵 Áudio recebido", "🖼️ Imagem recebida" ou "📄 Documento recebido"
+  // =========================================================================
+
+  // 1. ÁUDIO (Push-to-Talk / gravação de voz ou arquivo de áudio)
+  const isAudioType = Boolean(
+    msg?.audioMessage ||
+    item?.messageType === "audioMessage" ||
+    item?.mediaType === "audio" ||
+    item?.isAudio
+  );
+
   if (isAudioType) {
-    const audio = msg?.audioMessage || {};
-    const rawAudioUrl = audio.url || audio.mediaUrl || rawItem?.mediaUrl || rawItem?.url || "";
-    const rawBase64 = audio.base64 || rawItem?.base64 || "";
+    const audio = msg?.audioMessage || item?.audioMessage || {};
+    const rawAudioUrl = audio.url || audio.mediaUrl || item?.mediaUrl || item?.url || "";
+    const rawBase64 = audio.base64 || item?.base64 || "";
     const mimetype = audio.mimetype || "audio/ogg; codecs=opus";
-    const seconds = Number(audio.seconds || 14);
+    const seconds = Number(audio.seconds || item?.seconds || 14);
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     const duration = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
@@ -250,7 +361,7 @@ function extractMessageContent(msg: any, rawItem?: any): { text: string; isAudio
       dataUrl = rawAudioUrl;
     }
 
-    let messageText = `🎙️ Mensagem de voz (${duration})`;
+    let messageText = "🎵 Áudio recebido";
     if (dataUrl) {
       const attachmentPayload = JSON.stringify({
         name: `audio_${Date.now()}.ogg`,
@@ -264,7 +375,7 @@ function extractMessageContent(msg: any, rawItem?: any): { text: string; isAudio
     }
     messageText += `\n<!-- IS_AUDIO:true -->`;
 
-    const transcription = audio.transcription || audio.transcript || rawItem?.transcription || "";
+    const transcription = audio.transcription || audio.transcript || item?.transcription || "";
     if (transcription) {
       messageText += `\n[ÁUDIO_TRANSCRIÇÃO: "${transcription}"]`;
     }
@@ -278,89 +389,117 @@ function extractMessageContent(msg: any, rawItem?: any): { text: string; isAudio
     };
   }
 
-  // 4. Imagem
-  if (msg?.imageMessage || rawItem?.messageType === "imageMessage") {
-    const img = msg?.imageMessage || {};
-    const imgUrl = img.url || img.mediaUrl || rawItem?.mediaUrl || "";
-    const base64 = img.base64 || rawItem?.base64 || "";
+  // 2. FIGURINHA (Sticker)
+  const isSticker = Boolean(
+    msg?.stickerMessage ||
+    item?.messageType === "stickerMessage" ||
+    item?.mediaType === "sticker"
+  );
+
+  if (isSticker) {
+    const stk = msg?.stickerMessage || item?.stickerMessage || {};
+    const stkUrl = stk.url || stk.mediaUrl || item?.mediaUrl || item?.url || "";
+    const stkBase64 = stk.base64 || item?.base64 || "";
+    const mimetype = stk.mimetype || "image/webp";
+    let dataUrl = stkUrl;
+    if (stkBase64) {
+      dataUrl = stkBase64.startsWith("data:") ? stkBase64 : `data:${mimetype};base64,${stkBase64}`;
+    }
+    let messageText = "💟 Figurinha recebida";
+    if (dataUrl) {
+      messageText += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "sticker.webp", type: mimetype, dataUrl })}]`;
+    }
+    return { text: messageText, isAudio: false, isMedia: true };
+  }
+
+  // 3. IMAGEM
+  const isImageType = Boolean(
+    msg?.imageMessage ||
+    item?.messageType === "imageMessage" ||
+    item?.mediaType === "image"
+  );
+
+  if (isImageType) {
+    const img = msg?.imageMessage || item?.imageMessage || {};
+    const imgUrl = img.url || img.mediaUrl || item?.mediaUrl || item?.url || "";
+    const base64 = img.base64 || item?.base64 || "";
     const mimetype = img.mimetype || "image/jpeg";
-    const caption = (img.caption || "").trim();
     let dataUrl = imgUrl;
     if (base64) {
       dataUrl = base64.startsWith("data:") ? base64 : `data:${mimetype};base64,${base64}`;
     }
-    let text = caption ? "📷 " + caption : "📷 [Imagem recebida]";
+
+    // Se tem legenda, usa a legenda; caso contrário usa "🖼️ Imagem recebida"
+    let text = imageCaption ? imageCaption : "🖼️ Imagem recebida";
     if (dataUrl) {
       text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "imagem.jpg", type: mimetype, dataUrl })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
 
-  // 5. Vídeo
-  if (msg?.videoMessage || rawItem?.messageType === "videoMessage") {
-    const vid = msg?.videoMessage || {};
-    const caption = (vid.caption || "").trim();
-    const vidUrl = vid.url || vid.mediaUrl || rawItem?.mediaUrl || "";
-    let text = caption ? "🎥 " + caption : "🎥 [Vídeo recebido]";
+  // 4. VÍDEO
+  const isVideoType = Boolean(
+    msg?.videoMessage ||
+    item?.messageType === "videoMessage" ||
+    item?.mediaType === "video"
+  );
+
+  if (isVideoType) {
+    const vid = msg?.videoMessage || item?.videoMessage || {};
+    const vidUrl = vid.url || vid.mediaUrl || item?.mediaUrl || item?.url || "";
+    const mimetype = vid.mimetype || "video/mp4";
+
+    let text = videoCaption ? videoCaption : "🎥 Vídeo recebido";
     if (vidUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "video.mp4", type: vid.mimetype || "video/mp4", dataUrl: vidUrl })}]`;
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "video.mp4", type: mimetype, dataUrl: vidUrl })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
 
-  // 6. Documento
-  if (msg?.documentMessage || rawItem?.messageType === "documentMessage") {
-    const doc = msg?.documentMessage || {};
-    const fileName = doc.fileName || doc.title || "arquivo";
-    const docUrl = doc.url || doc.mediaUrl || rawItem?.mediaUrl || "";
-    let text = "📄 [Documento: " + fileName + "]";
+  // 5. DOCUMENTO
+  const isDocType = Boolean(
+    msg?.documentMessage ||
+    msg?.documentWithCaptionMessage ||
+    item?.messageType === "documentMessage" ||
+    item?.mediaType === "document"
+  );
+
+  if (isDocType) {
+    const doc = msg?.documentMessage || msg?.documentWithCaptionMessage?.message?.documentMessage || item?.documentMessage || {};
+    const fileName = doc.fileName || doc.title || item?.fileName || "";
+    const docUrl = doc.url || doc.mediaUrl || item?.mediaUrl || item?.url || "";
+    const mimetype = doc.mimetype || "application/pdf";
+
+    let text = docCaption
+      ? docCaption
+      : (fileName ? `📄 Documento recebido: ${fileName}` : "📄 Documento recebido");
+
     if (docUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName, type: doc.mimetype || "application/pdf", dataUrl: docUrl })}]`;
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName || "documento.pdf", type: mimetype, dataUrl: docUrl })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
 
-  // 7. Contato Compartilhado
-  if (msg.contactMessage) {
-    const contactName = msg.contactMessage.displayName || "Contato";
-    return {
-      text: "👤 [Contato compartilhado: " + contactName + "]",
-      isAudio: false,
-      isMedia: false,
-    };
+  // =========================================================================
+  // 3. FALLBACKS DE TEXTO GERAL DA EVOLUTION API (body, text, content)
+  // =========================================================================
+  const generalText =
+    (typeof item?.text === "string" && item.text.trim()) ||
+    (typeof item?.body === "string" && item.body.trim()) ||
+    (typeof item?.content === "string" && item.content.trim()) ||
+    (typeof bodyContext?.data?.text === "string" && bodyContext.data.text.trim()) ||
+    (typeof bodyContext?.data?.body === "string" && bodyContext.data.body.trim()) ||
+    (typeof bodyContext?.data?.content === "string" && bodyContext.data.content.trim());
+
+  if (generalText) {
+    return { text: generalText, isAudio: false, isMedia: false };
   }
 
-  // 8. Localização
-  if (msg.locationMessage) {
-    return {
-      text: "📍 [Localização compartilhada]",
-      isAudio: false,
-      isMedia: false,
-    };
-  }
-
-  // 9. Respostas interativas (Botões / Listas)
-  if (msg.buttonsResponseMessage?.selectedDisplayText) {
-    return {
-      text: msg.buttonsResponseMessage.selectedDisplayText.trim(),
-      isAudio: false,
-      isMedia: false,
-    };
-  }
-  if (msg.listResponseMessage?.title) {
-    return {
-      text: msg.listResponseMessage.title.trim(),
-      isAudio: false,
-      isMedia: false,
-    };
-  }
-
-  // 10. Fallbacks gerais
   if (typeof msg === "string" && msg.trim()) {
     return { text: msg.trim(), isAudio: false, isMedia: false };
   }
 
-  return { text: "Mensagem recebida", isAudio: false, isMedia: false };
+  return { text: "💬 Mensagem recebida", isAudio: false, isMedia: false };
 }
 
 Deno.serve(async (req: Request) => {
@@ -474,8 +613,8 @@ Deno.serve(async (req: Request) => {
         senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
       }
 
-      // Conteúdo da mensagem
-      const content = extractMessageContent(m?.message || m, m);
+      // Conteúdo da mensagem com unwrap completo e prioridades
+      const content = extractMessageContent(m?.message || m, m, body);
       const messageText = content.text;
 
       // Horário formatado estritamente no fuso oficial de São Paulo (America/Sao_Paulo)

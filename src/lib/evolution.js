@@ -240,16 +240,29 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
       const preferredTarget = rawJidAlt || rawJid;
       const chatKey = canonicalizeChatId(preferredTarget);
 
-      const text =
-        m.message?.conversation ||
-        m.message?.extendedTextMessage?.text ||
-        m.message?.imageMessage?.caption ||
-        m.message?.documentMessage?.title ||
-        m.message?.documentMessage?.fileName ||
-        m.message?.videoMessage?.caption ||
-        (m.message?.audioMessage ? '🎙️ [Áudio recebido]' : (m.message?.imageMessage ? '📷 [Imagem]' : (m.message?.documentMessage ? '📄 [Documento]' : '')));
+      const unwrapped =
+        m.message?.ephemeralMessage?.message ||
+        m.message?.viewOnceMessage?.message ||
+        m.message?.viewOnceMessageV2?.message ||
+        m.message?.documentWithCaptionMessage?.message ||
+        m.message ||
+        {};
 
-      if (!text && !m.message?.audioMessage && !m.message?.imageMessage && !m.message?.documentMessage) return;
+      const text =
+        (typeof unwrapped?.conversation === 'string' && unwrapped.conversation.trim()) ||
+        (typeof unwrapped?.extendedTextMessage?.text === 'string' && unwrapped.extendedTextMessage.text.trim()) ||
+        (typeof unwrapped?.imageMessage?.caption === 'string' && unwrapped.imageMessage.caption.trim()) ||
+        (typeof unwrapped?.videoMessage?.caption === 'string' && unwrapped.videoMessage.caption.trim()) ||
+        (typeof unwrapped?.documentMessage?.caption === 'string' && unwrapped.documentMessage.caption.trim()) ||
+        (typeof unwrapped?.documentMessage?.title === 'string' && unwrapped.documentMessage.title.trim()) ||
+        (typeof unwrapped?.documentMessage?.fileName === 'string' && unwrapped.documentMessage.fileName.trim()) ||
+        (unwrapped?.audioMessage ? '🎵 Áudio recebido' :
+         (unwrapped?.imageMessage ? '🖼️ Imagem recebida' :
+          (unwrapped?.stickerMessage ? '💟 Figurinha recebida' :
+           (unwrapped?.documentMessage ? '📄 Documento recebido' :
+            (unwrapped?.videoMessage ? '🎥 Vídeo recebido' : (m.text || m.body || ''))))));
+
+      if (!text && !unwrapped?.audioMessage && !unwrapped?.imageMessage && !unwrapped?.documentMessage && !unwrapped?.stickerMessage) return;
 
       const fromMe = Boolean(m.key?.fromMe);
       const time = m.messageTimestamp
