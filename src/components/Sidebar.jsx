@@ -42,6 +42,7 @@ export default function Sidebar({
   onSelectChannel,
   onSelectCollaborator,
   onSelectWhatsAppContact,
+  onOpenNewWhatsAppContact,
   onDeleteChat,
   onOpenAICopilot,
   onOpenAIMemory,
@@ -360,12 +361,31 @@ export default function Sidebar({
         {sidebarTab === 'whatsapp' ? (
           /* ABA WHATSAPP ALUNOS */
           <div className="space-y-1">
+            {/* Botão de Início de Conversa Ativa */}
+            <button
+              type="button"
+              onClick={onOpenNewWhatsAppContact}
+              className="w-full mb-2 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs hover:shadow transition cursor-pointer"
+              title="Iniciar conversa ativa com novo número no WhatsApp"
+            >
+              <Plus size={15} className="stroke-[3]" />
+              <span>+ Novo Atendimento WhatsApp</span>
+            </button>
+
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>
                 {isManager
                   ? `Atendimento WhatsApp (${filteredWhatsAppContacts.length})`
                   : `Minha Carteira (${filteredWhatsAppContacts.length})`}
               </span>
+              <button
+                type="button"
+                onClick={onOpenNewWhatsAppContact}
+                className="text-[10px] font-bold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300 flex items-center gap-0.5 cursor-pointer uppercase tracking-wider"
+                title="Novo Atendimento WhatsApp"
+              >
+                <span>+ Novo</span>
+              </button>
             </div>
 
             {/* Identificador de Carteira Exclusiva para Consultores */}

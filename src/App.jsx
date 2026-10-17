@@ -12,6 +12,7 @@ import InstagramLeadImportModal from './components/InstagramLeadImportModal';
 import EduControlSyncModal from './components/EduControlSyncModal';
 import UserSelectionModal from './components/UserSelectionModal';
 import TaskDetailModal from './components/TaskDetailModal';
+import NewWhatsAppChatModal from './components/NewWhatsAppChatModal';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { INITIAL_EDUCONTROL_STUDENTS, matchStudentByPhone } from './lib/eduControl';
@@ -646,6 +647,7 @@ export default function App() {
 
   // Modais de Criação
   const [modalItem, setModalItem] = useState({ isOpen: false, type: 'channel' });
+  const [isNewWhatsAppChatOpen, setIsNewWhatsAppChatOpen] = useState(false);
 
   // Estado do Modal de IA
   const [aiModal, setAiModal] = useState({
@@ -2959,6 +2961,102 @@ export default function App() {
     }
   };
 
+  // Iniciar ativamente nova conversa WhatsApp com número inédito (Novo Atendimento)
+  const handleStartNewWhatsAppChat = async ({
+    rawPhone,
+    canonicalPhone,
+    chatId,
+    contactName,
+    department,
+    firstMessage
+  }) => {
+    const timeStr = getSaoPauloTime();
+
+    // 1. Dispara o envio inicial pela Evolution API
+    const result = await sendWhatsAppText(canonicalPhone, firstMessage);
+    if (!result.ok) {
+      throw new Error(result.error || 'Falha ao disparar mensagem pela Evolution API.');
+    }
+
+    const rawId = String(result.messageId || Date.now());
+    const realMessageId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
+
+    // 2. Cria o novo contato na carteira ativa
+    const newContact = {
+      id: chatId,
+      name: contactName || `WhatsApp (+${canonicalPhone})`,
+      phone: `+${canonicalPhone}`,
+      avatar: '👤',
+      department: department || 'Comercial',
+      assignee: currentUser?.name || 'Gabriel Carvalho',
+      assignees: [currentUser?.name || 'Gabriel Carvalho'],
+      status: 'carteira_ativa',
+      statusLabel: 'Em Atendimento',
+      aiActive: false,
+      lastInteraction: timeStr,
+      lastMessageAt: new Date().toISOString(),
+      triageContext: `Atendimento ativo iniciado por ${currentUser?.name || 'Operador'}`,
+      unread_count: 0,
+      unread: 0,
+      remoteJid: `${canonicalPhone}@s.whatsapp.net`,
+      preferredTarget: `${canonicalPhone}@s.whatsapp.net`
+    };
+
+    // 3. Cria a primeira mensagem enviada
+    const initialMsg = {
+      id: realMessageId,
+      senderId: currentUser?.id || 'u1',
+      senderName: currentUser?.name || 'Você',
+      text: firstMessage,
+      timestamp: timeStr,
+      status: 'sent',
+      actionExtracted: false
+    };
+
+    // 4. Grava no Supabase via upsert idempotente
+    const payloadText = `${firstMessage}\n<!-- STATUS:sent -->`;
+    try {
+      await supabase.from('messages').upsert([{
+        id: realMessageId,
+        chat_id: chatId,
+        sender_id: currentUser?.id || 'u1',
+        sender_name: currentUser?.name || 'Você',
+        text: payloadText,
+        timestamp: timeStr
+      }], { onConflict: 'id' });
+
+      try {
+        await supabase.from('chats').upsert([{
+          id: chatId,
+          phone: canonicalPhone,
+          last_message: firstMessage,
+          updated_at: new Date().toISOString()
+        }], { onConflict: 'id' });
+      } catch {}
+    } catch (dbErr) {
+      console.warn('Aviso ao sincronizar novo contato no Supabase:', dbErr);
+    }
+
+    // 5. Atualiza o estado da interface imediatamente
+    setWhatsAppContacts((prev) => {
+      const filtered = prev.filter((c) => c.id !== chatId && getCanonicalPhoneKey(c) !== canonicalPhone);
+      return [newContact, ...filtered];
+    });
+
+    setMessages((prev) => {
+      const existingList = prev[chatId] || [];
+      const filtered = existingList.filter((m) => m.id !== realMessageId);
+      return {
+        ...prev,
+        [chatId]: [...filtered, initialMsg]
+      };
+    });
+
+    // 6. Seleciona o novo contato e abre o chat
+    setActiveChat({ type: 'whatsapp', id: chatId });
+    setActiveView('chat');
+  };
+
   // Alternar atendimento IA vs Humano em contatos WhatsApp
   const handleToggleWhatsAppAI = (contactId) => {
     setWhatsAppContacts((prev) =>
@@ -4024,6 +4122,7 @@ export default function App() {
           setActiveView('chat');
           clearUnread(contactId);
         }}
+        onOpenNewWhatsAppContact={() => setIsNewWhatsAppChatOpen(true)}
         onDeleteChat={handleDeleteChat}
         onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
         onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
@@ -4265,6 +4364,14 @@ export default function App() {
         onSyncStudents={handleSyncEduControlStudents}
         currentStudents={eduControlStudents}
         collaborators={resolvedCollaborators}
+      />
+
+      {/* Modal de Início de Conversa Ativa WhatsApp (Novo Atendimento) */}
+      <NewWhatsAppChatModal
+        isOpen={isNewWhatsAppChatOpen}
+        onClose={() => setIsNewWhatsAppChatOpen(false)}
+        onSubmit={handleStartNewWhatsAppChat}
+        currentUser={currentUser}
       />
     </div>
   );
