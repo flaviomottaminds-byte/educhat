@@ -69,14 +69,14 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     name: 'Flávio Alexandre Motta',
     phone: '+55 11 93059-4591',
     avatar: '👨‍💼',
-    department: 'Diretoria / Gestão',
-    assignee: 'Flávio Motta',
-    assigned_to: 'u1',
-    status: 'carteira_ativa',
-    statusLabel: 'WhatsApp Oficial (Ativo)',
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
     lastInteraction: 'Agora',
-    triageContext: 'Canal direto com a Diretoria no WhatsApp Oficial (+55 11 93059-4591).'
+    triageContext: 'Canal oficial WhatsApp (+55 11 93059-4591). Fila Geral / Triagem.'
   },
   {
     id: 'wa-152093449003127_lid',
@@ -84,14 +84,14 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     name: 'Evyllinn Gomes',
     phone: '152093449003127',
     avatar: '👩‍🎓',
-    department: 'Secretaria Acadêmica',
-    assignee: 'Ana Paula',
-    assigned_to: 'u7',
-    status: 'carteira_ativa',
-    statusLabel: 'Aluna Ativa',
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
     lastInteraction: 'Recente',
-    triageContext: 'Aguardando retorno sobre emissão de documentos e status de matrícula.'
+    triageContext: 'Aguardando retorno sobre emissão de documentos. Fila Geral / Triagem.'
   },
   {
     id: 'wa-49371504767063_lid',
@@ -99,56 +99,56 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     name: 'Gabriel Camargo',
     phone: '49371504767063',
     avatar: '👨‍💼',
-    department: 'Comercial & Vendas',
-    assignee: 'Gabriel Carvalho',
-    assigned_to: 'u3',
-    status: 'carteira_ativa',
-    statusLabel: 'Equipe / Comercial',
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
     lastInteraction: 'Recente',
-    triageContext: 'Acompanhamento de demandas comerciais e novos polos.'
+    triageContext: 'Demandas comerciais e novos polos. Fila Geral / Triagem.'
   },
   {
     id: 'wa-lucas-mendes',
     name: 'Lucas Mendes (Lead MBA)',
     phone: '+55 11 98765-4321',
     avatar: '👨‍💼',
-    department: 'Comercial',
-    assignee: 'Gabriel Carvalho',
-    assigned_to: 'u3',
-    status: 'carteira_ativa', // 'carteira_ativa' | 'veterano_retencao' | 'ura_inedito'
-    statusLabel: 'Carteira Ativa',
-    aiActive: false, // Atendente humano assumiu
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
+    aiActive: false,
     lastInteraction: '10 min atrás',
-    triageContext: 'Negociação ativa de matrícula com bolsa para MBA em Gestão Estratégica.'
+    triageContext: 'Negociação de matrícula MBA em Gestão Estratégica. Fila Geral / Triagem.'
   },
   {
     id: 'wa-mariana-costa',
     name: 'Mariana Costa (Lead Graduação)',
     phone: '+55 11 97654-3210',
     avatar: '👩‍💼',
-    department: 'Comercial',
-    assignee: 'Tatiane Salatinos',
-    assigned_to: 'u2',
-    status: 'carteira_ativa',
-    statusLabel: 'Carteira Ativa',
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
     aiActive: false,
     lastInteraction: '15 min atrás',
-    triageContext: 'Interessada no curso de Pedagogia EAD. Atendimento da carteira de Tatiane Salatinos.'
+    triageContext: 'Interessada no curso de Pedagogia EAD. Fila Geral / Triagem.'
   },
   {
     id: 'wa-juliana-rocha',
     name: 'Juliana Rocha (Aluna Pós)',
     phone: '+55 19 97123-4567',
     avatar: '👩‍🎓',
-    department: 'Secretaria',
-    assignee: 'Ana Paula',
-    assigned_to: 'u7',
-    status: 'veterano_retencao',
-    statusLabel: 'Aluno Veterano',
-    aiActive: true, // Autoatendimento IA ativo
+    department: 'Triagem URA',
+    assignee: null,
+    assigned_to: null,
+    status: 'ura_inedito',
+    statusLabel: 'Fila • Triagem Geral',
+    aiActive: false,
     lastInteraction: 'Ontem',
-    triageContext: 'Aluna formada em 2025. Entrou em contato para solicitar 2ª via de histórico e consultar novo curso.'
+    triageContext: 'Aluna pós-graduação. Fila Geral / Triagem.'
   },
   {
     id: 'wa-carlos-eduardo',
@@ -156,13 +156,13 @@ export const INITIAL_WHATSAPP_CONTACTS = [
     phone: '+55 21 99888-1122',
     avatar: '👤',
     department: 'Triagem URA',
-    assignee: 'Assistente IA',
+    assignee: null,
     assigned_to: null,
     status: 'ura_inedito',
-    statusLabel: 'Novo Lead (URA)',
-    aiActive: true, // Bot URA em andamento
+    statusLabel: 'Fila • Triagem Geral',
+    aiActive: false,
     lastInteraction: 'Há 2 min',
-    triageContext: 'Primeiro contato recebido via WhatsApp. Aguardando seleção no menu de opções.'
+    triageContext: 'Primeiro contato recebido via WhatsApp. Fila Geral / Triagem.'
   }
 ];
 

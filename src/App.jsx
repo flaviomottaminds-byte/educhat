@@ -430,6 +430,14 @@ export default function App() {
 
   const [whatsAppContacts, setWhatsAppContacts] = useState(() => {
     try {
+      // RESET GERAL DE CARTEIRAS: limpa caches locais com atribuições desatualizadas
+      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v2');
+      if (!resetFlag) {
+        localStorage.removeItem('educhat_whatsapp_contacts');
+        localStorage.removeItem('educhat_chat_assignments');
+        localStorage.setItem('educhat_reset_carteiras_v2', 'true');
+        return INITIAL_WHATSAPP_CONTACTS;
+      }
       const saved = localStorage.getItem('educhat_whatsapp_contacts');
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -444,8 +452,8 @@ export default function App() {
               list[idx] = {
                 ...list[idx],
                 assigned_to: iw.assigned_to !== undefined ? iw.assigned_to : list[idx].assigned_to,
-                assignee: list[idx].assignee || iw.assignee,
-                department: list[idx].department || iw.department
+                assignee: iw.assignee !== undefined ? iw.assignee : list[idx].assignee,
+                department: iw.department || list[idx].department
               };
             }
           });
@@ -795,8 +803,9 @@ export default function App() {
                   matricula: matched.matricula,
                   academicStatus: matched.academicStatus,
                   statusLabel: `${matched.academicStatus} • ${matched.course}`,
-                  assignee: found.assignee || matched.assignee,
-                  department: found.department || matched.department
+                  assignee: found.assignee ?? null,
+                  assigned_to: found.assigned_to ?? null,
+                  department: found.department || matched.department || 'Triagem URA'
                 }
               : found;
           }
@@ -807,9 +816,10 @@ export default function App() {
               name: matched.name,
               phone: matched.phone,
               avatar: '🎓',
-              department: matched.department || 'Secretaria Acadêmica',
-              assignee: matched.assignee || 'Gabriel Carvalho',
-              status: 'carteira_ativa',
+              department: matched.department || 'Triagem URA',
+              assignee: null,
+              assigned_to: null,
+              status: 'ura_inedito',
               statusLabel: `${matched.academicStatus} • ${matched.course}`,
               course: matched.course,
               polo: matched.polo,
@@ -824,10 +834,11 @@ export default function App() {
             name: activeChat?.id ? `WhatsApp (${activeChat.id.replace('wa-', '')})` : 'Lead WhatsApp',
             phone: activeChat?.id ? `+${activeChat.id.replace('wa-', '')}` : '',
             avatar: '👤',
-            department: 'Comercial',
-            assignee: 'Gabriel Carvalho',
-            status: 'carteira_ativa',
-            statusLabel: 'Carteira Ativa'
+            department: 'Triagem URA',
+            assignee: null,
+            assigned_to: null,
+            status: 'ura_inedito',
+            statusLabel: 'Fila • Triagem Geral'
           };
         })(),
       }
@@ -4720,7 +4731,7 @@ export default function App() {
           whatsAppContacts={
             hasFullPortfolioAccess(currentUser)
               ? whatsAppContacts
-              : (whatsAppContacts || []).filter((c) => canUserViewChat(c, currentUser))
+              : (whatsAppContacts || []).filter((c) => canUserViewChat(c, currentUser, resolvedCollaborators))
           }
           activeChat={activeChat}
           messages={messages}

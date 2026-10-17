@@ -169,7 +169,7 @@ export default function Sidebar({
       // 1. REGRA DE VISIBILIDADE POR PERFIL E DEPARTAMENTO:
       // Gestor/Admin: 100% de visibilidade.
       // Colaborador: apenas se atribuído diretamente ou na fila de triagem do seu departamento.
-      if (!canUserViewChat(contact, currentUser)) return;
+      if (!canUserViewChat(contact, currentUser, collaborators)) return;
 
       const canonKey = getCanonicalPhoneKey(contact);
       if (!canonKey) {

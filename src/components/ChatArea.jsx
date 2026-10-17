@@ -32,7 +32,7 @@ import {
   Volume2,
   UserMinus
 } from 'lucide-react';
-import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment, getChatAssignedToId, normalizeName } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
@@ -908,21 +908,30 @@ export default function ChatArea({
     : '';
 
   const isManager = hasFullPortfolioAccess(currentUser);
-  const isAssignedToMe = isChatAssignedToUser(target, currentUser);
-  const hasAccessToChat = !isWhatsApp || canUserViewChat(target, currentUser);
+  const assignedToId = getChatAssignedToId(target, collaborators);
+  const myUserId = String(currentUser?.id || '').trim().toLowerCase();
+  const myNameNorm = normalizeName(currentUser?.name);
 
-  if (isWhatsApp && !hasAccessToChat) {
+  // Se um usuário comum (não-admin) conseguir acessar um chat cujo assigned_to seja DIFERENTE de null E DIFERENTE do seu próprio currentUser.id
+  const isAssignedToOther =
+    !isManager &&
+    assignedToId !== null &&
+    assignedToId !== myUserId &&
+    assignedToId !== myNameNorm &&
+    !isChatAssignedToUser(target, currentUser, collaborators);
+
+  if (isWhatsApp && isAssignedToOther) {
     return (
       <section className="flex-1 flex flex-col items-center justify-center h-full bg-[#efeae2] dark:bg-chatBg p-8 text-center relative transition-colors">
         <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
-          <div className="w-14 h-14 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto">
+          <div className="w-14 h-14 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-xs">
             <Lock size={26} />
           </div>
           <h3 className="text-base font-bold text-chatTextTitle">Atendimento Fora da Sua Carteira</h3>
           <p className="text-xs text-chatTextMuted leading-relaxed">
             Esta conversa do WhatsApp está atribuída a <strong>{target?.assignee || 'outro consultor'}</strong> ({target?.department || 'Comercial'}).
             <br /><br />
-            Por diretriz de privacidade e segurança da equipe comercial, você só possui acesso aos atendimentos sob sua responsabilidade direta.
+            Por diretriz de privacidade e segurança da equipe comercial, você só possui acesso aos atendimentos sob sua responsabilidade direta ou da fila geral de triagem.
           </p>
         </div>
       </section>
