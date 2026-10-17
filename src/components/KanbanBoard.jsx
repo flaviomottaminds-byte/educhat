@@ -27,8 +27,16 @@ const BASE_DEPARTMENTS = [
   'Pedagógico',
   'Tutoria',
   'Financeiro',
-  'Diretoria'
 ];
+
+export function normalizeTaskStatus(rawStatus) {
+  if (!rawStatus) return 'backlog';
+  const s = String(rawStatus).toLowerCase().trim();
+  if (s === 'done' || s === 'concluido' || s === 'concluído' || s === 'finalizado') return 'done';
+  if (s === 'in_progress' || s === 'andamento' || s === 'em andamento' || s === 'em_andamento') return 'in_progress';
+  if (s === 'waiting' || s === 'aguardando' || s === 'aguardando retorno' || s === 'aguardando_retorno') return 'waiting';
+  return 'backlog';
+}
 
 export default function KanbanBoard({
   tasks = [],
@@ -102,30 +110,43 @@ export default function KanbanBoard({
   // Visão Global nativa: exibe 100% dos cartões livremente com filtros rápidos opcionais
   const filteredTasks = useMemo(() => {
     return (tasks || []).filter((t) => {
-      if (filterDepartment && filterDepartment !== 'Todos') {
-        if (normalizeText(t.department) !== normalizeText(filterDepartment)) {
-          return false;
-        }
-      }
-      if (filterAssignee && filterAssignee !== 'todos') {
-        const selectedCollab = liveCollaborators.find(
-          (u) => u.id === filterAssignee || normalizeText(u.name) === normalizeText(filterAssignee)
-        );
-        const normFilterName = normalizeText(selectedCollab?.name || filterAssignee);
-        const normAssignee = normalizeText(t.assignee);
-        const idMatches = selectedCollab?.id && t.assigneeId && t.assigneeId === selectedCollab.id;
-        const emailMatches =
-          selectedCollab?.email &&
-          t.assigneeEmail &&
-          normalizeText(t.assigneeEmail) === normalizeText(selectedCollab.email);
-        const nameMatches =
-          normAssignee === normFilterName ||
-          (normFilterName.split(' ')[0]?.length >= 3 && normAssignee.includes(normFilterName.split(' ')[0]));
+      if (!t) return false;
 
-        if (!idMatches && !emailMatches && !nameMatches) {
+      // Filtro de Setor / Departamento
+      if (filterDepartment && filterDepartment !== 'Todos') {
+        const tDept = normalizeText(t.department || 'Diretoria');
+        const fDept = normalizeText(filterDepartment);
+        if (tDept !== fDept && !tDept.includes(fDept) && !fDept.includes(tDept)) {
           return false;
         }
       }
+
+      // Filtro de Colaborador Responsável
+      if (filterAssignee && filterAssignee !== 'todos') {
+        const normFilter = normalizeText(filterAssignee);
+        const normAssignee = normalizeText(t.assignee || '');
+        const normAssigneeId = normalizeText(t.assigneeId || '');
+
+        const selectedCollab = liveCollaborators.find(
+          (u) => u.id === filterAssignee || normalizeText(u.name) === normFilter
+        );
+        const selectedCollabName = normalizeText(selectedCollab?.name || '');
+        const selectedCollabId = normalizeText(selectedCollab?.id || '');
+
+        const isMatch =
+          normAssignee === normFilter ||
+          normAssignee === selectedCollabName ||
+          normAssigneeId === normFilter ||
+          normAssigneeId === selectedCollabId ||
+          (normFilter.split(' ')[0]?.length >= 3 && normAssignee.includes(normFilter.split(' ')[0])) ||
+          (normAssignee.split(' ')[0]?.length >= 3 && normFilter.includes(normAssignee.split(' ')[0])) ||
+          (selectedCollabName.split(' ')[0]?.length >= 3 && normAssignee.includes(selectedCollabName.split(' ')[0]));
+
+        if (!isMatch) {
+          return false;
+        }
+      }
+
       return true;
     });
   }, [tasks, filterDepartment, filterAssignee, liveCollaborators]);
@@ -133,7 +154,8 @@ export default function KanbanBoard({
   const handleMove = (e, taskId, currentStatus, direction) => {
     e.stopPropagation();
     const statusOrder = ['backlog', 'in_progress', 'waiting', 'done'];
-    const currentIndex = statusOrder.indexOf(currentStatus);
+    const currentNorm = normalizeTaskStatus(currentStatus);
+    const currentIndex = statusOrder.indexOf(currentNorm);
     const newIndex = direction === 'next' ? currentIndex + 1 : currentIndex - 1;
 
     if (newIndex >= 0 && newIndex < statusOrder.length) {
@@ -237,7 +259,7 @@ export default function KanbanBoard({
       {/* As 4 Colunas do Kanban (Pendente / A Fazer, Em Andamento, Aguardando Retorno, Concluído) */}
       <div className="flex-1 grid grid-cols-1 md:grid-cols-4 gap-4 min-h-[420px] pb-4">
         {COLUMNS.map((col) => {
-          const colTasks = filteredTasks.filter((t) => t.status === col.id);
+          const colTasks = filteredTasks.filter((t) => normalizeTaskStatus(t.status) === col.id);
           return (
             <div
               key={col.id}

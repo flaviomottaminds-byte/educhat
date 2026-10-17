@@ -473,7 +473,27 @@ export default function App() {
     } catch {}
   }, [messages]);
 
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [tasks, setTasks] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_tasks_cache');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch {}
+    return INITIAL_TASKS;
+  });
+
+  useEffect(() => {
+    try {
+      if (Array.isArray(tasks) && tasks.length > 0) {
+        localStorage.setItem('educhat_tasks_cache', JSON.stringify(tasks));
+      }
+    } catch {}
+  }, [tasks]);
+
   const [realtimeStatus, setRealtimeStatus] = useState('connected'); // 'connected' | 'connecting' | 'error'
   const [lastSyncTime, setLastSyncTime] = useState(() => getSaoPauloTime());
 
@@ -1471,18 +1491,34 @@ export default function App() {
         });
       }
 
-      // 2. Tarefas do Kanban
-      const { data: dbTasks } = await withTimeout(
-        supabase
-          .from('tasks')
-          .select('*')
-          .order('created_at', { ascending: false }),
-        2500
-      );
+      // =========================================================================
+      // 2. TAREFAS DO KANBAN (CONSULTA INDEPENDENTE, RETRY E AUTORRECUPERAÇÃO)
+      // =========================================================================
+      try {
+        let dbTasks = null;
+        const { data: taskData, error: taskErr } = await withTimeout(
+          supabase
+            .from('tasks')
+            .select('*')
+            .order('created_at', { ascending: false }),
+          6000
+        );
 
-      if (dbTasks && dbTasks.length > 0) {
-        setTasks(
-          dbTasks.map((t) => {
+        if (!taskErr && Array.isArray(taskData) && taskData.length > 0) {
+          dbTasks = taskData;
+        } else {
+          // Fallback de consulta direta caso o timeout tenha expirado ou falhado
+          const { data: directData } = await supabase
+            .from('tasks')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (Array.isArray(directData) && directData.length > 0) {
+            dbTasks = directData;
+          }
+        }
+
+        if (Array.isArray(dbTasks) && dbTasks.length > 0) {
+          const parsedTasks = dbTasks.map((t) => {
             let reqName = t.requester || '';
             let reqDept = t.requester_dept || '';
             if (!reqName && t.source_message && t.source_message.includes('Solicitado por:')) {
@@ -1496,7 +1532,7 @@ export default function App() {
             let cleanDesc = t.description || '';
             let comments = [];
             let attachments = [];
-            let assigneeId = null;
+            let assigneeId = t.assignee_id || null;
             let assigneeEmail = '';
             if (cleanDesc.includes('<!-- TASK_META:')) {
               const match = cleanDesc.match(/<!-- TASK_META:([\s\S]+?) -->/);
@@ -1505,35 +1541,72 @@ export default function App() {
                   const meta = JSON.parse(match[1]);
                   comments = meta.comments || [];
                   attachments = meta.attachments || [];
-                  assigneeId = meta.assigneeId || null;
+                  assigneeId = meta.assigneeId || assigneeId;
                   assigneeEmail = meta.assigneeEmail || '';
                   cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]+? -->/, '').trim();
                 } catch {}
               }
             }
 
+            // CORREÇÃO DE ATRIBUIÇÃO (ORPHAN CARDS):
+            // Cartões órfãos, sem responsável ou de utilizadores simulados são atribuídos ao Administrador atual (Flávio Motta - u1)
+            let finalAssignee = t.assignee || '';
+            let finalAssigneeAvatar = t.assignee_avatar || '👨‍💼';
+            let finalDept = t.department || 'Diretoria';
+
+            const normA = (finalAssignee || '').trim().toLowerCase();
+            const isOrphan =
+              !finalAssignee ||
+              normA === 'administrador' ||
+              normA === 'admin' ||
+              normA === 'simulado' ||
+              normA === 'usuario simulado' ||
+              normA === 'undefined' ||
+              normA === 'null' ||
+              normA === 'u1' ||
+              assigneeId === 'u1';
+
+            if (isOrphan || normA.includes('flavio') || normA.includes('motta')) {
+              finalAssignee = 'Flávio Motta';
+              finalAssigneeAvatar = '👨‍💼';
+              assigneeId = 'u1';
+              if (!finalDept || finalDept === 'Geral') finalDept = 'Diretoria';
+            }
+
             return {
               id: t.id,
               title: t.title,
               desc: cleanDesc,
-              status: t.status,
-              priority: t.priority,
-              isVip: t.is_vip,
-              assignee: t.assignee,
+              status: t.status || 'backlog',
+              priority: t.priority || 'media',
+              isVip: Boolean(t.is_vip),
+              assignee: finalAssignee,
               assigneeId,
               assigneeEmail,
-              assigneeAvatar: t.assignee_avatar || '👤',
-              department: t.department || 'Geral',
-              dueDate: t.due_date,
-              channel: t.channel,
+              assigneeAvatar: finalAssigneeAvatar,
+              department: finalDept,
+              dueDate: t.due_date || 'A definir',
+              channel: t.channel || '#geral',
               sourceMessage: t.source_message,
-              requester: reqName,
-              requesterDept: reqDept,
+              requester: reqName || 'Gestão',
+              requesterDept: reqDept || 'Diretoria',
               comments,
               attachments
             };
-          })
-        );
+          });
+
+          setTasks((prev) => {
+            const incomingIds = new Set(parsedTasks.map((t) => t.id));
+            const localOnly = prev.filter((t) => !incomingIds.has(t.id));
+            const merged = [...parsedTasks, ...localOnly];
+            try {
+              localStorage.setItem('educhat_tasks_cache', JSON.stringify(merged));
+            } catch {}
+            return merged;
+          });
+        }
+      } catch (errTasks) {
+        console.warn('[Supabase] Falha ao consultar tarefas do Kanban:', errTasks);
       }
 
       syncGeminiApiKeyFromCloud().catch(() => {});
@@ -3590,6 +3663,7 @@ export default function App() {
 
   const handleSwitchUser = (newUser) => {
     setCurrentUser(newUser);
+    currentUserRef.current = newUser;
     try {
       localStorage.setItem('educhat_user_id', newUser.id);
       const hb = saveLocalHeartbeat(newUser.id);
@@ -3599,6 +3673,9 @@ export default function App() {
     if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
       setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
     }
+
+    // Recarrega dados com as regras do novo usuário ativo
+    fetchSupabaseData();
   };
 
   const handleCreateTasksFromDossier = (tasksToAdd) => {
