@@ -133,3 +133,58 @@ export function matchesDepartment(collabDept, targetDept) {
 
   return false;
 }
+
+/**
+ * Determina se o usuário pode visualizar uma conversa do WhatsApp (Alunos/Leads).
+ * Regras estritas:
+ * 1. Gestores / Administradores: visibilidade irrestrita (100% da fila e histórico geral).
+ * 2. Colaboradores comuns (Atendentes):
+ *    a) Atribuído diretamente ao colaborador (responsável ativo ou co-atribuído).
+ *    b) Fila de triagem (sem responsável atribuído) e pertencente explicitamente ao departamento de atuação do colaborador.
+ */
+export function canUserViewChat(contact, user) {
+  if (!contact || !user) return false;
+
+  // 1. Gestores / Administradores / Diretores: sem restrições
+  if (hasFullPortfolioAccess(user)) return true;
+
+  // 2.a) Atribuído diretamente ao colaborador logado
+  if (isChatAssignedToUser(contact, user)) return true;
+
+  // 2.b) Fila de triagem (sem responsável) E pertence ao mesmo departamento
+  const primaryAssignee = normalizeName(contact.assignee || '');
+  const isUnassigned =
+    !primaryAssignee ||
+    primaryAssignee === 'aguardando' ||
+    primaryAssignee === 'triagem' ||
+    primaryAssignee === 'fila' ||
+    primaryAssignee === 'fila de triagem' ||
+    primaryAssignee === 'sem responsavel' ||
+    primaryAssignee === 'nao atribuido' ||
+    primaryAssignee === 'assistente ia' ||
+    primaryAssignee === 'bot de triagem ura' ||
+    primaryAssignee === 'robo' ||
+    primaryAssignee === 'bot' ||
+    contact.status === 'ura_inedito' ||
+    contact.status === 'aguardando_atendimento' ||
+    !Array.isArray(contact.assignees) ||
+    contact.assignees.length === 0 ||
+    contact.assignees.every((a) => {
+      const aNorm = normalizeName(typeof a === 'string' ? a : a?.name || '');
+      return (
+        !aNorm ||
+        aNorm === 'aguardando' ||
+        aNorm === 'triagem' ||
+        aNorm === 'fila' ||
+        aNorm === 'sem responsavel' ||
+        aNorm === 'assistente ia' ||
+        aNorm === 'bot de triagem ura'
+      );
+    });
+
+  if (isUnassigned && matchesDepartment(user.department, contact.department)) {
+    return true;
+  }
+
+  return false;
+}

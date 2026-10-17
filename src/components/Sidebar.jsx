@@ -27,7 +27,7 @@ import {
   GraduationCap,
   Edit2
 } from 'lucide-react';
-import { hasFullPortfolioAccess, isChatAssignedToUser } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat } from '../lib/portfolioAccess';
 import { getCanonicalPhoneKey, getChatKey } from '../data/initialData';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
@@ -135,6 +135,11 @@ export default function Sidebar({
 
     (safeWhatsAppContacts || []).forEach((contact) => {
       if (!contact) return;
+      // 1. REGRA DE VISIBILIDADE POR PERFIL E DEPARTAMENTO:
+      // Gestor/Admin: 100% de visibilidade.
+      // Colaborador: apenas se atribuído diretamente ou na fila de triagem do seu departamento.
+      if (!canUserViewChat(contact, currentUser)) return;
+
       const canonKey = getCanonicalPhoneKey(contact);
       if (!canonKey) {
         map.set(contact.id, contact);
@@ -172,7 +177,7 @@ export default function Sidebar({
     });
 
     return Array.from(map.values());
-  }, [safeWhatsAppContacts]);
+  }, [safeWhatsAppContacts, currentUser]);
 
   const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;

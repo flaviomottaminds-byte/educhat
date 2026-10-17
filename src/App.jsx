@@ -53,7 +53,7 @@ import {
   generateGeminiChatReply,
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
-import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName } from './lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat } from './lib/portfolioAccess';
 import { getSaoPauloTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
 import {
@@ -265,6 +265,9 @@ export default function App() {
         setRealtimeStatus('connected');
 
         if (Array.isArray(liveContacts) && liveContacts.length > 0) {
+          const activeUser = currentUserRef.current || currentUser;
+          const isMgr = hasFullPortfolioAccess(activeUser);
+
           setWhatsAppContacts((prev) => {
             const next = [...prev];
             liveContacts.forEach((incoming) => {
@@ -277,15 +280,22 @@ export default function App() {
                   (c.phone && incoming.phone && c.phone.replace(/\D/g, '') === incoming.phone.replace(/\D/g, ''))
               );
               if (idx !== -1) {
-                next[idx] = {
+                const merged = {
                   ...next[idx],
                   ...incoming,
                   remoteJid: incoming.remoteJid || next[idx].remoteJid,
                   remoteJidAlt: incoming.remoteJidAlt || next[idx].remoteJidAlt,
                   preferredTarget: incoming.preferredTarget || next[idx].preferredTarget || incoming.remoteJid || next[idx].remoteJid
                 };
+                if (!isMgr && !canUserViewChat(merged, activeUser)) {
+                  next.splice(idx, 1);
+                } else {
+                  next[idx] = merged;
+                }
               } else {
-                next.unshift(incoming);
+                if (isMgr || canUserViewChat(incoming, activeUser)) {
+                  next.unshift(incoming);
+                }
               }
             });
             return next;
@@ -1013,6 +1023,25 @@ export default function App() {
       }
     }
 
+    // Trava de Visibilidade WhatsApp por Departamento e Atribuição:
+    // O atendente só é notificado se o chat estiver atribuído a ele ou na fila do seu departamento
+    if (cKey.startsWith('wa-')) {
+      if (!hasFullPortfolioAccess(activeUser)) {
+        const existing = (whatsAppContactsRef.current || []).find((c) => c.id === cKey);
+        const cachedAsgn = assignmentsCacheRef.current[cKey];
+        const contactToCheck = existing || {
+          id: cKey,
+          assignee: cachedAsgn?.assignee,
+          assignees: cachedAsgn?.assignees,
+          department: cachedAsgn?.department,
+          status: cachedAsgn?.status
+        };
+        if (!canUserViewChat(contactToCheck, activeUser)) {
+          return;
+        }
+      }
+    }
+
     // REGRA 3: Toca SEMPRE o alerta sonoro nativo (880Hz/1046Hz) quando chega um INSERT de mensagem recebida
     playMessageSound();
 
@@ -1414,13 +1443,17 @@ export default function App() {
           }
 
           const combined = newContacts.length > 0 ? [...newContacts, ...updatedExisting] : updatedExisting;
-          combined.sort((a, b) => {
+          const filteredCombined = hasFullPortfolioAccess(activeUser)
+            ? combined
+            : combined.filter((c) => canUserViewChat(c, activeUser));
+
+          filteredCombined.sort((a, b) => {
             const unreadA = (a.unread_count || 0) > 0 ? 1 : 0;
             const unreadB = (b.unread_count || 0) > 0 ? 1 : 0;
             if (unreadB !== unreadA) return unreadB - unreadA;
             return 0;
           });
-          return combined;
+          return filteredCombined;
         });
       }
 
@@ -1792,6 +1825,9 @@ export default function App() {
               } catch {}
             }
 
+            const activeUser = currentUserRef.current || currentUser;
+            const isMgr = hasFullPortfolioAccess(activeUser);
+
             setWhatsAppContacts((prevContacts) => {
               const incomingKey = getCanonicalPhoneKey(cKey);
               const existingIdx = prevContacts.findIndex((c) => {
@@ -1839,6 +1875,12 @@ export default function App() {
                   unread: nextUnread
                 };
 
+                // Regra de Visibilidade por Perfil e Departamento:
+                // Se o colaborador não tem permissão para ver este chat, remove da visão do colaborador
+                if (!isMgr && !canUserViewChat(updatedContact, activeUser)) {
+                  return prevContacts.filter((_, idx) => idx !== existingIdx);
+                }
+
                 const remaining = prevContacts.filter((_, idx) => idx !== existingIdx);
                 return [updatedContact, ...remaining];
               } else {
@@ -1876,6 +1918,13 @@ export default function App() {
                   unread: isCurrentActive ? 0 : 1
                 };
 
+                // Regra de Visibilidade por Perfil e Departamento:
+                // Se for um novo chat não atribuído ao atendente e fora do seu departamento de triagem,
+                // ignora e não adiciona na visão do colaborador
+                if (!isMgr && !canUserViewChat(updatedContact, activeUser)) {
+                  return prevContacts;
+                }
+
                 return [updatedContact, ...prevContacts];
               }
             });
@@ -1907,6 +1956,11 @@ export default function App() {
             row.sender_id !== 'u_ia_copilot' &&
             !document.hidden
           ) {
+            const activeUser = currentUserRef.current || currentUser;
+            const targetContact = (whatsAppContactsRef.current || []).find((c) => c.id === cKey);
+            if (!hasFullPortfolioAccess(activeUser) && !canUserViewChat(targetContact, activeUser)) {
+              return;
+            }
             setWhatsAppContacts((prevContacts) => {
               const contact = prevContacts.find((c) => c.id === cKey);
               if (!contact) return prevContacts;
