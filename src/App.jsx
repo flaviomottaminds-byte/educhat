@@ -56,7 +56,7 @@ import {
 } from './lib/gemini';
 import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat } from './lib/portfolioAccess';
 import { fetchKnowledgeBaseDocs } from './lib/knowledgeBase';
-import { getSaoPauloTime } from './lib/timezone';
+import { getSaoPauloTime, formatRelativeChatTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
 import {
   isCollaboratorOnline,
@@ -828,12 +828,15 @@ export default function App() {
       }
     }
 
+    const rawDate = m.created_at || m.timestamp || new Date().toISOString();
     return {
       id: m.id,
       senderId: m.sender_id,
       senderName: m.sender_name,
       text: cleanText,
-      timestamp: getSaoPauloTime(m.created_at || m.timestamp),
+      timestamp: getSaoPauloTime(rawDate),
+      created_at: rawDate,
+      timestampRaw: rawDate,
       attachment: parsedAttachment,
       replyTo: parsedReplyTo,
       status: parsedStatus,
@@ -1434,8 +1437,8 @@ export default function App() {
               triageContext: asgn?.updatedBy
                 ? `Atribuído a ${primaryAssignee} (${asgn.department}) por ${asgn.updatedBy}`
                 : c.triageContext,
-              lastInteraction: latestMsg ? latestMsg.timestamp : c.lastInteraction,
-              lastMessageAt: latestMsg ? (latestMsg.timestamp || latestMsg.created_at) : c.lastMessageAt,
+              lastInteraction: formatRelativeChatTime(latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : (c.lastMessageAt || c.lastInteraction)),
+              lastMessageAt: latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : c.lastMessageAt,
               unread_count: unreadCount,
               unread: unreadCount
             };
@@ -1454,6 +1457,7 @@ export default function App() {
               const rawDigits = waKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
               const unreadCount = unreadMap[waKey] || 0;
+              const rawLastTime = latestMsg ? (latestMsg.created_at || latestMsg.timestampRaw || latestMsg.timestamp) : new Date().toISOString();
 
               newContacts.push({
                 id: waKey,
@@ -1466,8 +1470,8 @@ export default function App() {
                 status: asgn?.status || 'ura_inedito',
                 statusLabel: asgn?.statusLabel || 'Lead WhatsApp',
                 aiActive: false,
-                lastInteraction: latestMsg?.timestamp || 'Recente',
-                lastMessageAt: latestMsg ? (latestMsg.timestamp || latestMsg.created_at) : null,
+                lastInteraction: formatRelativeChatTime(rawLastTime),
+                lastMessageAt: rawLastTime,
                 triageContext: asgn
                   ? `Atribuído a ${asgn.assignee} (${asgn.department}) por ${asgn.updatedBy || 'Gestão'}`
                   : 'Histórico sincronizado do WhatsApp.',
@@ -1957,8 +1961,8 @@ export default function App() {
                   triageContext: asgnData?.updatedBy
                     ? `Atribuído a ${asgnData.assignee} (${asgnData.department}) por ${asgnData.updatedBy}`
                     : existing.triageContext,
-                  lastInteraction: incoming.timestamp || 'Agora',
-                  lastMessageAt: new Date().toISOString(),
+                  lastInteraction: formatRelativeChatTime(incoming.created_at || incoming.timestampRaw || new Date().toISOString()),
+                  lastMessageAt: incoming.created_at || incoming.timestampRaw || new Date().toISOString(),
                   unread_count: nextUnread,
                   unread: nextUnread
                 };
@@ -1999,8 +2003,8 @@ export default function App() {
                   status: finalStatus,
                   statusLabel: finalStatusLabel,
                   aiActive: false,
-                  lastInteraction: incoming.timestamp || 'Agora',
-                  lastMessageAt: new Date().toISOString(),
+                  lastInteraction: formatRelativeChatTime(incoming.created_at || incoming.timestampRaw || new Date().toISOString()),
+                  lastMessageAt: incoming.created_at || incoming.timestampRaw || new Date().toISOString(),
                   triageContext: 'Mensagem recebida via WhatsApp.',
                   unread_count: isCurrentActive ? 0 : 1,
                   unread: isCurrentActive ? 0 : 1
@@ -2511,10 +2515,11 @@ export default function App() {
       setWhatsAppContacts((prev) => {
         const existing = prev.find((c) => c.id === currentChatKey);
         if (!existing) return prev;
+        const nowIso = new Date().toISOString();
         const updatedContact = {
           ...existing,
-          lastInteraction: timeStr,
-          lastMessageAt: new Date().toISOString()
+          lastInteraction: formatRelativeChatTime(nowIso),
+          lastMessageAt: nowIso
         };
         const remaining = prev.filter((c) => c.id !== currentChatKey);
         return [updatedContact, ...remaining];
@@ -3118,7 +3123,7 @@ export default function App() {
       status: 'carteira_ativa',
       statusLabel: 'Em Atendimento',
       aiActive: false,
-      lastInteraction: timeStr,
+      lastInteraction: formatRelativeChatTime(new Date()),
       lastMessageAt: new Date().toISOString(),
       triageContext: `Atendimento ativo iniciado por ${currentUser?.name || 'Operador'}`,
       unread_count: 0,

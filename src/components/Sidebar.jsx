@@ -31,6 +31,7 @@ import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat } from '.
 import { getCanonicalPhoneKey, getChatKey } from '../data/initialData';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
+import { formatRelativeChatTime, parseDateSafely } from '../lib/timezone';
 
 // 1. FILTRO DE NÃO LIDAS (UNREAD COUNT):
 // A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
@@ -181,8 +182,18 @@ export default function Sidebar({
       }
     });
 
-    return Array.from(map.values());
-  }, [safeWhatsAppContacts, currentUser]);
+    return Array.from(map.values()).sort((a, b) => {
+      const getContactSortTime = (c) => {
+        const cMessages = messages?.[c.id] || messages?.[getCanonicalPhoneKey(c)] || [];
+        const lastMsg = Array.isArray(cMessages) && cMessages.length > 0 ? cMessages[cMessages.length - 1] : null;
+        const rawTime = lastMsg?.created_at || lastMsg?.timestampRaw || c.lastMessageAt || c.updated_at || c.lastInteraction;
+        const parsed = parseDateSafely(rawTime);
+        const timeVal = parsed instanceof Date ? parsed.getTime() : (typeof rawTime === 'number' ? rawTime : 0);
+        return isNaN(timeVal) ? 0 : timeVal;
+      };
+      return getContactSortTime(b) - getContactSortTime(a);
+    });
+  }, [safeWhatsAppContacts, currentUser, messages]);
 
   const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
     if (!c) return false;
@@ -471,6 +482,9 @@ export default function Sidebar({
                 const contactUnread = unreadCounts?.[contact.id] || contact.unread_count || contact.unread || 0;
                 const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
                 const displayName = student?.name || contact.name;
+                const contactMessages = messages?.[contact.id] || messages?.[getCanonicalPhoneKey(contact)] || [];
+                const lastMsg = Array.isArray(contactMessages) && contactMessages.length > 0 ? contactMessages[contactMessages.length - 1] : null;
+                const contactTime = lastMsg?.created_at || lastMsg?.timestampRaw || contact.lastMessageAt || contact.updated_at || contact.lastInteraction;
 
                 return (
                   <button
@@ -544,7 +558,7 @@ export default function Sidebar({
 
                     <div className="flex flex-col items-end gap-1 shrink-0 ml-2">
                       <span className={`text-[10px] ${contactUnread > 0 ? 'text-emerald-600 dark:text-emerald-400 font-bold' : 'text-chatTextMuted font-medium'}`}>
-                        {contact.lastInteraction}
+                        {formatRelativeChatTime(contactTime)}
                       </span>
                       {contactUnread > 0 && (
                         <span className="bg-emerald-600 text-white text-[9.5px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce inline-flex items-center justify-center">
