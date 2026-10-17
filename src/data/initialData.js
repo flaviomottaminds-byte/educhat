@@ -271,11 +271,13 @@ export const getCanonicalPhoneKey = (contactOrId) => {
   return canonicalizeWhatsAppPhone(raw);
 };
 
-export const getChatKey = (activeChat, currentUserId) => {
+export const getChatKey = (activeChat, currentUserId = 'u1') => {
   if (!activeChat) return 'c-geral';
-  if (activeChat.type === 'channel') return activeChat.id;
-  if (activeChat.type === 'whatsapp') return canonicalizeChatId(activeChat.id);
-  const ids = [currentUserId, activeChat.id].sort();
+  if (activeChat.type === 'channel') return activeChat.id || 'c-geral';
+  if (activeChat.type === 'whatsapp') return canonicalizeChatId(activeChat.id || '');
+  const partner = currentUserId || 'u1';
+  const targetId = activeChat.id || 'u2';
+  const ids = [partner, targetId].sort();
   return `dm-${ids[0]}-${ids[1]}`;
 };
 

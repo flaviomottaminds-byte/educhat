@@ -13,6 +13,7 @@ import EduControlSyncModal from './components/EduControlSyncModal';
 import UserSelectionModal from './components/UserSelectionModal';
 import TaskDetailModal from './components/TaskDetailModal';
 import NewWhatsAppChatModal from './components/NewWhatsAppChatModal';
+import ErrorBoundary from './components/ErrorBoundary';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { INITIAL_EDUCONTROL_STUDENTS, matchStudentByPhone } from './lib/eduControl';
@@ -4228,85 +4229,98 @@ export default function App() {
   return (
     <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
-      <Sidebar
-        activeView={activeView}
-        setActiveView={setActiveView}
-        channels={channels}
-        collaborators={resolvedCollaborators}
-        whatsAppContacts={whatsAppContacts}
-        activeChat={activeChat}
-        messages={messages}
-        onSelectChannel={(channelId) => {
-          setActiveChat({ type: 'channel', id: channelId });
-          setActiveView('chat');
-          clearUnread(channelId);
-          markMessagesAsRead({ type: 'channel', id: channelId });
-        }}
-        onSelectCollaborator={(userId) => {
-          setActiveChat({ type: 'dm', id: userId });
-          setActiveView('chat');
-          clearUnread(userId);
-          markMessagesAsRead({ type: 'dm', id: userId });
-        }}
-        onSelectWhatsAppContact={(contactId) => {
-          setActiveChat({ type: 'whatsapp', id: contactId });
-          setActiveView('chat');
-          clearUnread(contactId);
-          markMessagesAsRead({ type: 'whatsapp', id: contactId });
-        }}
-        onOpenNewWhatsAppContact={() => setIsNewWhatsAppChatOpen(true)}
-        onDeleteChat={handleDeleteChat}
-        onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
-        onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
-        onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
-        eduControlStudents={eduControlStudents}
-        aiAutonomous={aiAutonomous}
-        setAiAutonomous={setAiAutonomous}
-        onOpenAICopilot={() =>
-          setAiModal({ isOpen: true, mode: 'bottlenecks', sourceMessage: null })
-        }
-        onOpenAIMemory={() => setIsAIMemoryOpen(true)}
-        onOpenNewChannel={() => setModalItem({ isOpen: true, type: 'channel' })}
-        onOpenNewCollaborator={(initialData) => setModalItem({ isOpen: true, type: 'collaborator', initialData: initialData || null })}
-        onEditCollaborator={(collab) => setModalItem({ isOpen: true, type: 'collaborator', initialData: collab })}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        currentUser={currentUser}
-        realtimeStatus={realtimeStatus}
-        onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
-        unreadCounts={unreadCounts}
-        lastSyncTime={lastSyncTime}
-        officialWhatsAppNumber="+55 (11) 93059-4591"
-        institutionName="Faculdade Olavo Bilac • Grupo EstudeMais"
-        portfolioLabel="Matriz Olavo Bilac • Carteira Ativa"
-      />
+      <ErrorBoundary
+        title="Erro ao carregar barra lateral"
+        description="Ocorreu uma falha inesperada na listagem de conversas. Clique abaixo para restabelecer a barra lateral."
+      >
+        <Sidebar
+          activeView={activeView}
+          setActiveView={setActiveView}
+          channels={channels}
+          collaborators={resolvedCollaborators}
+          whatsAppContacts={whatsAppContacts}
+          activeChat={activeChat}
+          messages={messages}
+          onSelectChannel={(channelId) => {
+            setActiveChat({ type: 'channel', id: channelId });
+            setActiveView('chat');
+            clearUnread(channelId);
+            markMessagesAsRead({ type: 'channel', id: channelId });
+          }}
+          onSelectCollaborator={(userId) => {
+            setActiveChat({ type: 'dm', id: userId });
+            setActiveView('chat');
+            clearUnread(userId);
+            markMessagesAsRead({ type: 'dm', id: userId });
+          }}
+          onSelectWhatsAppContact={(contactId) => {
+            setActiveChat({ type: 'whatsapp', id: contactId });
+            setActiveView('chat');
+            clearUnread(contactId);
+            markMessagesAsRead({ type: 'whatsapp', id: contactId });
+          }}
+          onOpenNewWhatsAppContact={() => setIsNewWhatsAppChatOpen(true)}
+          onDeleteChat={handleDeleteChat}
+          onOpenWhatsAppConnection={(tab = 'qrcode') => setWhatsAppModal({ isOpen: true, tab })}
+          onOpenInstagramImport={() => setIsInstagramImportOpen(true)}
+          onOpenEduControlSync={() => setIsEduControlModalOpen(true)}
+          eduControlStudents={eduControlStudents}
+          aiAutonomous={aiAutonomous}
+          setAiAutonomous={setAiAutonomous}
+          onOpenAICopilot={() =>
+            setAiModal({ isOpen: true, mode: 'bottlenecks', sourceMessage: null })
+          }
+          onOpenAIMemory={() => setIsAIMemoryOpen(true)}
+          onOpenNewChannel={() => setModalItem({ isOpen: true, type: 'channel' })}
+          onOpenNewCollaborator={(initialData) => setModalItem({ isOpen: true, type: 'collaborator', initialData: initialData || null })}
+          onEditCollaborator={(collab) => setModalItem({ isOpen: true, type: 'collaborator', initialData: collab })}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+          currentUser={currentUser}
+          realtimeStatus={realtimeStatus}
+          onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
+          unreadCounts={unreadCounts}
+          lastSyncTime={lastSyncTime}
+          officialWhatsAppNumber="+55 (11) 93059-4591"
+          institutionName="Faculdade Olavo Bilac • Grupo EstudeMais"
+          portfolioLabel="Matriz Olavo Bilac • Carteira Ativa"
+        />
+      </ErrorBoundary>
 
       {/* Área Central Baseada na Visualização Ativa */}
       {activeView === 'chat' && (
-        <ChatArea
-          chatMeta={chatMeta}
-          messages={currentMessages}
-          onSendMessage={handleSendMessage}
-          onCreateTaskFromMessage={handleCreateTaskFromMessage}
-          onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
-          onDeleteMessage={handleDeleteMessage}
-          onDeleteChat={handleDeleteChat}
-          onOpenTaskDetail={(taskId) => {
-            const found = tasks.find((t) => t.id === taskId);
-            if (found) setSelectedTaskDetail(found);
+        <ErrorBoundary
+          title="Ocorreu um erro ao carregar este chat."
+          description="Detectamos uma inconsistência nos dados desta conversa. Clique abaixo para restabelecer a conversa com segurança."
+          onReset={() => {
+            setActiveChat({ type: 'channel', id: 'c-geral' });
           }}
-          onScheduleTask={handleScheduleTask}
-          onDelegateTask={handleDelegateTask}
-          onSummarizeChat={handleSummarizeChat}
-          onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
-          onToggleWhatsAppAI={handleToggleWhatsAppAI}
-          onUpdateChatAssignment={handleUpdateChatAssignment}
-          onRemoveCoAssignee={handleRemoveCoAssignee}
-          currentUser={currentUser}
-          realtimeStatus={realtimeStatus}
-          collaborators={resolvedCollaborators}
-          eduControlStudents={eduControlStudents}
-        />
+        >
+          <ChatArea
+            chatMeta={chatMeta}
+            messages={currentMessages}
+            onSendMessage={handleSendMessage}
+            onCreateTaskFromMessage={handleCreateTaskFromMessage}
+            onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
+            onDeleteMessage={handleDeleteMessage}
+            onDeleteChat={handleDeleteChat}
+            onOpenTaskDetail={(taskId) => {
+              const found = tasks.find((t) => t.id === taskId);
+              if (found) setSelectedTaskDetail(found);
+            }}
+            onScheduleTask={handleScheduleTask}
+            onDelegateTask={handleDelegateTask}
+            onSummarizeChat={handleSummarizeChat}
+            onOpenWhatsAppDossier={() => setIsDossierOpen(true)}
+            onToggleWhatsAppAI={handleToggleWhatsAppAI}
+            onUpdateChatAssignment={handleUpdateChatAssignment}
+            onRemoveCoAssignee={handleRemoveCoAssignee}
+            currentUser={currentUser}
+            realtimeStatus={realtimeStatus}
+            collaborators={resolvedCollaborators}
+            eduControlStudents={eduControlStudents}
+          />
+        </ErrorBoundary>
       )}
 
       {activeView === 'kanban' && (

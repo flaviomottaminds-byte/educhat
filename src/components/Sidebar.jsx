@@ -38,21 +38,26 @@ import { formatLastSeen } from '../lib/presence';
 // AND o status é não lido (is_read === false ou status !== 'read'). Nunca conte o .length total do array.
 export function countUnreadMessages(messageList, currentUserId) {
   if (!Array.isArray(messageList) || messageList.length === 0) return 0;
-  return messageList.filter((m) => {
-    if (!m) return false;
-    // O remetente é o contato: sender_id !== currentUser.id ou fromMe === false
-    const senderId = m.senderId || m.sender_id;
-    const isFromMe = (senderId && currentUserId) ? senderId === currentUserId : Boolean(m.fromMe);
-    if (isFromMe) return false;
+  try {
+    return messageList.filter((m) => {
+      if (!m || typeof m !== 'object') return false;
+      // O remetente é o contato: sender_id !== currentUser.id ou fromMe === false
+      const senderId = m.senderId || m.sender_id;
+      const isFromMe = (senderId && currentUserId) ? senderId === currentUserId : Boolean(m.fromMe);
+      if (isFromMe) return false;
 
-    // Status é não lido: is_read === false ou status !== 'read'
-    const isRead =
-      m.is_read === true ||
-      m.status === 'read' ||
-      (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+      // Status é não lido: is_read === false ou status !== 'read'
+      const isRead =
+        m.is_read === true ||
+        m.status === 'read' ||
+        (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
 
-    return !isRead;
-  }).length;
+      return !isRead;
+    }).length;
+  } catch (err) {
+    console.warn('Erro ao calcular mensagens não lidas:', err);
+    return 0;
+  }
 }
 
 export default function Sidebar({
@@ -436,7 +441,7 @@ export default function Sidebar({
                 <div className="flex items-center gap-1.5 truncate">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
                   <span className="text-[10.5px] font-bold text-emerald-800 dark:text-emerald-300 truncate">
-                    Consultor: {currentUser.name}
+                    Consultor: {currentUser?.name || 'Consultor'}
                   </span>
                 </div>
                 <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-400 bg-white dark:bg-chatPanel px-1.5 py-0.5 rounded shadow-2xs shrink-0">
@@ -458,11 +463,12 @@ export default function Sidebar({
               </div>
             ) : (
               filteredWhatsAppContacts.map((contact) => {
-                const isActive = activeView === 'chat' && activeChat.type === 'whatsapp' && (
-                  activeChat.id === contact.id ||
-                  getCanonicalPhoneKey(activeChat.id) === getCanonicalPhoneKey(contact)
+                if (!contact) return null;
+                const isActive = activeView === 'chat' && activeChat?.type === 'whatsapp' && (
+                  activeChat?.id === contact.id ||
+                  getCanonicalPhoneKey(activeChat?.id) === getCanonicalPhoneKey(contact)
                 );
-                const contactUnread = unreadCounts[contact.id] || contact.unread_count || contact.unread || 0;
+                const contactUnread = unreadCounts?.[contact.id] || contact.unread_count || contact.unread || 0;
                 const student = matchStudentByPhone(contact.id || contact.phone, eduControlStudents);
                 const displayName = student?.name || contact.name;
 
@@ -606,9 +612,9 @@ export default function Sidebar({
                   </div>
 
                   {(() => {
-                    const botDmKey = getChatKey({ type: 'dm', id: botCollaborator.id }, currentUserId);
+                    const botDmKey = getChatKey({ type: 'dm', id: botCollaborator?.id || 'u_ia_copilot' }, currentUserId);
                     const botMessages = Array.isArray(messages?.[botDmKey]) ? messages[botDmKey] : [];
-                    const isBotActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === botCollaborator.id;
+                    const isBotActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === (botCollaborator?.id || 'u_ia_copilot');
                     const botUnread = isBotActive ? 0 : countUnreadMessages(botMessages, currentUserId);
 
                     return botUnread > 0 ? (
@@ -645,6 +651,7 @@ export default function Sidebar({
                 {filteredChannels && filteredChannels.length > 0 ? (
                   filteredChannels.map((c) => {
                     if (!c) return null;
+                    const isActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === c.name);
                     const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
                     const channelUnread = isActive ? 0 : (
                       channelMessages.length > 0
