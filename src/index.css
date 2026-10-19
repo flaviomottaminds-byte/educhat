@@ -76,3 +76,18 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(102, 119, 129, 0.45);
 }
+
+/* Regras de impressão para expansão total em PDF (sem corte de páginas) */
+@media print {
+  html, body, #root {
+    overflow: visible !important;
+    height: auto !important;
+    min-height: 100% !important;
+    background: #ffffff !important;
+  }
+
+  @page {
+    margin: 15mm;
+    size: auto;
+  }
+}

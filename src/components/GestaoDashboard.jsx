@@ -345,9 +345,11 @@ export default function GestaoDashboard({
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#f8fafc] dark:bg-chatBg p-6 md:p-8 overflow-y-auto transition-colors">
-      {/* Top Header do Painel */}
-      <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div className="flex-1 flex flex-col h-full bg-[#f8fafc] dark:bg-chatBg p-6 md:p-8 overflow-y-auto transition-colors print:p-0 print:overflow-visible print:h-auto print:bg-white print:w-full">
+      {/* Container do Dashboard (oculto na impressão se o modal da Ata estiver aberto) */}
+      <div className={`space-y-6 ${minuteModal.isOpen ? 'print:hidden' : ''}`}>
+        {/* Top Header do Painel */}
+        <div className="mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
             <span className="px-2.5 py-0.5 rounded-full text-[10.5px] font-bold bg-brand-500/10 text-brand-600 dark:text-brand-400 uppercase tracking-wider">
@@ -749,25 +751,26 @@ export default function GestaoDashboard({
           </div>
         </div>
       </div>
+      </div>
 
       {/* MODAL EXECUTIVO: ATA DE ALINHAMENTO INDIVIDUAL (VIA IA) */}
       {minuteModal.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white dark:bg-chatCard w-full max-w-3xl max-h-[90vh] rounded-2xl border border-slate-200 dark:border-chatBorder shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs print:fixed print:inset-0 print:p-0 print:bg-white print:overflow-visible print:h-auto print:w-full print:z-[9999] print:block">
+          <div className="bg-white dark:bg-chatCard w-full max-w-3xl max-h-[90vh] rounded-2xl border border-slate-200 dark:border-chatBorder shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200 print:overflow-visible print:h-auto print:w-full print:absolute print:inset-0 print:p-0 print:border-none print:shadow-none print:max-w-none print:max-h-none print:bg-white print:rounded-none">
             {/* Header do Modal */}
-            <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-b border-slate-200 dark:border-chatBorder flex items-center justify-between">
+            <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-b border-slate-200 dark:border-chatBorder flex items-center justify-between print:bg-white print:p-6 print:pb-4 print:border-b-2 print:border-slate-800">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-xs">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-xs print:hidden">
                   <Sparkles size={16} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-chatTextTitle flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-chatTextTitle flex items-center gap-2 print:text-xl print:text-black">
                     Ata Executiva de Alinhamento & Feedback
-                    <span className="text-[10px] font-bold bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300 px-2 py-0.5 rounded-full">
+                    <span className="text-[10px] font-bold bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300 px-2 py-0.5 rounded-full print:hidden">
                       Gemini IA
                     </span>
                   </h3>
-                  <p className="text-[11px] text-chatTextMuted">
+                  <p className="text-[11px] text-chatTextMuted print:text-sm print:text-slate-800 print:mt-1">
                     Colaborador: <strong>{minuteModal.collaborator?.name}</strong> ({minuteModal.collaborator?.department})
                   </p>
                 </div>
@@ -776,16 +779,16 @@ export default function GestaoDashboard({
               <button
                 type="button"
                 onClick={() => setMinuteModal({ ...minuteModal, isOpen: false })}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-chatPanel transition cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-chatPanel transition cursor-pointer print:hidden"
               >
                 <X size={18} />
               </button>
             </div>
 
             {/* Conteúdo do Modal */}
-            <div className="flex-1 p-6 overflow-y-auto space-y-4">
+            <div className="flex-1 p-6 overflow-y-auto space-y-4 print:overflow-visible print:h-auto print:w-full print:p-6 print:max-h-none">
               {minuteModal.loading ? (
-                <div className="flex flex-col items-center justify-center py-16 space-y-3">
+                <div className="flex flex-col items-center justify-center py-16 space-y-3 print:hidden">
                   <div className="w-10 h-10 border-3 border-brand-600 border-t-transparent rounded-full animate-spin" />
                   <p className="text-sm font-bold text-chatTextTitle">
                     Consultando IA & Compilando Dados Operacionais...
@@ -795,18 +798,18 @@ export default function GestaoDashboard({
                   </p>
                 </div>
               ) : minuteModal.error ? (
-                <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs">
+                <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-xl text-red-700 dark:text-red-300 text-xs print:text-red-800">
                   <strong>Erro ao gerar ata:</strong> {minuteModal.error}
                 </div>
               ) : (
-                <div className="bg-slate-50 dark:bg-chatSidebar/60 p-5 rounded-xl border border-slate-200 dark:border-chatBorder font-mono text-xs leading-relaxed text-chatTextTitle whitespace-pre-wrap select-text">
+                <div className="bg-slate-50 dark:bg-chatSidebar/60 p-5 rounded-xl border border-slate-200 dark:border-chatBorder font-mono text-xs leading-relaxed text-chatTextTitle whitespace-pre-wrap select-text break-words print:overflow-visible print:h-auto print:w-full print:p-0 print:border-none print:bg-white print:text-black print:text-[13px] print:leading-relaxed">
                   {minuteModal.minuteText}
                 </div>
               )}
             </div>
 
             {/* Rodapé de Ações do Modal */}
-            <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-slate-200 dark:border-chatBorder flex items-center justify-between">
+            <div className="p-4 bg-slate-50 dark:bg-chatSidebar border-t border-slate-200 dark:border-chatBorder flex items-center justify-between print:hidden">
               <span className="text-[11px] text-chatTextMuted">
                 {minuteModal.minuteText ? 'Documento pronto para arquivamento ou envio' : ''}
               </span>
@@ -817,7 +820,7 @@ export default function GestaoDashboard({
                     <button
                       type="button"
                       onClick={handlePrintMinute}
-                      className="px-3.5 py-2 bg-white dark:bg-chatPanel hover:bg-slate-100 dark:hover:bg-chatCard text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-chatBorder text-xs font-bold rounded-xl shadow-2xs transition flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-2 bg-white dark:bg-chatPanel hover:bg-slate-100 dark:hover:bg-chatCard text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-chatBorder text-xs font-bold rounded-xl shadow-2xs transition flex items-center gap-1.5 cursor-pointer print:hidden"
                     >
                       <Printer size={14} />
                       <span>Imprimir</span>
@@ -826,7 +829,7 @@ export default function GestaoDashboard({
                     <button
                       type="button"
                       onClick={handleCopyMinute}
-                      className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                      className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer print:hidden"
                     >
                       {minuteModal.copied ? <Check size={14} /> : <Copy size={14} />}
                       <span>{minuteModal.copied ? 'Copiado!' : 'Copiar Texto'}</span>
@@ -837,7 +840,7 @@ export default function GestaoDashboard({
                 <button
                   type="button"
                   onClick={() => setMinuteModal({ ...minuteModal, isOpen: false })}
-                  className="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition cursor-pointer"
+                  className="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition cursor-pointer print:hidden"
                 >
                   Fechar
                 </button>

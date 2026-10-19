@@ -4794,9 +4794,10 @@ export default function App() {
   };
 
   return (
-    <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody ${theme === 'dark' ? 'dark' : ''}`}>
+    <div className={`flex h-screen w-screen overflow-hidden bg-chatBg font-sans text-chatTextBody print:h-auto print:w-full print:overflow-visible print:bg-white ${theme === 'dark' ? 'dark' : ''}`}>
       {/* Barra Lateral estilo WhatsApp */}
-      <ErrorBoundary
+      <div className="print:hidden h-full flex shrink-0">
+        <ErrorBoundary
         title="Erro ao carregar barra lateral"
         description="Ocorreu uma falha inesperada na listagem de conversas. Clique abaixo para restabelecer a barra lateral."
       >
@@ -4860,6 +4861,7 @@ export default function App() {
           portfolioLabel="Matriz Olavo Bilac • Carteira Ativa"
         />
       </ErrorBoundary>
+      </div>
 
       {/* Área Central Baseada na Visualização Ativa */}
       {activeView === 'chat' && (
