@@ -3023,76 +3023,124 @@ export default function App() {
     }
     payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
-    // Conversas de WhatsApp: envia de verdade pela Evolution API (texto) com fallback de número e grava com o ID real da mensagem
-    const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
-    const primaryTarget =
-      waContact?.preferredTarget ||
-      waContact?.remoteJidAlt ||
-      waContact?.remoteJid ||
-      waContact?.phone ||
-      toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
-    const fallbackTarget =
-      waContact?.remoteJid && waContact?.remoteJid !== primaryTarget
-        ? waContact.remoteJid
-        : (waContact?.remoteJidAlt && waContact?.remoteJidAlt !== primaryTarget ? waContact.remoteJidAlt : null);
+    // =========================================================================
+    // REGRA GLOBAL DE PERSISTÊNCIA (WHATSAPP E CHAT INTERNO):
+    // FIM DA INSERÇÃO OTIMISTA CEGA.
+    // Nenhuma mensagem (texto, áudio ou anexo), em nenhuma das abas,
+    // é exibida no frontend antes da confirmação de sucesso do banco de dados (Supabase)
+    // ou da API do WhatsApp (Evolution API).
+    // Se houver qualquer falha, a mensagem NÃO é adicionada ao estado da tela,
+    // um toast de alerta visual é exibido e o rascunho é restaurado no input.
+    // =========================================================================
 
-    const isWhatsAppSend =
-      (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) && !attachment && !!text && !!primaryTarget;
+    const isWhatsAppChat = activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-');
+    let messageToRender = newMsg;
 
-    if (isWhatsAppSend) {
-      try {
-        const result = await sendWhatsAppText(primaryTarget, text, fallbackTarget);
-        if (result.ok && result.messageId) {
+    if (isWhatsAppChat) {
+      // -----------------------------------------------------------------------
+      // ABA DE CHAT EXTERNO (WhatsApp Alunos)
+      // -----------------------------------------------------------------------
+      const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
+      const primaryTarget =
+        waContact?.preferredTarget ||
+        waContact?.remoteJidAlt ||
+        waContact?.remoteJid ||
+        waContact?.phone ||
+        toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
+      const fallbackTarget =
+        waContact?.remoteJid && waContact?.remoteJid !== primaryTarget
+          ? waContact.remoteJid
+          : (waContact?.remoteJidAlt && waContact?.remoteJidAlt !== primaryTarget ? waContact.remoteJidAlt : null);
+
+      if (!primaryTarget) {
+        const errorMsg = 'Destinatário do WhatsApp não encontrado ou número inválido.';
+        console.error('[WhatsApp Send]', errorMsg);
+        toast.error(errorMsg);
+        return { success: false, error: errorMsg };
+      }
+
+      if (!attachment && !!text) {
+        // Envio de mensagem de texto via Evolution API
+        try {
+          const result = await sendWhatsAppText(primaryTarget, text, fallbackTarget);
+          if (!result.ok || !result.messageId) {
+            console.error('Falha ao enviar WhatsApp via Evolution API:', result.error);
+            toast.error(`Falha ao enviar WhatsApp: ${result.error || 'Erro no envio'}`);
+            return { success: false, error: result.error };
+          }
+
           const rawId = String(result.messageId);
           const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
-          const confirmedMsg = { ...newMsg, id: realId, status: 'sent' };
+          messageToRender = { ...newMsg, id: realId, status: 'sent' };
 
+          // Persistência obrigatória no Supabase com o ID real da mensagem
           const { error: waInsertError } = await supabase.from('messages').insert([{
             id: realId,
             chat_id: currentChatKey,
-            sender_id: confirmedMsg.senderId,
-            sender_name: confirmedMsg.senderName,
+            sender_id: messageToRender.senderId,
+            sender_name: messageToRender.senderName,
             text: payloadText,
-            timestamp: confirmedMsg.timestamp
+            timestamp: messageToRender.timestamp
           }]);
 
           if (waInsertError) {
-            console.warn('[Supabase] Falha ao persistir mensagem WhatsApp no Supabase:', waInsertError);
+            console.error('[Supabase] Falha ao persistir mensagem WhatsApp no Supabase:', waInsertError);
+            toast.error(`Falha ao registrar mensagem no banco: ${waInsertError.message || 'Erro no Supabase'}`);
+            return { success: false, error: waInsertError };
           }
-
-          // Renderiza na tela após confirmação do envio
-          setMessages((prev) => ({
-            ...prev,
-            [currentChatKey]: [...(prev[currentChatKey] || []), confirmedMsg],
-          }));
-
-          setWhatsAppContacts((prev) => {
-            const existing = prev.find((c) => c.id === currentChatKey);
-            if (!existing) return prev;
-            const nowIso = new Date().toISOString();
-            const updatedContact = {
-              ...existing,
-              lastInteraction: formatRelativeChatTime(nowIso),
-              lastMessageAt: nowIso
-            };
-            const remaining = prev.filter((c) => c.id !== currentChatKey);
-            return [updatedContact, ...remaining];
-          });
-
-          return { success: true, message: confirmedMsg };
-        } else {
-          console.error('Falha ao enviar WhatsApp via Evolution API:', result.error);
-          toast.error(`Falha ao enviar WhatsApp: ${result.error || 'Erro no envio'}`);
-          return { success: false, error: result.error };
+        } catch (waErr) {
+          console.error('Exceção ao disparar mensagem de WhatsApp:', waErr);
+          toast.error(`Erro de comunicação com o WhatsApp: ${waErr.message || 'Falha de rede'}`);
+          return { success: false, error: waErr };
         }
-      } catch (waErr) {
-        console.error('Exceção ao disparar mensagem de WhatsApp:', waErr);
-        toast.error(`Erro de comunicação com o WhatsApp: ${waErr.message || 'Falha de rede'}`);
-        return { success: false, error: waErr };
+      } else {
+        // Envio de Áudio ou Anexo em conversa do WhatsApp
+        try {
+          const { error: insertError } = await supabase.from('messages').insert([{
+            id: newMsg.id,
+            chat_id: currentChatKey,
+            sender_id: newMsg.senderId,
+            sender_name: newMsg.senderName,
+            text: payloadText,
+            timestamp: newMsg.timestamp
+          }]);
+
+          if (insertError) {
+            console.error('[Supabase] Falha ao persistir áudio/anexo do WhatsApp no banco:', insertError);
+            toast.error(`Falha ao salvar áudio/anexo: ${insertError.message || 'Erro no banco de dados'}`);
+            return { success: false, error: insertError };
+          }
+        } catch (dbErr) {
+          console.error('[Supabase] Exceção ao gravar áudio/anexo do WhatsApp:', dbErr);
+          toast.error(`Erro ao conectar com o servidor: ${dbErr.message || 'Servidor indisponível'}`);
+          return { success: false, error: dbErr };
+        }
       }
+
+      // SUCESSO COMPROVADO (API e Supabase): Renderiza SOMENTE agora na tela do WhatsApp!
+      setMessages((prev) => ({
+        ...prev,
+        [currentChatKey]: [...(prev[currentChatKey] || []), messageToRender],
+      }));
+
+      // Atualiza ordenação e última interação do contato de WhatsApp
+      setWhatsAppContacts((prev) => {
+        const existing = prev.find((c) => c.id === currentChatKey);
+        if (!existing) return prev;
+        const nowIso = new Date().toISOString();
+        const updatedContact = {
+          ...existing,
+          lastInteraction: formatRelativeChatTime(nowIso),
+          lastMessageAt: nowIso
+        };
+        const remaining = prev.filter((c) => c.id !== currentChatKey);
+        return [updatedContact, ...remaining];
+      });
     } else {
-      // COMUNICAÇÃO INTERNA (CANAIS E DMS):
-      // A mensagem SÓ DEVE ir para a tela após a promessa do INSERT retornar sucesso!
+      // -----------------------------------------------------------------------
+      // ABA DE CHAT INTERNO (Equipe Interna - Canais e DMs):
+      // A mensagem SÓ DEVE ir para a tela após a promessa do INSERT retornar sucesso no Supabase!
+      // -----------------------------------------------------------------------
       try {
         const { error: insertError } = await supabase.from('messages').insert([{
           id: newMsg.id,
@@ -3114,7 +3162,7 @@ export default function App() {
         return { success: false, error: dbErr };
       }
 
-      // SUCESSO COMPROVADO NO BANCO: Renderiza na lista do chat!
+      // SUCESSO COMPROVADO NO BANCO: Renderiza SOMENTE agora na lista do chat interno!
       setMessages((prev) => ({
         ...prev,
         [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
@@ -3122,21 +3170,6 @@ export default function App() {
 
       // Publica imediatamente para todos os colaboradores em tempo real
       publishInternalMessage(currentChatKey, newMsg);
-
-      if (activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-')) {
-        setWhatsAppContacts((prev) => {
-          const existing = prev.find((c) => c.id === currentChatKey);
-          if (!existing) return prev;
-          const nowIso = new Date().toISOString();
-          const updatedContact = {
-            ...existing,
-            lastInteraction: formatRelativeChatTime(nowIso),
-            lastMessageAt: nowIso
-          };
-          const remaining = prev.filter((c) => c.id !== currentChatKey);
-          return [updatedContact, ...remaining];
-        });
-      }
     }
 
     // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot
@@ -3422,6 +3455,8 @@ export default function App() {
         }, 600);
       }
     }
+
+    return { success: true, message: messageToRender };
   };
 
   const createAutoTask = (rawTitle, fullText, timeStr, wasAutonomous = false, matchedVip = null) => {
@@ -3676,7 +3711,7 @@ export default function App() {
     // 4. Grava no Supabase via upsert idempotente
     const payloadText = `${firstMessage}\n<!-- STATUS:sent -->`;
     try {
-      await supabase.from('messages').upsert([{
+      const { error: upsertErr } = await supabase.from('messages').upsert([{
         id: realMessageId,
         chat_id: chatId,
         sender_id: currentUser?.id || 'u1',
@@ -3684,6 +3719,12 @@ export default function App() {
         text: payloadText,
         timestamp: timeStr
       }], { onConflict: 'id' });
+
+      if (upsertErr) {
+        console.error('Falha ao sincronizar mensagem no Supabase:', upsertErr);
+        toast.error(`Falha ao registrar mensagem no banco: ${upsertErr.message || 'Erro no Supabase'}`);
+        throw upsertErr;
+      }
 
       try {
         await supabase.from('chats').upsert([{
@@ -3694,7 +3735,8 @@ export default function App() {
         }], { onConflict: 'id' });
       } catch {}
     } catch (dbErr) {
-      console.warn('Aviso ao sincronizar novo contato no Supabase:', dbErr);
+      console.error('Erro ao sincronizar novo contato no Supabase:', dbErr);
+      throw dbErr;
     }
 
     // 5. Atualiza o estado da interface imediatamente
