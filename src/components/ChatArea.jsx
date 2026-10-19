@@ -30,8 +30,11 @@ import {
   Award,
   BookOpen,
   Volume2,
-  UserMinus
+  UserMinus,
+  AlertCircle,
+  RotateCcw
 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment, getChatAssignedToId, normalizeName } from '../lib/portfolioAccess';
 import { getSaoPauloTime } from '../lib/timezone';
 import { matchStudentByPhone } from '../lib/eduControl';
@@ -39,7 +42,7 @@ import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
 import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
-import { processAudioSource, playDecodedAudioBuffer } from '../lib/audioStreamHelper';
+import { processAudioSource, playDecodedAudioBuffer, getSupportedAudioMimeType, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -94,8 +97,8 @@ function parseMessageContent(m) {
     extractedAttachment = parsedFromText;
   }
 
-  let extractedAudioUrl = m.audioUrl || (extractedAttachment?.type?.startsWith('audio/') ? extractedAttachment.dataUrl : null);
-  let isAudio = Boolean(m.isAudio || extractedAudioUrl);
+  let extractedAudioUrl = m.audioUrl || m.audio_url || (extractedAttachment?.type?.startsWith('audio/') ? (extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath) : null);
+  let isAudio = Boolean(m.isAudio || m.is_audio || extractedAudioUrl);
   let duration = m.duration || extractedAttachment?.duration || null;
   let transcription = m.audioTranscription || null;
 
@@ -104,12 +107,12 @@ function parseMessageContent(m) {
       extractedAttachment.type?.startsWith('audio/') ||
       extractedAttachment.isAudio ||
       extractedAttachment.name?.toLowerCase().includes('audio') ||
-      /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(extractedAttachment.name || '');
+      /\.(ogg|opus|mp3|wav|webm|m4a|mp4|aac)$/i.test(extractedAttachment.name || '');
 
     if (isAudioType) {
       isAudio = true;
       if (!extractedAudioUrl) {
-        extractedAudioUrl = extractedAttachment.dataUrl || extractedAttachment.url || extractedAttachment.base64;
+        extractedAudioUrl = extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath || extractedAttachment.path || extractedAttachment.base64;
       }
       if (extractedAttachment.duration && !duration) {
         duration = extractedAttachment.duration;
@@ -179,8 +182,8 @@ function parseMessageContent(m) {
   };
 }
 
-// Player interativo e de alta fidelidade para áudios do WhatsApp com suporte a codecs Opus/OGG e WebM
-function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false }) {
+// Player interativo e de alta fidelidade para áudios do WhatsApp e Equipe Interna com suporte cruzado (Opus, WebM, MP4, AAC)
+function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false, isInternal = false }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState('0:00');
@@ -189,10 +192,15 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
   const audioRef = useRef(null);
   const webAudioHandleRef = useRef(null);
 
+  // Garante resolução de caminhos do Supabase Storage para URL pública absoluta
+  const resolvedAudioUrl = React.useMemo(() => {
+    return resolvePublicAudioUrl(audioUrl);
+  }, [audioUrl]);
+
   // Converte fluxos (Base64, Data URLs ou HTTPS) em Blobs estáveis e detecta MIME / codecs exatos
   const audioSource = React.useMemo(() => {
-    return processAudioSource(audioUrl);
-  }, [audioUrl]);
+    return processAudioSource(resolvedAudioUrl);
+  }, [resolvedAudioUrl]);
 
   // Libera a URL do Blob criada quando o componente desmontar ou audioUrl mudar
   useEffect(() => {
@@ -246,11 +254,23 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     setIsPlaying(true);
     setProgress(0);
 
-    // 1. Tenta decodificar o fluxo PCM real via Web Audio API caso haja arrayBuffer
-    if (audioSource.arrayBuffer) {
+    // 1. Tenta decodificar o fluxo PCM real via Web Audio API caso haja arrayBuffer ou baixa da URL
+    let buffer = audioSource.arrayBuffer;
+    if (!buffer && audioSource.blobUrl && !audioSource.blobUrl.startsWith('data:')) {
+      try {
+        const res = await fetch(audioSource.blobUrl);
+        if (res.ok) {
+          buffer = await res.arrayBuffer();
+        }
+      } catch (err) {
+        console.warn('Erro ao obter arrayBuffer da URL para Web Audio:', err);
+      }
+    }
+
+    if (buffer) {
       try {
         stopWebAudio();
-        const handle = await playDecodedAudioBuffer(audioSource.arrayBuffer, playbackRate, () => {
+        const handle = await playDecodedAudioBuffer(buffer, playbackRate, () => {
           setIsPlaying(false);
           setProgress(0);
           setCurrentTime('0:00');
@@ -258,6 +278,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
         });
         if (handle) {
           webAudioHandleRef.current = handle;
+          setAudioError(false);
           return;
         }
       } catch (err) {
@@ -303,7 +324,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
       return;
     }
 
-    // 1. Tenta reproduzir pelo elemento nativo com <source> tags
+    // 1. Tenta reproduzir pelo elemento nativo com a URL resolvida
     if (audioRef.current && audioSource.blobUrl && !audioError) {
       audioRef.current.playbackRate = playbackRate;
       try {
@@ -394,36 +415,84 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     <div className="space-y-1.5 max-w-sm sm:max-w-md my-1">
       {/* Elemento de Player de Áudio Nativo do Navegador (<audio controls ... />) */}
       {audioSource.blobUrl ? (
-        <div className="w-full max-w-xs">
+        <div className="w-full max-w-xs space-y-1">
           <audio
             ref={audioRef}
+            src={audioSource.blobUrl}
             controls
             preload="metadata"
             className="w-full max-w-xs my-1 rounded-lg block accent-emerald-600 dark:accent-emerald-400"
-            onPlay={() => setIsPlaying(true)}
+            onPlay={() => {
+              setIsPlaying(true);
+              setAudioError(false);
+            }}
             onPause={() => setIsPlaying(false)}
             onTimeUpdate={handleTimeUpdate}
             onEnded={handleEnded}
-            onError={() => {
-              console.warn('HTML5 Audio elemento onError disparado');
+            onError={(e) => {
+              console.warn('HTML5 Audio elemento onError disparado:', e?.target?.error);
               setAudioError(true);
             }}
-          >
-            {audioSource.mimeType && (
-              <source src={audioSource.blobUrl} type={audioSource.mimeType} />
-            )}
-            <source src={audioSource.blobUrl} type="audio/ogg; codecs=opus" />
-            <source src={audioSource.blobUrl} type="audio/ogg" />
-            <source src={audioSource.blobUrl} type="audio/webm; codecs=opus" />
-            <source src={audioSource.blobUrl} type="audio/webm" />
-            <source src={audioSource.blobUrl} type="audio/mp4" />
-            <source src={audioSource.blobUrl} type="audio/mpeg" />
-            <source src={audioSource.blobUrl} />
-          </audio>
+          />
+
+          {/* Tratamento e Fallback Visual caso o áudio não possa ser carregado / codec incompatível */}
+          {audioError && (
+            <div className="p-2.5 rounded-xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle size={15} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-[11.5px] leading-tight">
+                    Falha ao reproduzir áudio no navegador
+                  </p>
+                  <p className="text-[10.5px] opacity-80 mt-0.5 leading-snug">
+                    O formato deste arquivo ({audioSource.mimeType || 'áudio'}) não pôde ser decodificado nativamente neste navegador.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-amber-500/20">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAudioError(false);
+                    if (audioRef.current) {
+                      audioRef.current.load();
+                      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setAudioError(true));
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[10.5px] transition flex items-center gap-1 shadow-sm"
+                >
+                  <RotateCcw size={11} /> Tentar Novamente
+                </button>
+
+                {audioSource.blobUrl && (
+                  <a
+                    href={audioSource.blobUrl}
+                    download={audioSource.mimeType?.includes('mp4') ? 'audio_chat.mp4' : 'audio_chat.webm'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1 rounded bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-current font-medium text-[10.5px] transition flex items-center gap-1"
+                  >
+                    <Download size={11} /> Baixar Áudio
+                  </a>
+                )}
+
+                {transcription && (
+                  <button
+                    type="button"
+                    onClick={triggerFallbackPlay}
+                    className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[10.5px] transition flex items-center gap-1 shadow-sm"
+                  >
+                    <Volume2 size={11} /> Ouvir Leitura (IA)
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between text-xs">
-          <span className="text-chatTextMuted">🎙️ Mensagem de voz WhatsApp</span>
+          <span className="text-chatTextMuted">🎙️ {isInternal ? 'Mensagem de voz interna' : 'Mensagem de voz WhatsApp'}</span>
           {transcription && (
             <button
               type="button"
@@ -490,7 +559,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
                 >
                   {playbackRate}x
                 </button>
-                <span>Voz WhatsApp</span>
+                <span>{isInternal ? 'Equipe Interna' : 'Voz WhatsApp'}</span>
               </div>
             </div>
           </div>
@@ -499,7 +568,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
           {audioSource.blobUrl && (
             <a
               href={audioSource.blobUrl}
-              download={audioSource.mimeType?.includes('webm') ? 'audio_whatsapp.webm' : 'audio_whatsapp.ogg'}
+              download={audioSource.mimeType?.includes('mp4') ? 'audio_chat.mp4' : 'audio_chat.webm'}
               className="p-2 text-slate-500 hover:text-emerald-600 transition rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
               title="Baixar arquivo de áudio para o computador"
             >
@@ -573,6 +642,8 @@ export default function ChatArea({
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerIntervalRef = useRef(null);
+  const recordedMimeTypeRef = useRef('');
+  const recordedExtensionRef = useRef('webm');
 
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -783,7 +854,7 @@ export default function ChatArea({
     requestAnimationFrame(() => scrollToBottom(true));
   };
 
-  // Iniciar Gravação de Áudio Nativa (Item 2)
+  // Iniciar Gravação de Áudio Nativa com Suporte Multi-Navegador (Item 1 e 2)
   const startRecording = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -792,7 +863,20 @@ export default function ChatArea({
       }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+
+      // Detecta formato ideal com maior compatibilidade entre navegadores (WebM Opus / MP4 Safari / OGG)
+      const { mimeType: chosenMime, extension: chosenExt } = getSupportedAudioMimeType();
+      recordedMimeTypeRef.current = chosenMime;
+      recordedExtensionRef.current = chosenExt;
+
+      const options = chosenMime ? { mimeType: chosenMime } : undefined;
+      let recorder;
+      try {
+        recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+      } catch (recErr) {
+        console.warn('Erro ao instanciar MediaRecorder com opções, usando padrão do navegador:', recErr);
+        recorder = new MediaRecorder(stream);
+      }
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (event) => {
@@ -813,7 +897,7 @@ export default function ChatArea({
     }
   };
 
-  // Finalizar e Enviar Gravação de Áudio Nativa (Item 2)
+  // Finalizar e Enviar Gravação de Áudio Nativa com Upload para Bucket 'chat-audios' (Item 1, 2 e 3)
   const stopAndSendRecording = () => {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
@@ -826,26 +910,66 @@ export default function ChatArea({
     setIsRecording(false);
     setRecordingDuration(0);
 
-    recorder.onstop = () => {
-      const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+    recorder.onstop = async () => {
+      // Identifica o MIME type real gravado pelo navegador
+      const mimeType = recordedMimeTypeRef.current || recorder.mimeType || 'audio/webm';
+      const cleanMime = mimeType.split(';')[0] || 'audio/webm';
+      const ext = recordedExtensionRef.current || (cleanMime.includes('mp4') ? 'mp4' : cleanMime.includes('ogg') ? 'ogg' : 'webm');
+      const blob = new Blob(audioChunksRef.current, { type: cleanMime });
+
+      const mins = Math.floor(durationSec / 60);
+      const secs = durationSec % 60;
+      const formattedTime = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+      const fileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+      const filePath = `internal/${fileName}`;
+
+      let publicAudioUrl = null;
+
+      // 1. Envia para o Supabase Storage no bucket 'chat-audios' para gerar URL pública válida
+      try {
+        const { error: uploadError } = await supabase.storage
+          .from('chat-audios')
+          .upload(filePath, blob, {
+            contentType: cleanMime,
+            cacheControl: '3600',
+            upsert: true
+          });
+
+        if (!uploadError) {
+          const { data: pubData } = supabase.storage
+            .from('chat-audios')
+            .getPublicUrl(filePath);
+          if (pubData?.publicUrl) {
+            publicAudioUrl = pubData.publicUrl;
+          }
+        } else {
+          console.warn('[Audio] Upload para bucket chat-audios falhou, utilizando dataUrl local:', uploadError);
+        }
+      } catch (uploadErr) {
+        console.warn('[Audio] Erro ao enviar áudio para Supabase Storage:', uploadErr);
+      }
+
+      // 2. Leitura local DataURL como fallback garantido caso upload falhe
       const reader = new FileReader();
       reader.onloadend = () => {
-        const mins = Math.floor(durationSec / 60);
-        const secs = durationSec % 60;
-        const formattedTime = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        const finalUrl = publicAudioUrl || reader.result;
 
         onSendMessage(
           `🎙️ Mensagem de voz (${formattedTime})`,
           {
-            name: `audio_${Date.now()}.webm`,
+            name: fileName,
             size: `${(blob.size / 1024).toFixed(1)} KB`,
-            type: 'audio/webm',
-            dataUrl: reader.result,
-            duration: formattedTime
+            type: cleanMime,
+            url: publicAudioUrl || null,
+            dataUrl: finalUrl,
+            storagePath: filePath,
+            duration: formattedTime,
+            isAudio: true
           },
           {
             replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
             isAudio: true,
+            audioUrl: finalUrl,
             duration: formattedTime
           }
         );
@@ -1411,13 +1535,14 @@ export default function ChatArea({
                             />
                           )}
 
-                          {/* 3. Player de Áudio Nativo / Voz WhatsApp */}
+                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp */}
                           {parsed.isAudio && (
                             <AudioMessagePlayer
                               audioUrl={parsed.audioUrl}
                               duration={parsed.duration}
                               transcription={parsed.transcription}
                               isOutgoing={isMe}
+                              isInternal={!isWhatsApp}
                             />
                           )}
 

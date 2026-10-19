@@ -1,15 +1,100 @@
+import { supabase } from './supabase';
+
 /**
- * Utilitário avançado de processamento e compatibilidade de áudio do WhatsApp.
+ * Utilitário avançado de processamento e compatibilidade de áudio do EduChat e WhatsApp.
  * Converte fluxos de áudio (Base64, OGG/Opus, WebM, MP4) em Blobs nativos
  * com tipos MIME corretos, garantindo reprodução nítida sem ruídos ou distorções.
  */
+
+/**
+ * Detecta e seleciona o melhor MIME type suportado pelo navegador
+ * para captura de áudio com MediaRecorder, garantindo compatibilidade cruzada
+ * (Chrome, Edge, Firefox, Safari no macOS e iOS).
+ */
+export function getSupportedAudioMimeType() {
+  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
+    return { mimeType: 'audio/webm;codecs=opus', extension: 'webm' };
+  }
+
+  // Lista priorizada de codecs
+  // 1. WebM Opus (Padrão Chrome, Edge, Firefox, Android)
+  // 2. MP4 / AAC (Padrão nativo do Safari macOS / iOS e amplamente suportado)
+  // 3. OGG Opus
+  // 4. WAV
+  const candidateTypes = [
+    { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
+    { mimeType: 'audio/webm', extension: 'webm' },
+    { mimeType: 'audio/mp4', extension: 'mp4' },
+    { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'mp4' },
+    { mimeType: 'audio/aac', extension: 'aac' },
+    { mimeType: 'audio/ogg;codecs=opus', extension: 'ogg' },
+    { mimeType: 'audio/ogg', extension: 'ogg' },
+    { mimeType: 'audio/wav', extension: 'wav' }
+  ];
+
+  for (const candidate of candidateTypes) {
+    try {
+      if (MediaRecorder.isTypeSupported(candidate.mimeType)) {
+        return candidate;
+      }
+    } catch {}
+  }
+
+  return { mimeType: '', extension: 'webm' };
+}
+
+/**
+ * Resolve qualquer caminho ou URL de áudio para uma URL pública absoluta do Supabase Storage.
+ * Suporta referências dos buckets ('chat-audios', 'chat-attachments', 'attachments'),
+ * URLs completas (https://), blobs e data URLs.
+ */
+export function resolvePublicAudioUrl(audioUrl) {
+  if (!audioUrl || typeof audioUrl !== 'string') return '';
+  const trimmed = audioUrl.trim();
+
+  // Se já for URL web pronta, blob ou base64 dataUrl
+  if (
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  ) {
+    return trimmed;
+  }
+
+  // Trata caminhos relativos ou caminhos de bucket do Supabase Storage
+  let cleanPath = trimmed.replace(/^\/+/, '');
+  let bucketName = 'chat-audios';
+
+  if (cleanPath.startsWith('chat-audios/')) {
+    cleanPath = cleanPath.replace(/^chat-audios\//, '');
+    bucketName = 'chat-audios';
+  } else if (cleanPath.startsWith('chat-attachments/')) {
+    cleanPath = cleanPath.replace(/^chat-attachments\//, '');
+    bucketName = 'chat-attachments';
+  } else if (cleanPath.startsWith('attachments/')) {
+    cleanPath = cleanPath.replace(/^attachments\//, '');
+    bucketName = 'attachments';
+  }
+
+  try {
+    const { data } = supabase.storage.from(bucketName).getPublicUrl(cleanPath);
+    if (data?.publicUrl) {
+      return data.publicUrl;
+    }
+  } catch (err) {
+    console.warn('[Audio] Erro ao obter URL pública do Supabase Storage:', err);
+  }
+
+  return trimmed;
+}
 
 /**
  * Detecta o tipo MIME e o codec de um áudio a partir dos magic bytes do arquivo binário
  */
 export function detectAudioMimeType(u8arr) {
   if (!u8arr || u8arr.length < 4) {
-    return 'audio/ogg; codecs=opus';
+    return 'audio/webm;codecs=opus';
   }
 
   // OggS (Container Ogg, padrão de áudios PTT do WhatsApp)
@@ -46,8 +131,8 @@ export function detectAudioMimeType(u8arr) {
     return 'audio/mp4';
   }
 
-  // Fallback padrão para áudios do WhatsApp
-  return 'audio/ogg; codecs=opus';
+  // Fallback padrão
+  return 'audio/webm; codecs=opus';
 }
 
 /**
@@ -56,16 +141,19 @@ export function detectAudioMimeType(u8arr) {
  */
 export function processAudioSource(audioUrl) {
   if (!audioUrl || typeof audioUrl !== 'string') {
-    return { blobUrl: '', mimeType: 'audio/ogg; codecs=opus', arrayBuffer: null };
+    return { blobUrl: '', mimeType: 'audio/webm; codecs=opus', arrayBuffer: null };
   }
 
-  const trimmed = audioUrl.trim();
+  // Resolve primeiro caminhos do Supabase Storage se necessário
+  const resolved = resolvePublicAudioUrl(audioUrl);
+  const trimmed = resolved.trim();
 
   // Se já for uma URL HTTP/HTTPS ou Blob existente
   if (trimmed.startsWith('blob:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    let guessedMime = 'audio/ogg; codecs=opus';
-    if (trimmed.includes('.webm')) guessedMime = 'audio/webm; codecs=opus';
-    else if (trimmed.includes('.mp4') || trimmed.includes('.m4a')) guessedMime = 'audio/mp4';
+    let guessedMime = 'audio/webm; codecs=opus';
+    if (trimmed.includes('.mp4') || trimmed.includes('.m4a') || trimmed.includes('audio/mp4')) guessedMime = 'audio/mp4';
+    else if (trimmed.includes('.webm') || trimmed.includes('audio/webm')) guessedMime = 'audio/webm; codecs=opus';
+    else if (trimmed.includes('.ogg') || trimmed.includes('.opus')) guessedMime = 'audio/ogg; codecs=opus';
     else if (trimmed.includes('.mp3')) guessedMime = 'audio/mpeg';
     else if (trimmed.includes('.wav')) guessedMime = 'audio/wav';
 
@@ -112,7 +200,7 @@ export function processAudioSource(audioUrl) {
     console.warn('Erro ao processar fluxo de áudio:', err);
     return {
       blobUrl: trimmed,
-      mimeType: 'audio/ogg; codecs=opus',
+      mimeType: 'audio/webm; codecs=opus',
       arrayBuffer: null
     };
   }

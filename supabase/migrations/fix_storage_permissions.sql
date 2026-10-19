@@ -6,11 +6,12 @@
 -- 1. Criação/Garantia dos Buckets de Armazenamento
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES 
-  ('chat-audios', 'chat-audios', true, 52428800, ARRAY['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/x-m4a']),
+  ('chat-audios', 'chat-audios', true, 52428800, NULL),
   ('chat-attachments', 'chat-attachments', true, 104857600, NULL),
   ('attachments', 'attachments', true, 104857600, NULL)
 ON CONFLICT (id) DO UPDATE SET 
   public = true,
+  allowed_mime_types = NULL,
   file_size_limit = EXCLUDED.file_size_limit;
 
 -- 2. RLS em storage.objects já vem habilitado por padrão no Supabase (não requer ALTER TABLE)

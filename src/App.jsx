@@ -935,11 +935,11 @@ export default function App() {
         parsedAttachment.type?.startsWith('audio/') ||
         parsedAttachment.isAudio ||
         parsedAttachment.name?.toLowerCase().includes('audio') ||
-        /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsedAttachment.name || '')
+        /\.(ogg|opus|mp3|wav|webm|m4a|mp4|aac)$/i.test(parsedAttachment.name || '')
       ) {
         isAudio = true;
-        if (!audioUrl && !stripHeavyAttachments) {
-          audioUrl = parsedAttachment.dataUrl || parsedAttachment.url;
+        if (!audioUrl) {
+          audioUrl = parsedAttachment.url || parsedAttachment.storagePath || (!stripHeavyAttachments ? parsedAttachment.dataUrl : null);
         }
         if (parsedAttachment.duration) duration = parsedAttachment.duration;
       }
@@ -3006,8 +3006,8 @@ export default function App() {
       timestamp: timeStr,
       attachment: attachment || null,
       replyTo: options.replyTo || null,
-      isAudio: !!options.isAudio || !!attachment?.isAudio || !!attachment?.type?.startsWith('audio/') || /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || ''),
-      audioUrl: attachment?.dataUrl || attachment?.url || null,
+      isAudio: !!options.isAudio || !!attachment?.isAudio || !!attachment?.type?.startsWith('audio/') || /\.(webm|ogg|mp3|wav|m4a|opus|mp4|aac)$/i.test(attachment?.name || ''),
+      audioUrl: attachment?.url || attachment?.dataUrl || options.audioUrl || null,
       duration: options.duration || attachment?.duration || '0:14',
       status: initialStatus,
       actionExtracted: false,
