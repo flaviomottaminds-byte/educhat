@@ -662,10 +662,19 @@ export default function App() {
   });
   const [isEduControlModalOpen, setIsEduControlModalOpen] = useState(false);
 
-  // Chat ativo: canal, dm ou whatsapp (padrão canal #geral)
-  const [activeChat, setActiveChat] = useState({
-    type: 'channel', // 'channel' | 'dm' | 'whatsapp'
-    id: 'c-geral'
+  // Chat ativo: canal, dm ou whatsapp (padrão canal #geral ou última conversa ativa salva)
+  const [activeChat, setActiveChat] = useState(() => {
+    try {
+      const saved = localStorage.getItem('educhat_active_chat');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.type && parsed.id) return parsed;
+      }
+    } catch {}
+    return {
+      type: 'channel',
+      id: 'c-geral'
+    };
   });
 
   const activeChatRef = useRef(activeChat);
@@ -726,6 +735,15 @@ export default function App() {
       }
     }
   }, [currentUser, activeChat, channels]);
+
+  // Persiste a conversa ativa para que o refresh (F5) não a perca
+  useEffect(() => {
+    try {
+      if (activeChat && activeChat.type && activeChat.id) {
+        localStorage.setItem('educhat_active_chat', JSON.stringify(activeChat));
+      }
+    } catch {}
+  }, [activeChat]);
 
   // Controle de Recibos de Leitura Persistidos (Canais e DMs)
   const [channelReadReceipts, setChannelReadReceipts] = useState(() => {
@@ -1402,6 +1420,12 @@ export default function App() {
       onMessage: (chatKey, incomingMsg) => {
         if (!incomingMsg || !incomingMsg.id) return;
 
+        const activeUser = currentUserRef.current;
+        // Se a mensagem partiu do próprio usuário local, ignora (o remetente adiciona SOMENTE após confirmação no Supabase)
+        if (incomingMsg.senderId && activeUser?.id && incomingMsg.senderId === activeUser.id) {
+          return;
+        }
+
         setMessages((prev) => {
           const list = prev[chatKey] || [];
           if (list.some((m) => m.id === incomingMsg.id)) return prev;
@@ -1411,7 +1435,6 @@ export default function App() {
           };
         });
 
-        const activeUser = currentUserRef.current;
         if (incomingMsg.senderId !== activeUser?.id && incomingMsg.senderId !== 'system') {
           const currentActiveKey = getChatKey(activeChatRef.current, activeUser?.id || 'u1');
           if (chatKey !== currentActiveKey || document.hidden) {
@@ -1631,31 +1654,31 @@ export default function App() {
       // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
       let recentDbMessages = null;
       try {
-        const { data, error } = await withTimeout(
-          supabase
-            .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
-            .not('chat_id', 'like', 'sys_%')
-            .order('created_at', { ascending: false })
-            .limit(1000),
-          3000
-        );
+        const { data, error } = await supabase
+          .from('messages')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+          .not('chat_id', 'like', 'sys_%')
+          .order('created_at', { ascending: false })
+          .limit(1000);
+
         if (!error && Array.isArray(data)) {
           recentDbMessages = data;
         } else if (error) {
-          console.warn('[Supabase] Erro na consulta com created_at, executando fallback:', error);
-          const { data: fallbackData } = await withTimeout(
-            supabase
-              .from('messages')
-              .select('id, chat_id, sender_id, sender_name, text, timestamp')
-              .not('chat_id', 'like', 'sys_%')
-              .limit(500),
-            2000
-          );
-          if (Array.isArray(fallbackData)) recentDbMessages = fallbackData;
+          console.error('[Supabase] Erro na consulta com created_at, executando fallback:', error);
+          const { data: fallbackData, error: fbErr } = await supabase
+            .from('messages')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp')
+            .not('chat_id', 'like', 'sys_%')
+            .limit(500);
+
+          if (!fbErr && Array.isArray(fallbackData)) {
+            recentDbMessages = fallbackData;
+          } else if (fbErr) {
+            console.error('[Supabase] Erro no fallback de mensagens:', fbErr);
+          }
         }
       } catch (err) {
-        console.warn('[Supabase] Falha ao consultar histórico de mensagens:', err);
+        console.error('[Supabase] Falha ao consultar histórico de mensagens:', err);
       }
 
       const dbMessages = Array.isArray(recentDbMessages) ? [...recentDbMessages].reverse() : [];
@@ -3123,16 +3146,16 @@ export default function App() {
             sender_name: messageToRender.senderName,
             text: payloadText,
             timestamp: messageToRender.timestamp
-          }]);
+          }]).select();
 
           if (waInsertError) {
-            console.error('[Supabase] Falha ao persistir mensagem WhatsApp no Supabase:', waInsertError);
-            toast.error(`Falha ao registrar mensagem no banco: ${waInsertError.message || 'Erro no Supabase'}`);
+            console.error("Erro no Insert:", waInsertError);
+            toast.error(waInsertError.message || 'Erro no Supabase');
             return { success: false, error: waInsertError };
           }
         } catch (waErr) {
-          console.error('Exceção ao disparar mensagem de WhatsApp:', waErr);
-          toast.error(`Erro de comunicação com o WhatsApp: ${waErr.message || 'Falha de rede'}`);
+          console.error("Erro no Insert:", waErr);
+          toast.error(waErr.message || 'Erro de comunicação com o WhatsApp');
           return { success: false, error: waErr };
         }
       } else {
@@ -3145,16 +3168,16 @@ export default function App() {
             sender_name: newMsg.senderName,
             text: payloadText,
             timestamp: newMsg.timestamp
-          }]);
+          }]).select();
 
           if (insertError) {
-            console.error('[Supabase] Falha ao persistir áudio/anexo do WhatsApp no banco:', insertError);
-            toast.error(`Falha ao salvar áudio/anexo: ${insertError.message || 'Erro no banco de dados'}`);
+            console.error("Erro no Insert:", insertError);
+            toast.error(insertError.message || 'Erro no banco de dados');
             return { success: false, error: insertError };
           }
         } catch (dbErr) {
-          console.error('[Supabase] Exceção ao gravar áudio/anexo do WhatsApp:', dbErr);
-          toast.error(`Erro ao conectar com o servidor: ${dbErr.message || 'Servidor indisponível'}`);
+          console.error("Erro no Insert:", dbErr);
+          toast.error(dbErr.message || 'Servidor indisponível');
           return { success: false, error: dbErr };
         }
       }
@@ -3182,6 +3205,7 @@ export default function App() {
       // -----------------------------------------------------------------------
       // ABA DE CHAT INTERNO (Equipe Interna - Canais e DMs):
       // A mensagem SÓ DEVE ir para a tela após a promessa do INSERT retornar sucesso no Supabase!
+      // Fluxo: await supabase.from(...) -> Se erro: toast.error e interrompe -> Se sucesso: setMessages
       // -----------------------------------------------------------------------
       try {
         const { error: insertError } = await supabase.from('messages').insert([{
@@ -3191,17 +3215,17 @@ export default function App() {
           sender_name: newMsg.senderName,
           text: payloadText,
           timestamp: newMsg.timestamp
-        }]);
+        }]).select();
 
         if (insertError) {
-          console.error('[Supabase] Falha ao persistir mensagem no banco:', insertError);
-          toast.error(`Falha ao salvar mensagem: ${insertError.message || 'Erro no banco de dados'}`);
+          console.error("Erro no Insert:", insertError);
+          toast.error(insertError.message || 'Erro no banco de dados');
           return { success: false, error: insertError };
         }
-      } catch (dbErr) {
-        console.error('[Supabase] Exceção de rede ao gravar mensagem:', dbErr);
-        toast.error(`Erro ao conectar com o servidor: ${dbErr.message || 'Servidor indisponível'}`);
-        return { success: false, error: dbErr };
+      } catch (error) {
+        console.error("Erro no Insert:", error);
+        toast.error(error?.message || 'Servidor indisponível');
+        return { success: false, error };
       }
 
       // SUCESSO COMPROVADO NO BANCO: Renderiza SOMENTE agora na lista do chat interno!

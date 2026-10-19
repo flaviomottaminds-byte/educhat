@@ -876,16 +876,6 @@ export default function ChatArea({
     const attachmentToSend = pendingAttachment;
     const replyingToSend = replyingTo;
 
-    setInputText('');
-    setPendingAttachment(null);
-    setReplyingTo(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-
     try {
       const result = await onSendMessage(textToSend, attachmentToSend, {
         replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null,
@@ -894,21 +884,28 @@ export default function ChatArea({
       });
 
       if (result && result.success === false) {
-        // Falha no INSERT: restaura o texto para o usuário não perder a digitação
-        setInputText(textToSend);
-        setPendingAttachment(attachmentToSend);
-        setReplyingTo(replyingToSend);
-      } else {
-        requestAnimationFrame(() => {
-          scrollToBottom(true);
-          textareaRef.current?.focus();
-        });
+        console.error("Erro no Insert:", result.error);
+        return;
       }
+
+      // SUCESSO CONFIRMADO NO BACKEND: Limpa o campo e rola para o fim
+      setInputText('');
+      setPendingAttachment(null);
+      setReplyingTo(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+
+      requestAnimationFrame(() => {
+        scrollToBottom(true);
+        textareaRef.current?.focus();
+      });
     } catch (err) {
-      console.error('Erro ao enviar mensagem:', err);
-      setInputText(textToSend);
-      setPendingAttachment(attachmentToSend);
-      setReplyingTo(replyingToSend);
+      console.error("Erro no Insert:", err);
+      toast.error(err?.message || 'Erro ao enviar mensagem');
     } finally {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -1070,7 +1067,7 @@ export default function ChatArea({
         );
 
         if (sendResult && sendResult.success === false) {
-          // Falha no INSERT: aviso já exibido pelo toast
+          console.error("Erro no Insert:", sendResult.error);
           return;
         }
 
