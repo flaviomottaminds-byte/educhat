@@ -98,17 +98,31 @@ function parseMessageContent(m) {
     extractedAttachment = parsedFromText;
   }
 
-  let extractedAudioUrl = m.audioUrl || m.audio_url || (extractedAttachment?.type?.startsWith('audio/') ? (extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath) : null);
-  let isAudio = Boolean(m.isAudio || m.is_audio || extractedAudioUrl);
+  // Identificação inequívoca de imagem (anexo de imagem nunca pode ser tratado como áudio)
+  const isImage = Boolean(
+    extractedAttachment?.isImage ||
+    extractedAttachment?.type?.startsWith('image/') ||
+    /\.(png|jpe?g|gif|webp|svg)$/i.test(extractedAttachment?.name || '') ||
+    m.isImage
+  );
+
+  let extractedAudioUrl = null;
+  let isAudio = false;
+
+  // Se NÃO for imagem, verifica se é áudio
+  if (!isImage) {
+    extractedAudioUrl = m.audioUrl || m.audio_url || (extractedAttachment?.type?.startsWith('audio/') ? (extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath) : null);
+    isAudio = Boolean((m.isAudio || m.is_audio || extractedAudioUrl) && !isImage);
+  }
+
   let duration = m.duration || extractedAttachment?.duration || null;
   let transcription = m.audioTranscription || null;
 
-  if (extractedAttachment) {
+  if (extractedAttachment && !isImage) {
     const isAudioType =
       extractedAttachment.type?.startsWith('audio/') ||
       extractedAttachment.isAudio ||
-      extractedAttachment.name?.toLowerCase().includes('audio') ||
-      /\.(ogg|opus|mp3|wav|webm|m4a|mp4|aac)$/i.test(extractedAttachment.name || '');
+      /\.(ogg|opus|mp3|wav|webm|m4a|aac)$/i.test(extractedAttachment.name || '');
 
     if (isAudioType) {
       isAudio = true;
@@ -121,8 +135,8 @@ function parseMessageContent(m) {
     }
   }
 
-  // 2. Intercepta comentários de controle de áudio
-  if (rawText.includes('<!-- AUDIO_URL:')) {
+  // 2. Intercepta comentários de controle de áudio SOMENTE se não for imagem
+  if (!isImage && rawText.includes('<!-- AUDIO_URL:')) {
     const match = rawText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
     if (match && !extractedAudioUrl) {
       extractedAudioUrl = match[1].trim();
@@ -130,14 +144,14 @@ function parseMessageContent(m) {
     }
   }
 
-  if (rawText.includes('<!-- DURATION:')) {
+  if (!isImage && rawText.includes('<!-- DURATION:')) {
     const match = rawText.match(/<!-- DURATION:([\s\S]+?) -->/);
     if (match && !duration) {
       duration = match[1].trim();
     }
   }
 
-  if (rawText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+  if (!isImage && rawText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
     const match = rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
     if (match) {
       transcription = match[1].replace(/^["']|["']$/g, '');
@@ -152,12 +166,14 @@ function parseMessageContent(m) {
     .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
     .trim();
 
-  // 4. Se o texto tiver indicador de áudio
+  // 4. Se o texto tiver indicador de áudio e NÃO for imagem
   if (
-    cleanText.includes('🎙️ [Áudio recebido via WhatsApp]') ||
-    (cleanText.includes('🎙️') && (cleanText.includes('Áudio') || cleanText.includes('Mensagem de voz'))) ||
-    cleanText.toLowerCase().includes('áudio recebido via whatsapp') ||
-    rawText.includes('<!-- IS_AUDIO:true -->')
+    !isImage && (
+      cleanText.includes('🎙️ [Áudio recebido via WhatsApp]') ||
+      (cleanText.includes('🎙️') && (cleanText.includes('Áudio') || cleanText.includes('Mensagem de voz'))) ||
+      cleanText.toLowerCase().includes('áudio recebido via whatsapp') ||
+      rawText.includes('<!-- IS_AUDIO:true -->')
+    )
   ) {
     isAudio = true;
     if (!duration) {
@@ -168,16 +184,19 @@ function parseMessageContent(m) {
 
   // Verifica se o texto restante é apenas o placeholder de áudio
   const isOnlyAudioPlaceholder =
-    !cleanText ||
-    cleanText === '🎙️ [Áudio recebido via WhatsApp]' ||
-    /^🎙️\s*(Mensagem de voz|Áudio)\s*(\(\d{1,2}:\d{2}\))?$/i.test(cleanText.trim());
+    isAudio && !isImage && (
+      !cleanText ||
+      cleanText === '🎙️ [Áudio recebido via WhatsApp]' ||
+      /^🎙️\s*(Mensagem de voz|Áudio)\s*(\(\d{1,2}:\d{2}\))?$/i.test(cleanText.trim())
+    );
 
   return {
     cleanText,
     isOnlyAudioPlaceholder,
     attachment: extractedAttachment,
-    audioUrl: extractedAudioUrl,
-    isAudio: isAudio || Boolean(extractedAudioUrl),
+    isImage,
+    audioUrl: isAudio && !isImage ? extractedAudioUrl : null,
+    isAudio: isAudio && !isImage,
     duration: duration || '0:14',
     transcription
   };
@@ -847,13 +866,18 @@ export default function ChatArea({
     setInputText('');
     setPendingAttachment(null);
     setReplyingTo(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
 
     try {
       const result = await onSendMessage(textToSend, attachmentToSend, {
-        replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null
+        replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null,
+        isAudio: false,
+        audioUrl: null
       });
 
       if (result && result.success === false) {
@@ -869,6 +893,10 @@ export default function ChatArea({
       setInputText(textToSend);
       setPendingAttachment(attachmentToSend);
       setReplyingTo(replyingToSend);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -936,103 +964,107 @@ export default function ChatArea({
     setRecordingDuration(0);
 
     recorder.onstop = async () => {
-      if (!audioChunksRef.current || audioChunksRef.current.length === 0) {
-        toast.error('Nenhum áudio foi capturado.');
-        return;
-      }
-
-      // Identifica o MIME type real gravado pelo navegador
-      const mimeType = recorder.mimeType || recordedMimeTypeRef.current || '';
-      const cleanMime = mimeType ? mimeType.split(';')[0].trim() : '';
-
-      // Determina a extensão de acordo com o MIME type real gravado
-      let ext = recordedExtensionRef.current || 'mp4';
-      if (cleanMime.includes('mp4')) ext = 'mp4';
-      else if (cleanMime.includes('mpeg') || cleanMime.includes('mp3')) ext = 'mp3';
-      else if (cleanMime.includes('webm')) ext = 'webm';
-      else if (cleanMime.includes('ogg')) ext = 'ogg';
-
-      const blob = cleanMime
-        ? new Blob(audioChunksRef.current, { type: cleanMime })
-        : new Blob(audioChunksRef.current);
-
-      const mins = Math.floor(durationSec / 60);
-      const secs = durationSec % 60;
-      const formattedTime = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-      const fileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
-      const filePath = `internal/${fileName}`;
-
-      // ETAPA 1: Upload obrigatório no Supabase Storage (bucket 'chat-audios')
-      let uploadError = null;
       try {
-        const uploadOptions = {
-          cacheControl: '3600',
-          upsert: true
-        };
-        if (cleanMime) {
-          uploadOptions.contentType = cleanMime;
+        if (!audioChunksRef.current || audioChunksRef.current.length === 0) {
+          toast.error('Nenhum áudio foi capturado.');
+          return;
         }
 
-        const { error } = await supabase.storage
+        // Identifica o MIME type real gravado pelo navegador
+        const mimeType = recorder.mimeType || recordedMimeTypeRef.current || '';
+        const cleanMime = mimeType ? mimeType.split(';')[0].trim() : '';
+
+        // Determina a extensão de acordo com o MIME type real gravado
+        let ext = recordedExtensionRef.current || 'mp4';
+        if (cleanMime.includes('mp4')) ext = 'mp4';
+        else if (cleanMime.includes('mpeg') || cleanMime.includes('mp3')) ext = 'mp3';
+        else if (cleanMime.includes('webm')) ext = 'webm';
+        else if (cleanMime.includes('ogg')) ext = 'ogg';
+
+        const blob = cleanMime
+          ? new Blob(audioChunksRef.current, { type: cleanMime })
+          : new Blob(audioChunksRef.current);
+
+        const mins = Math.floor(durationSec / 60);
+        const secs = durationSec % 60;
+        const formattedTime = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+        const fileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
+        const filePath = `internal/${fileName}`;
+
+        // ETAPA 1: Upload obrigatório no Supabase Storage (bucket 'chat-audios')
+        let uploadError = null;
+        try {
+          const uploadOptions = {
+            cacheControl: '3600',
+            upsert: true
+          };
+          if (cleanMime) {
+            uploadOptions.contentType = cleanMime;
+          }
+
+          const { error } = await supabase.storage
+            .from('chat-audios')
+            .upload(filePath, blob, uploadOptions);
+          uploadError = error;
+        } catch (uploadErr) {
+          uploadError = uploadErr;
+        }
+
+        if (uploadError) {
+          console.error('[Audio Storage] Falha no upload:', uploadError);
+          toast.error(`Falha ao enviar áudio para o servidor: ${uploadError.message || 'Erro no Storage'}. Envio cancelado.`);
+          return; // ABORTA A OPERAÇÃO IMEDIATAMENTE!
+        }
+
+        // ETAPA 2: Garantir retorno da URL pública válida do Storage
+        const { data: pubData } = supabase.storage
           .from('chat-audios')
-          .upload(filePath, blob, uploadOptions);
-        uploadError = error;
-      } catch (uploadErr) {
-        uploadError = uploadErr;
-      }
+          .getPublicUrl(filePath);
 
-      if (uploadError) {
-        console.error('[Audio Storage] Falha no upload:', uploadError);
-        toast.error(`Falha ao enviar áudio para o servidor: ${uploadError.message || 'Erro no Storage'}. Envio cancelado.`);
-        return; // ABORTA A OPERAÇÃO IMEDIATAMENTE!
-      }
+        const publicAudioUrl = pubData?.publicUrl;
 
-      // ETAPA 2: Garantir retorno da URL pública válida do Storage
-      const { data: pubData } = supabase.storage
-        .from('chat-audios')
-        .getPublicUrl(filePath);
-
-      const publicAudioUrl = pubData?.publicUrl;
-
-      if (!publicAudioUrl || !publicAudioUrl.startsWith('http')) {
-        console.error('[Audio Storage] Falha ao gerar URL pública:', pubData);
-        toast.error('Não foi possível gerar a URL pública do áudio gravado. Envio cancelado.');
-        return; // ABORTA A OPERAÇÃO!
-      }
-
-      // ETAPA 3: Insert na tabela messages via onSendMessage com a URL pública
-      const attachment = {
-        name: fileName,
-        size: `${(blob.size / 1024).toFixed(1)} KB`,
-        type: cleanMime,
-        url: publicAudioUrl,
-        dataUrl: publicAudioUrl, // Leve, sem strings Base64 gigantes
-        storagePath: filePath,
-        duration: formattedTime,
-        isAudio: true
-      };
-
-      const sendResult = await onSendMessage(
-        `🎙️ Mensagem de voz (${formattedTime})`,
-        attachment,
-        {
-          replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
-          isAudio: true,
-          audioUrl: publicAudioUrl,
-          duration: formattedTime
+        if (!publicAudioUrl || !publicAudioUrl.startsWith('http')) {
+          console.error('[Audio Storage] Falha ao gerar URL pública:', pubData);
+          toast.error('Não foi possível gerar a URL pública do áudio gravado. Envio cancelado.');
+          return; // ABORTA A OPERAÇÃO!
         }
-      );
 
-      if (sendResult && sendResult.success === false) {
-        // Falha no INSERT: aviso já exibido pelo toast
-        return;
+        // ETAPA 3: Insert na tabela messages via onSendMessage com a URL pública
+        const attachment = {
+          name: fileName,
+          size: `${(blob.size / 1024).toFixed(1)} KB`,
+          type: cleanMime,
+          url: publicAudioUrl,
+          dataUrl: publicAudioUrl, // Leve, sem strings Base64 gigantes
+          storagePath: filePath,
+          duration: formattedTime,
+          isAudio: true,
+          isImage: false
+        };
+
+        const sendResult = await onSendMessage(
+          `🎙️ Mensagem de voz (${formattedTime})`,
+          attachment,
+          {
+            replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
+            isAudio: true,
+            audioUrl: publicAudioUrl,
+            duration: formattedTime
+          }
+        );
+
+        if (sendResult && sendResult.success === false) {
+          // Falha no INSERT: aviso já exibido pelo toast
+          return;
+        }
+
+        setReplyingTo(null);
+      } finally {
+        audioChunksRef.current = [];
+        try {
+          recorder.stream?.getTracks().forEach((track) => track.stop());
+        } catch {}
       }
-
-      setReplyingTo(null);
-
-      try {
-        recorder.stream.getTracks().forEach((track) => track.stop());
-      } catch {}
     };
 
     try {
@@ -1058,21 +1090,29 @@ export default function ChatArea({
     audioChunksRef.current = [];
   };
 
-  // Upload de arquivos (Item 8)
+  // Upload de arquivos (Item 8) com separação estrita de Imagens e Documentos
   const handleFileSelect = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const isImage = file.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
 
     const reader = new FileReader();
     reader.onload = () => {
       setPendingAttachment({
         name: file.name,
         size: (file.size / 1024).toFixed(1) + ' KB',
-        type: file.type,
-        dataUrl: reader.result
+        type: file.type || (isImage ? 'image/jpeg' : 'application/octet-stream'),
+        dataUrl: reader.result,
+        url: reader.result,
+        isImage: isImage,
+        isAudio: false
       });
     };
     reader.readAsDataURL(file);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     e.target.value = null;
   };
 
@@ -1098,6 +1138,35 @@ export default function ChatArea({
 
   const isManager = hasFullPortfolioAccess(currentUser);
   const canView = !isWhatsApp || canUserViewChat(target, currentUser, collaborators);
+
+  // 2. BLINDAGEM DE VISIBILIDADE DOS GRUPOS/CANAIS:
+  // Se for canal da Equipe Interna e usuário for Comum, só pode ver #geral e o canal do seu próprio departamento
+  const isChannel = !isWhatsApp && !isDM;
+  if (isChannel && !isManager) {
+    const userDept = (currentUser?.department || '').trim().toLowerCase();
+    const chName = (target?.name || '').trim().toLowerCase();
+    const chDept = (target?.department || '').trim().toLowerCase();
+    const isGeral = chName === 'geral' || target?.id === 'c-geral' || chDept === 'todos';
+    const isMyDept = userDept && (chDept === userDept || chName === userDept);
+
+    if (!isGeral && !isMyDept) {
+      return (
+        <section className="flex-1 flex flex-col items-center justify-center h-full bg-[#efeae2] dark:bg-chatBg p-8 text-center relative transition-colors">
+          <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
+            <div className="w-14 h-14 bg-rose-100 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-full flex items-center justify-center mx-auto shadow-xs">
+              <Lock size={26} />
+            </div>
+            <h3 className="text-base font-bold text-chatTextTitle">Canal Restrito ao Departamento</h3>
+            <p className="text-xs text-chatTextMuted leading-relaxed">
+              Você não possui permissão para visualizar as mensagens do canal <strong>#{target?.name || 'Canal'}</strong>.
+              <br /><br />
+              Por diretriz de privacidade e organização dos setores, seu acesso é restrito ao canal <strong>#geral</strong> e ao seu departamento (<strong>{currentUser?.department || 'Setor'}</strong>).
+            </p>
+          </div>
+        </section>
+      );
+    }
+  }
 
   if (isWhatsApp && !canView) {
     const isUnassigned = getChatAssignedToId(target, collaborators) === null;
@@ -1547,21 +1616,26 @@ export default function ChatArea({
                     {/* Parse e renderização segura da mensagem (Áudio Nativo, Anexos, Texto) */}
                     {(() => {
                       const parsed = parseMessageContent(m);
-                      const isImageAttachment = parsed.attachment?.type?.startsWith('image/') ||
-                        /\.(png|jpe?g|gif|webp|svg)$/i.test(parsed.attachment?.name || '');
-                      const isAudioAttachment = parsed.isAudio ||
-                        parsed.attachment?.type?.startsWith('audio/') ||
+                      const isImageAttachment = parsed.isImage || Boolean(
+                        parsed.attachment?.isImage ||
+                        parsed.attachment?.type?.startsWith('image/') ||
+                        /\.(png|jpe?g|gif|webp|svg)$/i.test(parsed.attachment?.name || '')
+                      );
+                      const isAudioAttachment = !isImageAttachment && Boolean(
+                        parsed.isAudio ||
                         parsed.attachment?.isAudio ||
-                        /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsed.attachment?.name || '');
+                        parsed.attachment?.type?.startsWith('audio/') ||
+                        /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsed.attachment?.name || '')
+                      );
 
                       return (
                         <>
-                          {/* 1. Imagem anexada */}
+                          {/* 1. Imagem anexada (JAMAIS reproduzida como áudio) */}
                           {parsed.attachment && isImageAttachment && (
                             <div className="mb-2">
                               <div className="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 max-w-sm shadow-xs">
                                 <img
-                                  src={parsed.attachment.dataUrl || parsed.attachment.url}
+                                  src={parsed.attachment.url || parsed.attachment.dataUrl}
                                   alt={parsed.attachment.name || 'Imagem'}
                                   className="w-full max-h-64 object-cover cursor-pointer hover:opacity-95 transition"
                                   onClick={() => openDocument(parsed.attachment)}
@@ -1588,8 +1662,8 @@ export default function ChatArea({
                             />
                           )}
 
-                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp */}
-                          {parsed.isAudio && (
+                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp - NUNCA RENDERIZAR SE FOR IMAGEM */}
+                          {isAudioAttachment && parsed.audioUrl && !isImageAttachment && (
                             <AudioMessagePlayer
                               audioUrl={parsed.audioUrl}
                               duration={parsed.duration}
@@ -2001,6 +2075,11 @@ export default function ChatArea({
                 }
               }}
               placeholder={pendingAttachment ? "Adicione uma legenda ou envie..." : replyingTo ? `Respondendo a ${replyingTo.senderName}...` : "Digite uma mensagem"}
+              spellCheck={false}
+              autoCorrect="off"
+              autoComplete="off"
+              autoCapitalize="off"
+              data-gramm="false"
               className="flex-1 bg-white dark:bg-chatInputBg text-chatTextTitle text-[14px] placeholder:text-[#54656f] dark:placeholder:text-chatTextMuted px-4 py-2.5 rounded-lg border-none focus:outline-none shadow-xs transition resize-none max-h-32 min-h-[42px] leading-relaxed scrollbar-thin"
             />
 

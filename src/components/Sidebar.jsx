@@ -132,8 +132,25 @@ export default function Sidebar({
 
   const cleanSearch = (searchQuery || '').trim().toLowerCase();
 
-  // Garante que todos os canais ativos permaneçam sempre visíveis e acessíveis
-  const accessibleChannels = safeChannels.filter((c) => Boolean(c));
+  // 2. BLINDAGEM DE VISIBILIDADE DOS GRUPOS/CANAIS:
+  // Se o usuário for Gestor/Admin: Exibe TODOS os grupos.
+  // Se o usuário for Comum: Exibe APENAS o grupo "geral" E o grupo que corresponda exatamente ao seu departamento (currentUser.department).
+  // Qualquer outro grupo deve ser ocultado da tela.
+  const isManager = hasFullPortfolioAccess(currentUser);
+  const userDept = (currentUser?.department || '').trim().toLowerCase();
+
+  const accessibleChannels = safeChannels.filter((c) => {
+    if (!c) return false;
+    if (isManager) return true;
+
+    const chName = (c.name || '').trim().toLowerCase();
+    const chDept = (c.department || '').trim().toLowerCase();
+
+    const isGeral = chName === 'geral' || c.id === 'c-geral' || chDept === 'todos';
+    const isMyDepartment = userDept && (chDept === userDept || chName === userDept);
+
+    return isGeral || isMyDepartment;
+  });
 
   // Filtragem pela busca estilo WhatsApp
   const filteredChannels = accessibleChannels.filter((c) => {
@@ -157,8 +174,6 @@ export default function Sidebar({
   });
 
   // Contatos do WhatsApp (Leads e Alunos): mantém todas as conversas ativas permanentemente visíveis e acessíveis
-  const isManager = hasFullPortfolioAccess(currentUser);
-
   // 3. LIMPEZA DE DUPLICATAS VISUAIS:
   // Agrupa e desduplica conversas do mesmo número WhatsApp pelo updated_at / lastMessageAt mais recente
   const accessibleWhatsAppContacts = useMemo(() => {
@@ -706,7 +721,7 @@ export default function Sidebar({
             <div>
               <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
                 <span>Canais ({accessibleChannels?.length || 0})</span>
-                {onOpenNewChannel && (
+                {isManager && onOpenNewChannel && (
                   <button
                     type="button"
                     onClick={onOpenNewChannel}

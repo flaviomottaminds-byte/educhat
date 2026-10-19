@@ -708,6 +708,25 @@ export default function App() {
     }
   }, []);
 
+  // 2. BLINDAGEM DE VISIBILIDADE DE CANAIS (FRONTEND):
+  // Se o usuário for comum e estiver em um canal fora do seu departamento e que não seja 'c-geral',
+  // redireciona imediatamente para o canal 'c-geral'
+  useEffect(() => {
+    if (activeChat?.type === 'channel' && !hasFullPortfolioAccess(currentUser)) {
+      const userDept = (currentUser?.department || '').trim().toLowerCase();
+      const currentChannel = (channels || []).find((c) => c?.id === activeChat.id || c?.name === activeChat.id);
+      if (currentChannel) {
+        const chName = (currentChannel.name || '').trim().toLowerCase();
+        const chDept = (currentChannel.department || '').trim().toLowerCase();
+        const isGeral = chName === 'geral' || currentChannel.id === 'c-geral' || chDept === 'todos';
+        const isMyDept = userDept && (chDept === userDept || chName === userDept);
+        if (!isGeral && !isMyDept) {
+          setActiveChat({ type: 'channel', id: 'c-geral' });
+        }
+      }
+    }
+  }, [currentUser, activeChat, channels]);
+
   // Controle de Recibos de Leitura Persistidos (Canais e DMs)
   const [channelReadReceipts, setChannelReadReceipts] = useState(() => {
     try {
@@ -2998,30 +3017,53 @@ export default function App() {
       initialStatus = 'sent';
     }
 
+    // 1. DESATIVAÇÃO DE INTERCEPTAÇÃO DE TEXTO:
+    // O texto deve ser estritamente bruto (raw), sem tradução, corte ou modificação de middleware.
+    const rawText = String(text ?? '').trimEnd();
+
+    // 3. SEPARAÇÃO ESTRITA ENTRE IMAGEM E ÁUDIO (FIM DE DADOS CRUZADOS):
+    const isImageMsg = Boolean(
+      attachment?.isImage ||
+      attachment?.type?.startsWith('image/') ||
+      /\.(png|jpe?g|gif|webp|svg)$/i.test(attachment?.name || '')
+    );
+
+    const isAudioMsg = !isImageMsg && Boolean(
+      options.isAudio ||
+      attachment?.isAudio ||
+      attachment?.type?.startsWith('audio/') ||
+      /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || '')
+    );
+
     const messageId = 'm_' + Date.now();
     const newMsg = {
       id: messageId,
       senderId: currentUser.id,
       senderName: currentUser.name,
-      text: text || '',
+      text: rawText,
       timestamp: timeStr,
-      attachment: attachment || null,
+      attachment: attachment ? {
+        ...attachment,
+        isImage: isImageMsg,
+        isAudio: isAudioMsg
+      } : null,
       replyTo: options.replyTo || null,
-      isAudio: !!options.isAudio || !!attachment?.isAudio || !!attachment?.type?.startsWith('audio/') || /\.(webm|ogg|mp3|wav|m4a|opus|mp4|aac)$/i.test(attachment?.name || ''),
-      audioUrl: attachment?.url || attachment?.dataUrl || options.audioUrl || null,
-      duration: options.duration || attachment?.duration || '0:14',
+      isAudio: isAudioMsg,
+      isImage: isImageMsg,
+      audioUrl: isAudioMsg ? (attachment?.url || attachment?.dataUrl || options.audioUrl || null) : null,
+      duration: isAudioMsg ? (options.duration || attachment?.duration || '0:14') : null,
       status: initialStatus,
       actionExtracted: false,
     };
 
-    let payloadText = text || '';
+    // Monta o payload preservando o texto bruto e anexos sem qualquer formatação ou tradução prévia
+    let payloadText = rawText;
     if (attachment) {
-      payloadText = `${payloadText ? payloadText + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachment)}]`;
+      payloadText = `${payloadText ? payloadText + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(newMsg.attachment)}]`;
     }
     if (options.replyTo) {
       payloadText = `${payloadText}\n<!-- REPLY_TO:${JSON.stringify(options.replyTo)} -->`;
     }
-    payloadText = `${payloadText}\n<!-- STATUS:${initialStatus} -->`;
 
     // =========================================================================
     // REGRA GLOBAL DE PERSISTÊNCIA (WHATSAPP E CHAT INTERNO):
