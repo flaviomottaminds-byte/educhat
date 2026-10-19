@@ -54,7 +54,7 @@ import {
   generateGeminiChatReply,
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
-import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat } from './lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat, shouldPlayMessageSound } from './lib/portfolioAccess';
 import { fetchKnowledgeBaseDocs } from './lib/knowledgeBase';
 import { getSaoPauloTime, formatRelativeChatTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
@@ -353,7 +353,8 @@ export default function App() {
         if (liveMessages && Object.keys(liveMessages).length > 0) {
           setMessages((prev) => {
             const next = { ...prev };
-            let hasNewIncoming = false;
+            let shouldPlayAlert = false;
+            const activeUser = currentUserRef.current || currentUser;
 
             Object.keys(liveMessages).forEach((chatKey) => {
               const existingList = next[chatKey] || [];
@@ -364,7 +365,17 @@ export default function App() {
                 next[chatKey] = [...existingList, ...toAdd];
                 const studentMessages = toAdd.filter((m) => m.fromStudent);
                 if (studentMessages.length > 0) {
-                  hasNewIncoming = true;
+                  studentMessages.forEach((sm) => {
+                    if (
+                      shouldPlayMessageSound(chatKey, sm, activeUser, {
+                        whatsAppContacts: whatsAppContactsRef.current,
+                        assignmentsCache: assignmentsCacheRef.current,
+                        collaborators: collaboratorsRef.current
+                      })
+                    ) {
+                      shouldPlayAlert = true;
+                    }
+                  });
 
                   const timeInfo = getBrasiliaTime();
                   if (!timeInfo.isAfterHours) {
@@ -381,7 +392,7 @@ export default function App() {
               }
             });
 
-            if (hasNewIncoming && !document.hidden) {
+            if (shouldPlayAlert && !document.hidden) {
               playMessageSound();
             }
 
@@ -1308,7 +1319,7 @@ export default function App() {
       if (parts.length >= 2) {
         const id1 = parts[0];
         const id2 = parts[1];
-        if (currentUserId !== id1 && currentUserId !== id2 && activeUser?.roleType !== 'diretor') {
+        if (currentUserId !== id1 && currentUserId !== id2) {
           return;
         }
       }
@@ -1333,8 +1344,16 @@ export default function App() {
       }
     }
 
-    // REGRA 3: Toca SEMPRE o alerta sonoro nativo (880Hz/1046Hz) quando chega um INSERT de mensagem recebida
-    playMessageSound();
+    // REGRA DE ÁUDIO RIGOROSA: Toca som APENAS se a mensagem for destinada ao usuário logado
+    if (
+      shouldPlayMessageSound(cKey, msg, activeUser, {
+        whatsAppContacts: whatsAppContactsRef.current,
+        assignmentsCache: assignmentsCacheRef.current,
+        collaborators: collaboratorsRef.current
+      })
+    ) {
+      playMessageSound();
+    }
 
     const currentKey = getChatKey(activeChatRef.current, currentUserId);
     const isCurrentActive =
@@ -1390,10 +1409,19 @@ export default function App() {
 
         const activeUser = currentUserRef.current;
         if (incomingMsg.senderId !== activeUser?.id && incomingMsg.senderId !== 'system') {
-          playMessageSound();
           const currentActiveKey = getChatKey(activeChatRef.current, activeUser?.id || 'u1');
           if (chatKey !== currentActiveKey || document.hidden) {
             handleIncomingNotification(incomingMsg, chatKey);
+          } else {
+            if (
+              shouldPlayMessageSound(chatKey, incomingMsg, activeUser, {
+                whatsAppContacts: whatsAppContactsRef.current,
+                assignmentsCache: assignmentsCacheRef.current,
+                collaborators: collaboratorsRef.current
+              })
+            ) {
+              playMessageSound();
+            }
           }
         }
       },
@@ -3325,8 +3353,11 @@ export default function App() {
               [currentChatKey]: [...(prev[currentChatKey] || []), botReply]
             }));
 
-            // Notifica o consultor do setor designado
-            if (currentUser.name === triageResult.assignee || currentUser.roleType === 'diretor') {
+            // Notifica EXCLUSIVAMENTE o consultor do setor designado para a carteira
+            const isMyAssignment =
+              (triageResult.assigned_to && String(triageResult.assigned_to).toLowerCase() === String(currentUser.id).toLowerCase()) ||
+              (currentUser.name && normalizeName(currentUser.name) === normalizeName(triageResult.assignee));
+            if (isMyAssignment) {
               playMessageSound();
               notifyIncomingMessage('EduChat Triagem URA', `Nova demanda encaminhada para você: ${contact.name}`);
             }
@@ -3723,9 +3754,11 @@ export default function App() {
       [targetChatId]: [...(prev[targetChatId] || []), incomingMsg]
     }));
 
-    // Trava de Carteira Ativa: Apenas o consultor responsável (ou o diretor) é notificado!
-    const isMyLead = routingResult.targetAssignee === currentUser.name;
-    if (isMyLead || (routingResult.door === 1 && currentUser.roleType === 'diretor')) {
+    // Trava de Carteira Ativa: Apenas o consultor responsável é notificado!
+    const isMyLead =
+      (routingResult.targetAssignee && normalizeName(routingResult.targetAssignee) === normalizeName(currentUser.name)) ||
+      (routingResult.assigned_to && String(routingResult.assigned_to).toLowerCase() === String(currentUser.id).toLowerCase());
+    if (isMyLead) {
       playMessageSound();
       notifyIncomingMessage(senderName, messageText);
     }
@@ -3754,7 +3787,6 @@ export default function App() {
           ...prev,
           [targetChatId]: [...(prev[targetChatId] || []), replyMsg]
         }));
-        playMessageSound();
       }, 700);
     } else {
       // Se não gerou menu fixo de URA e a IA deve assumir (fora de expediente ou aiActive ativo)
@@ -3817,8 +3849,6 @@ export default function App() {
             }]).then(({ error }) => {
               if (error) console.warn('Erro ao persistir resposta Gemini:', error);
             });
-
-            playMessageSound();
           } catch (err) {
             console.warn('Erro ao responder com Gemini no Webhook:', err);
           }

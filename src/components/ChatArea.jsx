@@ -577,6 +577,15 @@ export default function ChatArea({
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
+
+  // Auto-ajuste de altura do campo de digitação (expansível de 1 linha até max 120px)
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  }, [inputText]);
 
   const isWhatsApp = chatMeta?.type === 'whatsapp';
   const isDM = chatMeta?.type === 'dm';
@@ -763,6 +772,9 @@ export default function ChatArea({
     setInputText('');
     setPendingAttachment(null);
     setReplyingTo(null);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
 
     onSendMessage(textToSend, attachmentToSend, {
       replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null
@@ -1799,12 +1811,19 @@ export default function ChatArea({
               <Paperclip size={22} />
             </button>
 
-            <input
-              type="text"
+            <textarea
+              ref={textareaRef}
+              rows={1}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend(e);
+                }
+              }}
               placeholder={pendingAttachment ? "Adicione uma legenda ou envie..." : replyingTo ? `Respondendo a ${replyingTo.senderName}...` : "Digite uma mensagem"}
-              className="flex-1 bg-white dark:bg-chatInputBg text-chatTextTitle text-[14px] placeholder:text-[#54656f] dark:placeholder:text-chatTextMuted px-4 py-2.5 rounded-lg border-none focus:outline-none shadow-xs transition"
+              className="flex-1 bg-white dark:bg-chatInputBg text-chatTextTitle text-[14px] placeholder:text-[#54656f] dark:placeholder:text-chatTextMuted px-4 py-2.5 rounded-lg border-none focus:outline-none shadow-xs transition resize-none max-h-32 min-h-[42px] leading-relaxed scrollbar-thin"
             />
 
             {inputText.trim() || pendingAttachment ? (
