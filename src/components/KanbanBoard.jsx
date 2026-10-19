@@ -474,19 +474,14 @@ export default function KanbanBoard({
                         </div>
                       </div>
 
-                      {/* Título e Descrição */}
+                      {/* Título da Demanda */}
                       <div>
                         <h4 className="text-sm font-semibold text-chatTextTitle leading-snug group-hover:text-brand-700 dark:group-hover:text-brand-400 transition">
                           {t.title}
                         </h4>
-                        {t.desc && (
-                          <p className="text-xs text-chatTextMuted mt-1 line-clamp-2">
-                            {t.desc}
-                          </p>
-                        )}
                       </div>
 
-                      {/* Anexos e Comentários */}
+                      {/* Anexos e Comentários (Discreto) */}
                       {((t.attachments && t.attachments.length > 0) || (t.comments && t.comments.length > 0)) && (
                         <div className="flex items-center gap-2 text-[10px] text-chatTextMuted">
                           {t.attachments && t.attachments.length > 0 && (
@@ -513,16 +508,6 @@ export default function KanbanBoard({
                               {t.requesterDept}
                             </span>
                           )}
-                        </div>
-                      )}
-
-                      {/* Trecho da Mensagem de Origem */}
-                      {t.sourceMessage && (
-                        <div className="bg-slate-50 dark:bg-[#111b21] border-l-2 border-purple-500 p-2 rounded text-[11px] text-chatTextBody italic">
-                          <span className="text-[9px] text-purple-600 dark:text-purple-400 font-bold block not-italic">
-                            ORIGEM:
-                          </span>
-                          "{t.sourceMessage}"
                         </div>
                       )}
 
