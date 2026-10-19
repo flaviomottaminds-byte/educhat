@@ -1028,6 +1028,15 @@ export default function ChatArea({
       result.push(m);
     }
 
+    result.sort((a, b) => {
+      const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
+      const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
+      if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
+        return timeA - timeB;
+      }
+      return 0;
+    });
+
     return result;
   }, [messages, currentUser?.id]);
 

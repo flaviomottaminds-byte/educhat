@@ -1308,6 +1308,7 @@ export default function App() {
             .from('messages')
             .select('*')
             .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
+            .order('created_at', { ascending: true })
             .limit(100);
           fetchedDbMessages = fallbackRes.data;
         }
@@ -1336,6 +1337,13 @@ export default function App() {
                 seenIds.add(msg.id);
                 mergedList.push(msg);
               }
+            });
+
+            // ORDENAÇÃO DE SEGURANÇA NO ESTADO: Garante estrita ordem cronológica
+            mergedList.sort((a, b) => {
+              const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
+              const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
+              return timeA - timeB;
             });
 
             return {
@@ -1676,14 +1684,14 @@ export default function App() {
         console.warn('Aviso ao carregar recibos de leitura do Supabase:', err);
       }
 
-      // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
+      // 1B. Busca as mensagens reais de conversas mais recentes em ordem cronológica (excluindo registros sys_*)
       let recentDbMessages = null;
       try {
         let { data, error } = await supabase
           .from('messages')
           .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by')
           .not('chat_id', 'like', 'sys_%')
-          .order('created_at', { ascending: false })
+          .order('created_at', { ascending: true })
           .limit(1000);
 
         if (error) {
@@ -1692,7 +1700,7 @@ export default function App() {
             .from('messages')
             .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
             .not('chat_id', 'like', 'sys_%')
-            .order('created_at', { ascending: false })
+            .order('created_at', { ascending: true })
             .limit(1000);
           data = fb.data;
           error = fb.error;
@@ -1704,8 +1712,9 @@ export default function App() {
           console.error('[Supabase] Erro na consulta com created_at, executando fallback:', error);
           const { data: fallbackData, error: fbErr } = await supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
             .not('chat_id', 'like', 'sys_%')
+            .order('created_at', { ascending: true })
             .limit(500);
 
           if (!fbErr && Array.isArray(fallbackData)) {
@@ -1718,7 +1727,9 @@ export default function App() {
         console.error('[Supabase] Falha ao consultar histórico de mensagens:', err);
       }
 
-      const dbMessages = Array.isArray(recentDbMessages) ? [...recentDbMessages].reverse() : [];
+      const dbMessages = Array.isArray(recentDbMessages)
+        ? [...recentDbMessages].sort((a, b) => new Date(a.created_at || a.timestamp || 0) - new Date(b.created_at || b.timestamp || 0))
+        : [];
 
       if (dbMessages.length > 0) {
         dbMessages.forEach((m) => {
@@ -1832,6 +1843,14 @@ export default function App() {
                 seenIds.add(msg.id);
                 mergedList.push(msg);
               }
+            });
+
+            // 2. ORDENAÇÃO DE SEGURANÇA NO ESTADO (FRONTEND):
+            // Garante ordenação cronológica estrita por created_at
+            mergedList.sort((a, b) => {
+              const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
+              const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
+              return timeA - timeB;
             });
 
             next[key] = mergedList;
