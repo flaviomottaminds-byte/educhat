@@ -1010,6 +1010,29 @@ export default function App() {
       }
     }
 
+    let readBy = [];
+    if (Array.isArray(m.read_by)) {
+      readBy = m.read_by;
+    } else if (typeof m.read_by === 'string') {
+      try {
+        readBy = JSON.parse(m.read_by);
+      } catch {
+        readBy = m.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+      }
+    }
+    if (cleanText.includes('<!-- READ_BY:')) {
+      const match = cleanText.match(/<!-- READ_BY:([\s\S]+?) -->/);
+      if (match) {
+        try {
+          const list = JSON.parse(match[1]);
+          if (Array.isArray(list)) {
+            readBy = Array.from(new Set([...readBy, ...list]));
+          }
+        } catch {}
+        cleanText = cleanText.replace(/<!-- READ_BY:[\s\S]+? -->/, '').trim();
+      }
+    }
+
     const rawDate = m.created_at || m.timestamp || new Date().toISOString();
     return {
       id: m.id,
@@ -1022,6 +1045,8 @@ export default function App() {
       attachment: parsedAttachment,
       replyTo: parsedReplyTo,
       status: parsedStatus,
+      read_by: readBy,
+      readBy: readBy,
       taskId: linkedTaskId,
       actionExtracted: false,
       isAudio: isAudio || !!parsedAttachment?.type?.startsWith('audio/') || !!audioUrl,
@@ -1654,12 +1679,24 @@ export default function App() {
       // 1B. Busca as 1.000 mensagens reais de conversas mais recentes (excluindo registros sys_*)
       let recentDbMessages = null;
       try {
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by')
           .not('chat_id', 'like', 'sys_%')
           .order('created_at', { ascending: false })
           .limit(1000);
+
+        if (error) {
+          // Fallback caso a coluna read_by ainda não tenha sido criada no Supabase
+          const fb = await supabase
+            .from('messages')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .not('chat_id', 'like', 'sys_%')
+            .order('created_at', { ascending: false })
+            .limit(1000);
+          data = fb.data;
+          error = fb.error;
+        }
 
         if (!error && Array.isArray(data)) {
           recentDbMessages = data;
@@ -2796,12 +2833,47 @@ export default function App() {
             if (match) parsedStatus = match[1];
           }
 
+          let incomingReadBy = [];
+          if (Array.isArray(row.read_by)) {
+            incomingReadBy = row.read_by;
+          } else if (typeof row.read_by === 'string') {
+            try {
+              incomingReadBy = JSON.parse(row.read_by);
+            } catch {
+              incomingReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+            }
+          }
+          if (cleanText.includes('<!-- READ_BY:')) {
+            const match = cleanText.match(/<!-- READ_BY:([\s\S]+?) -->/);
+            if (match) {
+              try {
+                const list = JSON.parse(match[1]);
+                if (Array.isArray(list)) {
+                  incomingReadBy = Array.from(new Set([...incomingReadBy, ...list]));
+                }
+              } catch {}
+            }
+          }
+
           setMessages((prevMessages) => {
             const list = prevMessages[cKey];
             if (!list) return prevMessages;
             return {
               ...prevMessages,
-              [cKey]: list.map((m) => (m.id === row.id ? { ...m, status: parsedStatus } : m))
+              [cKey]: list.map((m) => {
+                if (m.id === row.id) {
+                  const combinedReadBy = Array.from(
+                    new Set([...(m.read_by || m.readBy || []), ...incomingReadBy])
+                  );
+                  return {
+                    ...m,
+                    status: parsedStatus || m.status,
+                    read_by: combinedReadBy,
+                    readBy: combinedReadBy
+                  };
+                }
+                return m;
+              })
             };
           });
         }

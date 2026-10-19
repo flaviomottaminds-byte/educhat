@@ -32,7 +32,8 @@ import {
   Volume2,
   UserMinus,
   AlertCircle,
-  RotateCcw
+  RotateCcw,
+  Info
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment, getChatAssignedToId, normalizeName } from '../lib/portfolioAccess';
@@ -627,6 +628,103 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
   );
 }
 
+// Helper para cruzar os IDs de read_by com a lista de colaboradores e retornar os primeiros nomes
+function getReadByCollaboratorNames(readByList, collaborators, senderId) {
+  if (!Array.isArray(readByList) || readByList.length === 0) return [];
+  // Exclui o próprio remetente para exibir apenas os colegas que visualizaram
+  const viewerIds = readByList.filter((id) => id && id !== senderId);
+  const names = [];
+
+  viewerIds.forEach((id) => {
+    const collab = (collaborators || []).find((c) => c.id === id || c.user_id === id);
+    if (collab && collab.name) {
+      const firstName = collab.name.trim().split(' ')[0];
+      if (firstName && !names.includes(firstName)) {
+        names.push(firstName);
+      }
+    } else {
+      if (id && !names.includes(id)) {
+        names.push(id);
+      }
+    }
+  });
+
+  return names;
+}
+
+// Componente de Tooltip / Message Info exclusivo para mensagens do grupo #geral
+function MessageReadReceiptTooltip({ readBy = [], collaborators = [], senderId, isMe }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  const names = useMemo(() => {
+    return getReadByCollaboratorNames(readBy, collaborators, senderId);
+  }, [readBy, collaborators, senderId]);
+
+  const hasReaders = names.length > 0;
+  const tooltipText = hasReaders
+    ? `Lido por: ${names.join(', ')}`
+    : 'Aguardando visualização';
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative inline-flex items-center"
+      onMouseEnter={() => setIsOpen(true)}
+      onMouseLeave={() => setIsOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen((prev) => !prev);
+        }}
+        title={tooltipText}
+        className={`p-0.5 rounded transition flex items-center justify-center cursor-pointer ${
+          hasReaders
+            ? 'text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300'
+            : 'opacity-60 hover:opacity-100 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'
+        }`}
+        aria-label="Info da mensagem"
+      >
+        <Info size={11} className={hasReaders ? 'stroke-[2.5]' : 'stroke-2'} />
+      </button>
+
+      {isOpen && (
+        <div
+          className={`absolute bottom-full mb-1.5 z-50 whitespace-nowrap px-2.5 py-1 text-[11px] font-medium rounded-md shadow-lg border backdrop-blur-sm transition-all duration-150 animate-in fade-in zoom-in-95 pointer-events-none ${
+            isMe
+              ? 'right-0 bg-slate-900/95 text-slate-100 border-slate-700/80 shadow-slate-950/40'
+              : 'left-0 bg-slate-900/95 text-slate-100 border-slate-700/80 shadow-slate-950/40'
+          }`}
+        >
+          <div className="flex items-center gap-1.5">
+            <span className={hasReaders ? 'text-blue-300 font-semibold' : 'text-slate-300'}>
+              {tooltipText}
+            </span>
+          </div>
+          <div
+            className={`absolute top-full border-4 border-transparent border-t-slate-900/95 ${
+              isMe ? 'right-2' : 'left-2'
+            }`}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatArea({
   activeChat,
   activeView,
@@ -685,8 +783,17 @@ export default function ChatArea({
 
   const isWhatsApp = chatMeta?.type === 'whatsapp' || activeChat?.type === 'whatsapp';
   const isDM = chatMeta?.type === 'dm' || activeChat?.type === 'dm';
+  const isChannel = chatMeta?.type === 'channel' || activeChat?.type === 'channel' || (!isWhatsApp && !isDM);
   const target = chatMeta?.data || {};
   const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
+
+  const isGeral = isChannel && (
+    target?.id === 'c-geral' ||
+    target?.id === 'geral' ||
+    target?.name?.toLowerCase() === 'geral' ||
+    activeChat?.id === 'c-geral' ||
+    activeChat?.id === 'geral'
+  );
 
   // 1. AUTO-FOCUS GLOBAL NA SELEÇÃO DE CONTATO/GRUPO (INTERNO E EXTERNO):
   // Sempre que o utilizador clicar no nome de um colega na aba "Equipe Interna" OU num aluno na aba "WhatsApp",
@@ -720,6 +827,67 @@ export default function ChatArea({
     target?.id,
     target?.phone
   ]);
+
+  // 2. RECIBOS DE LEITURA (READ RECEIPTS) NO GRUPO #GERAL:
+  // Toda a vez que um utilizador visualizar ou focar no canal #geral,
+  // dá UPDATE nas mensagens recentes, fazendo push do currentUser.id para o array read_by
+  const [localReadByMap, setLocalReadByMap] = useState({});
+  const markedReadIdsRef = useRef(new Set());
+
+  useEffect(() => {
+    if (!isGeral || !currentUser?.id) return;
+
+    const markRecentMessagesAsRead = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      const recent = (messages || []).slice(-50);
+      recent.forEach((m) => {
+        if (!m || !m.id || m.senderId === 'system' || String(m.id).startsWith('temp_')) return;
+        const currentList = localReadByMap[m.id] || m.read_by || m.readBy || [];
+        if (!currentList.includes(currentUser.id)) {
+          if (markedReadIdsRef.current.has(m.id)) return;
+          markedReadIdsRef.current.add(m.id);
+
+          const nextReadBy = Array.from(new Set([...currentList, currentUser.id]));
+          setLocalReadByMap((prev) => ({ ...prev, [m.id]: nextReadBy }));
+
+          supabase
+            .from('messages')
+            .update({ read_by: nextReadBy })
+            .eq('id', m.id)
+            .then(({ error }) => {
+              if (error && (error.code === '42703' || error.message?.includes('read_by'))) {
+                const rawText = m.text || '';
+                const cleanText = rawText.replace(/<!-- READ_BY:[\s\S]*?-->/g, '').trim();
+                const fallbackText = `${cleanText} <!-- READ_BY:${JSON.stringify(nextReadBy)} -->`;
+                supabase
+                  .from('messages')
+                  .update({ text: fallbackText })
+                  .eq('id', m.id)
+                  .then(() => {})
+                  .catch(() => {});
+              }
+            })
+            .catch((err) => {
+              console.warn('[ReadReceipts] Erro ao registrar leitura no Supabase:', err);
+            });
+        }
+      });
+    };
+
+    markRecentMessagesAsRead();
+
+    const handleFocusOrVisible = () => {
+      markRecentMessagesAsRead();
+    };
+
+    window.addEventListener('focus', handleFocusOrVisible);
+    window.addEventListener('visibilitychange', handleFocusOrVisible);
+
+    return () => {
+      window.removeEventListener('focus', handleFocusOrVisible);
+      window.removeEventListener('visibilitychange', handleFocusOrVisible);
+    };
+  }, [isGeral, messages, currentUser?.id]);
 
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp
@@ -1180,15 +1348,14 @@ export default function ChatArea({
 
   // 2. BLINDAGEM DE VISIBILIDADE DOS GRUPOS/CANAIS:
   // Se for canal da Equipe Interna e usuário for Comum, só pode ver #geral e o canal do seu próprio departamento
-  const isChannel = !isWhatsApp && !isDM;
   if (isChannel && !isManager) {
     const userDept = (currentUser?.department || '').trim().toLowerCase();
     const chName = (target?.name || '').trim().toLowerCase();
     const chDept = (target?.department || '').trim().toLowerCase();
-    const isGeral = chName === 'geral' || target?.id === 'c-geral' || chDept === 'todos';
+    const isChannelGeral = isGeral || chName === 'geral' || target?.id === 'c-geral' || chDept === 'todos';
     const isMyDept = userDept && (chDept === userDept || chName === userDept);
 
-    if (!isGeral && !isMyDept) {
+    if (!isChannelGeral && !isMyDept) {
       return (
         <section className="flex-1 flex flex-col items-center justify-center h-full bg-[#efeae2] dark:bg-chatBg p-8 text-center relative transition-colors">
           <div className="bg-white dark:bg-chatCard p-8 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-md shadow-sm space-y-4">
@@ -1908,6 +2075,14 @@ export default function ChatArea({
                         <Trash2 size={11} />
                       </button>
                       <span>{getSaoPauloTime(m.timestamp || m.created_at)}</span>
+                      {isGeral && (
+                        <MessageReadReceiptTooltip
+                          readBy={localReadByMap[m.id] || m.read_by || m.readBy || []}
+                          collaborators={collaborators}
+                          senderId={m.senderId}
+                          isMe={isMe}
+                        />
+                      )}
                       {isMe && (
                         <span title={m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'}>
                           {m.status === 'read' ? (
