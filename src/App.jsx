@@ -5005,6 +5005,8 @@ export default function App() {
           }}
         >
           <ChatArea
+            activeChat={activeChat}
+            activeView={activeView}
             chatMeta={chatMeta}
             messages={currentMessages}
             onSendMessage={handleSendMessage}

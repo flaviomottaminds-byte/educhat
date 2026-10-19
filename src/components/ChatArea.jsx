@@ -628,6 +628,8 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
 }
 
 export default function ChatArea({
+  activeChat,
+  activeView,
   chatMeta, // { type: 'channel' | 'dm' | 'whatsapp', data: Channel | Collaborator | WhatsAppContact }
   messages,
   onSendMessage,
@@ -681,23 +683,43 @@ export default function ChatArea({
     }
   }, [inputText]);
 
-  const isWhatsApp = chatMeta?.type === 'whatsapp';
-  const isDM = chatMeta?.type === 'dm';
+  const isWhatsApp = chatMeta?.type === 'whatsapp' || activeChat?.type === 'whatsapp';
+  const isDM = chatMeta?.type === 'dm' || activeChat?.type === 'dm';
   const target = chatMeta?.data || {};
   const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
 
-  // 1. AUTO-FOCUS NA SELEÇÃO DE CONTATO (EQUIPE INTERNA / CHAT):
-  // Sempre que o usuário clicar no nome de um colega ou canal na barra lateral,
-  // aciona automaticamente o .focus() no textarea para digitação imediata sem clique do mouse.
+  // 1. AUTO-FOCUS GLOBAL NA SELEÇÃO DE CONTATO/GRUPO (INTERNO E EXTERNO):
+  // Sempre que o utilizador clicar no nome de um colega na aba "Equipe Interna" OU num aluno na aba "WhatsApp",
+  // o sistema aciona .focus({ preventScroll: true }) diretamente no textarea da mensagem.
   useEffect(() => {
-    const focusTimer = setTimeout(() => {
+    const focusInput = () => {
       if (textareaRef.current) {
-        textareaRef.current.focus();
+        try {
+          textareaRef.current.focus({ preventScroll: true });
+        } catch {
+          textareaRef.current.focus();
+        }
       }
-    }, 50);
+    };
 
-    return () => clearTimeout(focusTimer);
-  }, [chatMeta?.type, chatMeta?.id, target?.id]);
+    // Foca imediatamente e também no próximo frame/tick para garantir após troca de rotas e render do DOM
+    focusInput();
+    const rafId = requestAnimationFrame(focusInput);
+    const timerId = setTimeout(focusInput, 40);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(timerId);
+    };
+  }, [
+    activeChat?.type,
+    activeChat?.id,
+    activeView,
+    chatMeta?.type,
+    chatMeta?.data?.id,
+    target?.id,
+    target?.phone
+  ]);
 
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp
@@ -901,7 +923,11 @@ export default function ChatArea({
 
       requestAnimationFrame(() => {
         scrollToBottom(true);
-        textareaRef.current?.focus();
+        try {
+          textareaRef.current?.focus({ preventScroll: true });
+        } catch {
+          textareaRef.current?.focus();
+        }
       });
     } catch (err) {
       console.error("Erro no Insert:", err);
@@ -2060,7 +2086,14 @@ export default function ChatArea({
 
             <button
               type="button"
-              onClick={() => setInputText((prev) => prev + ' 😊')}
+              onClick={() => {
+                setInputText((prev) => prev + ' 😊');
+                try {
+                  textareaRef.current?.focus({ preventScroll: true });
+                } catch {
+                  textareaRef.current?.focus();
+                }
+              }}
               className="p-1.5 text-[#54656f] dark:text-chatTextMuted hover:text-chatTextTitle transition rounded-full"
               title="Inserir Emoji"
             >
@@ -2078,6 +2111,7 @@ export default function ChatArea({
 
             <textarea
               ref={textareaRef}
+              autoFocus
               rows={1}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
