@@ -344,3 +344,82 @@ export function shouldPlayMessageSound(
   return false;
 }
 
+/**
+ * Retorna true se a tarefa/card do Kanban estiver atribuída ao usuário logado
+ * (assigned_to === currentUser.id ou assignee com seu nome).
+ */
+export function isTaskAssignedToUser(task, user) {
+  if (!task || !user) return false;
+  const myUserId = String(user.id || '').trim().toLowerCase();
+  const myNameNorm = normalizeName(user.name);
+
+  // 1. Verificação por ID direto
+  const tAssignedTo = String(task.assigned_to || task.assigneeId || task.assignee_id || '').trim().toLowerCase();
+  if (tAssignedTo && (tAssignedTo === myUserId || (myNameNorm && tAssignedTo === myNameNorm))) {
+    return true;
+  }
+
+  // 2. Verificação por nome do responsável
+  const tAssigneeNorm = normalizeName(task.assignee || '');
+  if (tAssigneeNorm && myNameNorm) {
+    if (tAssigneeNorm === myNameNorm) return true;
+    const firstMy = myNameNorm.split(' ')[0];
+    const firstT = tAssigneeNorm.split(' ')[0];
+    if (firstMy && firstT && firstMy.length >= 3 && firstMy === firstT) return true;
+  }
+
+  // 3. Verificação por e-mail se presente
+  if (task.assigneeEmail && user.email && task.assigneeEmail.toLowerCase() === user.email.toLowerCase()) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Retorna true se a tarefa/card do Kanban foi criada ou solicitada pelo usuário logado
+ * (created_by === currentUser.id ou requester_id === currentUser.id ou requester com seu nome).
+ */
+export function isTaskRequestedByUser(task, user) {
+  if (!task || !user) return false;
+  const myUserId = String(user.id || '').trim().toLowerCase();
+  const myNameNorm = normalizeName(user.name);
+
+  // 1. Verificação por ID de criador/solicitante
+  const tCreatedBy = String(task.created_by || task.requester_id || task.requesterId || '').trim().toLowerCase();
+  if (tCreatedBy && (tCreatedBy === myUserId || (myNameNorm && tCreatedBy === myNameNorm))) {
+    return true;
+  }
+
+  // 2. Verificação por nome do solicitante
+  const tRequesterNorm = normalizeName(task.requester || '');
+  if (tRequesterNorm && myNameNorm) {
+    if (tRequesterNorm === myNameNorm) return true;
+    const firstMy = myNameNorm.split(' ')[0];
+    const firstT = tRequesterNorm.split(' ')[0];
+    if (firstMy && firstT && firstMy.length >= 3 && firstMy === firstT) return true;
+  }
+
+  // 3. Verificação no source_message (ex: "Solicitado por: [Nome]")
+  if (task.sourceMessage && typeof task.sourceMessage === 'string') {
+    const normSource = normalizeName(task.sourceMessage);
+    if (myNameNorm && normSource.includes(`solicitado por: ${myNameNorm}`)) return true;
+    if (user.name && task.sourceMessage.includes(user.name)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * BLINDAGEM DE ACESSO AO KANBAN:
+ * 1. Gestores / Administradores: Acesso total e global a todos os cards.
+ * 2. Usuários comuns: Visualizam ESTRITAMENTE cards onde são responsáveis (assigned_to === currentUser.id)
+ *    OU criadores/solicitantes da demanda (created_by === currentUser.id / requester_id === currentUser.id).
+ */
+export function canUserViewTask(task, user) {
+  if (!task || !user) return false;
+  if (hasFullPortfolioAccess(user)) return true;
+  return isTaskAssignedToUser(task, user) || isTaskRequestedByUser(task, user);
+}
+
+

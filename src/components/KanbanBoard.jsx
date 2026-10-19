@@ -10,6 +10,12 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { normalizeText, fetchActiveCollaboratorsFromDB } from '../lib/gemini';
+import {
+  hasFullPortfolioAccess,
+  canUserViewTask,
+  isTaskAssignedToUser,
+  isTaskRequestedByUser
+} from '../lib/portfolioAccess';
 
 const COLUMNS = [
   { id: 'backlog', title: 'Pendente / A Fazer', color: 'border-blue-500/40 text-blue-600 dark:text-blue-400 bg-blue-500/10' },
@@ -103,16 +109,63 @@ export default function KanbanBoard({
     return Array.from(set);
   }, [liveCollaborators]);
 
-  // Filtros rápidos da Visão Global (Por Setor e Por Colaborador)
+  // Permissão do usuário logado (Gestor vs Usuário Comum)
+  const isManager = hasFullPortfolioAccess(liveCurrentUser);
+
+  // Seletor de Escopo Visual (Minhas Demandas / Minhas Solicitações / Todos os Meus Cards / Global)
+  // Usuário Comum: padrão 'all_my' (Todos os Meus Cards)
+  // Gestor/Admin: padrão 'global'
+  const [scopeFilter, setScopeFilter] = useState(() => (isManager ? 'global' : 'all_my'));
+
+  // Garante que usuário comum nunca permaneça em 'global'
+  const effectiveScope = !isManager && scopeFilter === 'global' ? 'all_my' : scopeFilter;
+
+  // Filtros rápidos adicionais (Por Setor e Por Colaborador)
   const [filterDepartment, setFilterDepartment] = useState('Todos');
   const [filterAssignee, setFilterAssignee] = useState('todos');
 
-  // Visão Global nativa: exibe 100% dos cartões livremente com filtros rápidos opcionais
+  // Contadores dinâmicos para exibição nos badges do seletor
+  const taskCounts = useMemo(() => {
+    let myDemands = 0;
+    let myRequests = 0;
+    let myAll = 0;
+    let totalGlobal = (tasks || []).length;
+
+    (tasks || []).forEach((t) => {
+      if (!t) return;
+      const isAssigned = isTaskAssignedToUser(t, liveCurrentUser);
+      const isRequested = isTaskRequestedByUser(t, liveCurrentUser);
+      if (isAssigned) myDemands += 1;
+      if (isRequested) myRequests += 1;
+      if (isAssigned || isRequested) myAll += 1;
+    });
+
+    return { myDemands, myRequests, myAll, totalGlobal };
+  }, [tasks, liveCurrentUser]);
+
+  // Lista filtrada com blindagem de dados e controle de abas
   const filteredTasks = useMemo(() => {
     return (tasks || []).filter((t) => {
       if (!t) return false;
 
-      // Filtro de Setor / Departamento
+      // 1. BLINDAGEM DE DADOS: Se não for Gestor/Admin, o usuário comum JAMAIS vê cartões de terceiros
+      if (!isManager && !canUserViewTask(t, liveCurrentUser)) {
+        return false;
+      }
+
+      // 2. CONTROLE DO SELETOR VISUAL
+      const isAssigned = isTaskAssignedToUser(t, liveCurrentUser);
+      const isRequested = isTaskRequestedByUser(t, liveCurrentUser);
+
+      if (effectiveScope === 'my_demands') {
+        if (!isAssigned) return false;
+      } else if (effectiveScope === 'my_requests') {
+        if (!isRequested) return false;
+      } else if (effectiveScope === 'all_my') {
+        if (!isAssigned && !isRequested) return false;
+      }
+
+      // 3. Filtro de Setor / Departamento
       if (filterDepartment && filterDepartment !== 'Todos') {
         const tDept = normalizeText(t.department || 'Diretoria');
         const fDept = normalizeText(filterDepartment);
@@ -121,8 +174,8 @@ export default function KanbanBoard({
         }
       }
 
-      // Filtro de Colaborador Responsável
-      if (filterAssignee && filterAssignee !== 'todos') {
+      // 4. Filtro de Colaborador Responsável (visão global do admin)
+      if (isManager && filterAssignee && filterAssignee !== 'todos') {
         const normFilter = normalizeText(filterAssignee);
         const normAssignee = normalizeText(t.assignee || '');
         const normAssigneeId = normalizeText(t.assigneeId || '');
@@ -149,7 +202,7 @@ export default function KanbanBoard({
 
       return true;
     });
-  }, [tasks, filterDepartment, filterAssignee, liveCollaborators]);
+  }, [tasks, effectiveScope, isManager, filterDepartment, filterAssignee, liveCollaborators, liveCurrentUser]);
 
   const handleMove = (e, taskId, currentStatus, direction) => {
     e.stopPropagation();
@@ -199,17 +252,121 @@ export default function KanbanBoard({
             <h2 className="text-xl sm:text-2xl font-bold text-chatTextTitle flex items-center gap-2">
               📋 Quadro de Demandas
             </h2>
-            <span className="text-[11px] font-semibold bg-brand-600/15 text-brand-700 dark:text-brand-400 px-2.5 py-0.5 rounded-full flex items-center gap-1 border border-brand-500/30">
-              <Shield size={12} /> Visão Global ({liveCurrentUser?.name || 'Administração'})
+            <span
+              className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1 border ${
+                isManager
+                  ? 'bg-brand-600/15 text-brand-700 dark:text-brand-400 border-brand-500/30'
+                  : 'bg-emerald-600/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+              }`}
+            >
+              <Shield size={12} />{' '}
+              {isManager
+                ? `Visão Global (${liveCurrentUser?.name || 'Administração'})`
+                : `Minha Carteira (${liveCurrentUser?.name || 'Colaborador'})`}
             </span>
           </div>
           <p className="text-xs text-chatTextMuted">
-            Visão Global Administrativa: todos os cartões de todos os setores e colaboradores da instituição.
+            {isManager
+              ? 'Visão Global Administrativa: todos os cartões de todos os setores e colaboradores da instituição.'
+              : 'Visão Restrita da Equipe: visualização estrita das suas demandas atribuídas e solicitações intersetoriais.'}
           </p>
         </div>
 
-        {/* Controles de Filtro (Setor e Colaborador) + Botão Nova Demanda */}
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Controles de Filtro (Seletor de Escopo + Setor/Colaborador) + Botão Nova Demanda */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Seletor de Escopo (Tabs): "Minhas Demandas", "Minhas Solicitações", "Todos os Meus Cards" */}
+          <div className="flex items-center bg-white dark:bg-chatCard p-1 rounded-xl border border-slate-300 dark:border-chatBorder shadow-xs">
+            {isManager && (
+              <button
+                type="button"
+                onClick={() => setScopeFilter('global')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  effectiveScope === 'global'
+                    ? 'bg-brand-600 text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle'
+                }`}
+                title="Visualizar todos os cartões de todos os setores e colaboradores"
+              >
+                <span>🌐 Todos (Global)</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    effectiveScope === 'global'
+                      ? 'bg-white/25 text-white'
+                      : 'bg-slate-100 dark:bg-chatSidebar text-chatTextMuted'
+                  }`}
+                >
+                  {taskCounts.totalGlobal}
+                </span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setScopeFilter('all_my')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                effectiveScope === 'all_my'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-chatTextMuted hover:text-chatTextTitle'
+              }`}
+              title="Exibe a soma das suas demandas atribuídas e solicitações criadas"
+            >
+              <span>📋 Todos os Meus Cards</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  effectiveScope === 'all_my'
+                    ? 'bg-white/25 text-white'
+                    : 'bg-slate-100 dark:bg-chatSidebar text-chatTextMuted'
+                }`}
+              >
+                {taskCounts.myAll}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setScopeFilter('my_demands')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                effectiveScope === 'my_demands'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-chatTextMuted hover:text-chatTextTitle'
+              }`}
+              title="Exibe apenas os cards onde você é o consultor/responsável direto"
+            >
+              <span>🎯 Minhas Demandas</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  effectiveScope === 'my_demands'
+                    ? 'bg-white/25 text-white'
+                    : 'bg-slate-100 dark:bg-chatSidebar text-chatTextMuted'
+                }`}
+              >
+                {taskCounts.myDemands}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setScopeFilter('my_requests')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                effectiveScope === 'my_requests'
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'text-chatTextMuted hover:text-chatTextTitle'
+              }`}
+              title="Exibe os cards que você criou ou solicitou para outros setores"
+            >
+              <span>📤 Minhas Solicitações</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  effectiveScope === 'my_requests'
+                    ? 'bg-white/25 text-white'
+                    : 'bg-slate-100 dark:bg-chatSidebar text-chatTextMuted'
+                }`}
+              >
+                {taskCounts.myRequests}
+              </span>
+            </button>
+          </div>
+
           {/* Filtro Rápido por Setor / Departamento */}
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-chatTextMuted font-medium">Setor:</span>
@@ -226,24 +383,26 @@ export default function KanbanBoard({
             </select>
           </div>
 
-          {/* Filtro Rápido por Colaborador */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
-            <select
-              value={filterAssignee}
-              onChange={(e) => setFilterAssignee(e.target.value)}
-              className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
-            >
-              <option value="todos">
-                🌐 Toda a Equipe ({liveCollaborators.length} usuários • {tasks.length} cards)
-              </option>
-              {liveCollaborators.map((c) => (
-                <option key={c.id} value={c.name}>
-                  {c.avatar || '👤'} {c.name} — {c.department || 'Geral'} ({c.role || 'Colaborador'})
+          {/* Filtro Rápido por Colaborador (Disponível para Gestor/Admin) */}
+          {isManager && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-chatTextMuted font-medium">Colaborador:</span>
+              <select
+                value={filterAssignee}
+                onChange={(e) => setFilterAssignee(e.target.value)}
+                className="bg-white dark:bg-chatCard text-chatTextTitle text-xs font-semibold border border-slate-300 dark:border-chatBorder rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand-500 shadow-xs cursor-pointer"
+              >
+                <option value="todos">
+                  🌐 Toda a Equipe ({liveCollaborators.length} usuários • {tasks.length} cards)
                 </option>
-              ))}
-            </select>
-          </div>
+                {liveCollaborators.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.avatar || '👤'} {c.name} — {c.department || 'Geral'} ({c.role || 'Colaborador'})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <button
             type="button"
@@ -347,7 +506,7 @@ export default function KanbanBoard({
                       {t.requester && (
                         <div className="bg-brand-50 dark:bg-brand-950/40 border border-brand-200 dark:border-brand-500/30 px-2 py-1 rounded text-[11px] text-brand-800 dark:text-brand-300 flex items-center justify-between">
                           <span className="truncate">
-                            📌 Solicitado por: <strong>{t.requester === liveCurrentUser?.name ? 'Você' : t.requester}</strong>
+                            📌 Solicitado por: <strong>{isTaskRequestedByUser(t, liveCurrentUser) ? 'Você' : t.requester}</strong>
                           </span>
                           {t.requesterDept && (
                             <span className="text-[10px] bg-brand-100 dark:bg-brand-900/60 px-1.5 py-0.2 rounded font-semibold text-brand-700 dark:text-brand-300">
@@ -372,7 +531,7 @@ export default function KanbanBoard({
                         <div className="flex items-center gap-1.5" title={`Responsável: ${t.assignee}`}>
                           <span className="text-sm">{t.assigneeAvatar || '👤'}</span>
                           <span className="text-[11px] font-medium text-chatTextBody truncate w-28">
-                            {t.assignee === liveCurrentUser?.name ? '👉 Você' : t.assignee}
+                            {isTaskAssignedToUser(t, liveCurrentUser) ? '👉 Você' : t.assignee}
                           </span>
                         </div>
 

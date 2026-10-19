@@ -54,7 +54,16 @@ import {
   generateGeminiChatReply,
   syncGeminiApiKeyFromCloud
 } from './lib/gemini';
-import { hasFullPortfolioAccess, isChatAssignedToUser, normalizeName, canUserViewChat, shouldPlayMessageSound } from './lib/portfolioAccess';
+import {
+  hasFullPortfolioAccess,
+  isChatAssignedToUser,
+  normalizeName,
+  canUserViewChat,
+  shouldPlayMessageSound,
+  canUserViewTask,
+  isTaskAssignedToUser,
+  isTaskRequestedByUser
+} from './lib/portfolioAccess';
 import { fetchKnowledgeBaseDocs } from './lib/knowledgeBase';
 import { getSaoPauloTime, formatRelativeChatTime } from './lib/timezone';
 import { normalizeKey } from './lib/listParsers';
@@ -1941,28 +1950,57 @@ export default function App() {
       }
 
       // =========================================================================
-      // 2. TAREFAS DO KANBAN (CONSULTA INDEPENDENTE, RETRY E AUTORRECUPERAÇÃO)
+      // 2. TAREFAS DO KANBAN (CONSULTA INDEPENDENTE, RETRY E BLINDAGEM POR CARTEIRA)
       // =========================================================================
       try {
         let dbTasks = null;
-        const { data: taskData, error: taskErr } = await withTimeout(
-          supabase
-            .from('tasks')
-            .select('*')
-            .order('created_at', { ascending: false }),
-          6000
-        );
+        const activeUser = currentUserRef.current || currentUser;
+        const isMgr = hasFullPortfolioAccess(activeUser);
+        const myUserId = activeUser?.id || '';
+        const myUserName = activeUser?.name || '';
 
-        if (!taskErr && Array.isArray(taskData) && taskData.length > 0) {
-          dbTasks = taskData;
+        let taskQuery = supabase
+          .from('tasks')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (!isMgr && myUserId) {
+          // VISÃO USUÁRIO COMUM: busca estritamente cards onde é responsável ou criador/solicitante
+          taskQuery = taskQuery.or(
+            `assigned_to.eq.${myUserId},assignee_id.eq.${myUserId},created_by.eq.${myUserId},requester_id.eq.${myUserId},assignee.ilike.%${myUserName}%,requester.ilike.%${myUserName}%`
+          );
+        }
+
+        const { data: taskData, error: taskErr } = await withTimeout(taskQuery, 6000);
+
+        if (!taskErr && Array.isArray(taskData)) {
+          dbTasks = isMgr ? taskData : taskData.filter((t) => canUserViewTask(t, activeUser));
         } else {
-          // Fallback de consulta direta caso o timeout tenha expirado ou falhado
-          const { data: directData } = await supabase
-            .from('tasks')
-            .select('*')
-            .order('created_at', { ascending: false });
-          if (Array.isArray(directData) && directData.length > 0) {
-            dbTasks = directData;
+          // Fallback de consulta direta caso o timeout tenha expirado ou caso a cláusula .or falhe por coluna ausente
+          try {
+            let directQuery = supabase
+              .from('tasks')
+              .select('*')
+              .order('created_at', { ascending: false });
+            if (!isMgr && myUserId) {
+              directQuery = directQuery.or(
+                `assigned_to.eq.${myUserId},assignee_id.eq.${myUserId},created_by.eq.${myUserId},requester_id.eq.${myUserId},assignee.ilike.%${myUserName}%,requester.ilike.%${myUserName}%`
+              );
+            }
+            const { data: directData, error: directErr } = await directQuery;
+            if (!directErr && Array.isArray(directData)) {
+              dbTasks = isMgr ? directData : directData.filter((t) => canUserViewTask(t, activeUser));
+            }
+          } catch {}
+
+          if (!dbTasks) {
+            const { data: fallbackData } = await supabase
+              .from('tasks')
+              .select('*')
+              .order('created_at', { ascending: false });
+            if (Array.isArray(fallbackData)) {
+              dbTasks = isMgr ? fallbackData : fallbackData.filter((t) => canUserViewTask(t, activeUser));
+            }
           }
         }
 
@@ -2033,6 +2071,9 @@ export default function App() {
               assigneeId,
               assigneeEmail,
               assigneeAvatar: finalAssigneeAvatar,
+              assigned_to: t.assigned_to || assigneeId || null,
+              created_by: t.created_by || null,
+              requester_id: t.requester_id || null,
               department: finalDept,
               dueDate: t.due_date || 'A definir',
               channel: t.channel || '#geral',
@@ -2044,10 +2085,14 @@ export default function App() {
             };
           });
 
+          const safeTasks = isMgr ? parsedTasks : parsedTasks.filter((t) => canUserViewTask(t, activeUser));
+
           setTasks((prev) => {
-            const incomingIds = new Set(parsedTasks.map((t) => t.id));
-            const localOnly = prev.filter((t) => !incomingIds.has(t.id));
-            const merged = [...parsedTasks, ...localOnly];
+            const incomingIds = new Set(safeTasks.map((t) => t.id));
+            const localOnly = isMgr
+              ? prev.filter((t) => !incomingIds.has(t.id))
+              : prev.filter((t) => !incomingIds.has(t.id) && canUserViewTask(t, activeUser));
+            const merged = [...safeTasks, ...localOnly];
             try {
               localStorage.setItem('educhat_tasks_cache', JSON.stringify(merged));
             } catch {}
