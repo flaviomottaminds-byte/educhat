@@ -1459,21 +1459,49 @@ export default function App() {
           return;
         }
 
+        const currentActiveChat = activeChatRef.current;
+        const currentUserId = activeUser?.id || 'u1';
+        let belongsToActiveScreen = false;
+
+        if (currentActiveChat && !document.hidden) {
+          if (currentActiveChat.type === 'dm') {
+            const selectedUserId = currentActiveChat.id;
+            belongsToActiveScreen =
+              incomingMsg.senderId === selectedUserId ||
+              incomingMsg.recipientId === selectedUserId ||
+              (chatKey && chatKey.includes(selectedUserId));
+          } else if (currentActiveChat.type === 'channel') {
+            const activeChannelId = currentActiveChat.id;
+            belongsToActiveScreen =
+              chatKey === activeChannelId ||
+              chatKey === activeChannelId.replace(/^c-/, '');
+          } else if (currentActiveChat.type === 'whatsapp') {
+            belongsToActiveScreen = chatKey === currentActiveChat.id;
+          }
+        }
+
+        // Se NÃO pertencer à tela ativa atual, apenas atualiza Sidebar e notificação de background
+        if (!belongsToActiveScreen) {
+          if (incomingMsg.senderId && incomingMsg.senderId !== currentUserId && incomingMsg.senderId !== 'system') {
+            setUnreadCounts((prev) => ({
+              ...prev,
+              [incomingMsg.senderId]: (prev[incomingMsg.senderId] || 0) + 1,
+              ...(chatKey ? { [chatKey]: (prev[chatKey] || 0) + 1 } : {})
+            }));
+            handleIncomingNotification(incomingMsg, chatKey);
+          }
+          return;
+        }
+
+        const currentActiveKey = getChatKey(currentActiveChat, currentUserId);
         setMessages((prev) => {
-          const list = prev[chatKey] || [];
+          const list = prev[currentActiveKey] || [];
           if (list.some((m) => m.id === incomingMsg.id)) return prev;
           return {
             ...prev,
-            [chatKey]: [...list, incomingMsg]
+            [currentActiveKey]: [...list, incomingMsg]
           };
         });
-
-        if (incomingMsg.senderId !== activeUser?.id && incomingMsg.senderId !== 'system') {
-          const currentActiveKey = getChatKey(activeChatRef.current, activeUser?.id || 'u1');
-          if (chatKey !== currentActiveKey || document.hidden) {
-            handleIncomingNotification(incomingMsg, chatKey);
-          }
-        }
       },
       onPresence: (remoteUser) => {
         if (!remoteUser || !remoteUser.id) return;
@@ -2411,21 +2439,10 @@ export default function App() {
             return;
           }
 
-          const activeUser = currentUserRef.current || { id: 'u1', roleType: 'diretor' };
+          const activeUser = currentUserRef.current || { id: 'u1', roleType: 'colaborador' };
           const currentUserId = activeUser.id || 'u1';
+          const currentActiveChat = activeChatRef.current;
           const cKey = normalizeChatKey(row.chat_id, currentUserId);
-
-          // Trava de privacidade apenas para DMs 1-a-1 de terceiros
-          if (cKey.startsWith('dm-')) {
-            const parts = cKey.replace('dm-', '').split('-');
-            if (parts.length >= 2) {
-              const id1 = parts[0];
-              const id2 = parts[1];
-              if (currentUserId !== id1 && currentUserId !== id2 && activeUser.roleType !== 'diretor') {
-                return;
-              }
-            }
-          }
 
           // Ignora mensagens fantasmas vazias geradas por acks indevidos
           const rawRowText = (row.text || '').replace(/<!--[\s\S]*?-->/g, '').trim();
@@ -2433,18 +2450,101 @@ export default function App() {
             return;
           }
 
+          // Trava de privacidade estrita para DMs 1-a-1:
+          // Se for DM e o usuário logado não for o remetente nem o destinatário, ignora completamente
+          if (cKey.startsWith('dm-')) {
+            const parts = cKey.replace('dm-', '').split('-');
+            const isUserInvolved = parts.includes(currentUserId) || row.sender_id === currentUserId || row.recipient_id === currentUserId;
+            if (!isUserInvolved) {
+              return;
+            }
+          }
+
           const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
 
-          const currentActiveKey = getChatKey(activeChatRef.current, currentUserId);
-          const isCurrentActive =
-            (cKey === currentActiveKey || activeChatRef.current?.id === cKey || activeChatRef.current?.id === row.chat_id) &&
-            !document.hidden;
+          // 1. FILTRO ESTRITO NO LISTENER DE REALTIME:
+          // Verifica se o payload.new pertence exatamente à conversa que está aberta na tela
+          let isCurrentActive = false;
+          if (currentActiveChat && !document.hidden) {
+            if (currentActiveChat.type === 'dm') {
+              // Se for um chat 1 a 1: A mensagem só entra na tela atual se o sender_id ou recipient_id for o selectedUser.id
+              const selectedUserId = currentActiveChat.id;
+              isCurrentActive =
+                row.sender_id === selectedUserId ||
+                row.recipient_id === selectedUserId ||
+                incoming.senderId === selectedUserId ||
+                incoming.recipientId === selectedUserId ||
+                (row.chat_id && (row.chat_id === `dm-${currentUserId}-${selectedUserId}` || row.chat_id === `dm-${selectedUserId}-${currentUserId}`));
+            } else if (currentActiveChat.type === 'channel') {
+              // Se for grupo: A mensagem só entra se o channel_id for igual ao activeChannel.id
+              const activeChannelId = currentActiveChat.id;
+              const chId = row.channel_id || row.chat_id || '';
+              isCurrentActive =
+                chId === activeChannelId ||
+                chId === activeChannelId.replace(/^c-/, '') ||
+                `c-${chId.replace(/^c-/, '')}` === activeChannelId ||
+                cKey === activeChannelId;
+            } else if (currentActiveChat.type === 'whatsapp') {
+              const currentActiveKey = getChatKey(currentActiveChat, currentUserId);
+              isCurrentActive = (cKey === currentActiveKey || activeChatRef.current?.id === cKey || activeChatRef.current?.id === row.chat_id);
+            }
+          }
 
-          // REGRA 2: Atualização FUNCIONAL IMEDIATA (0ms) de setMessages com fusão de echo
+          // 2. ATUALIZAÇÃO EXCLUSIVA DE SIDEBAR (BACKGROUND):
+          // Se a mensagem nova for de um contato diferente do que está aberto,
+          // ela NÃO deve ir para o estado messages. O sistema deve apenas atualizar o estado da Sidebar.
+          if (!isCurrentActive) {
+            if (row.sender_id !== currentUserId && row.sender_id !== 'system') {
+              const senderKey = row.sender_id;
+              if (senderKey) {
+                setUnreadCounts((prev) => ({
+                  ...prev,
+                  [senderKey]: (prev[senderKey] || 0) + 1,
+                  ...(row.chat_id ? { [row.chat_id]: (prev[row.chat_id] || 0) + 1 } : {})
+                }));
+              }
+
+              if (cKey.startsWith('c-')) {
+                setChannels((prevChannels) =>
+                  prevChannels.map((c) => {
+                    if (c.id === cKey || c.name === cKey.replace(/^c-/, '')) {
+                      const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
+                      return { ...c, unread: currentUnread + 1, unread_count: currentUnread + 1 };
+                    }
+                    return c;
+                  })
+                );
+                setUnreadCounts((prev) => ({
+                  ...prev,
+                  [cKey]: (prev[cKey] || 0) + 1
+                }));
+              }
+
+              if (cKey.startsWith('wa-')) {
+                setWhatsAppContacts((prevContacts) =>
+                  prevContacts.map((c) => {
+                    if (c.id === cKey || c.id === row.chat_id) {
+                      const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
+                      return { ...c, unread: currentUnread + 1, unread_count: currentUnread + 1 };
+                    }
+                    return c;
+                  })
+                );
+              }
+
+              handleIncomingNotification(incoming, cKey);
+            }
+
+            // Encerra imediatamente sem contaminar o estado de mensagens da conversa ativa
+            return;
+          }
+
+          // AQUI: Pertence exatamente à conversa aberta na tela!
+          const activeKey = getChatKey(currentActiveChat, currentUserId);
           setMessages((prevMessages) => {
-            const prevList = prevMessages[cKey] || [];
+            const prevList = prevMessages[activeKey] || prevMessages[cKey] || [];
 
-            // 1. Se já existe mensagem com esse id exato, atualiza in-place (ex: atualização de status sent -> delivered -> read)
+            // 1. Se já existe mensagem com esse id exato, atualiza in-place
             const exactIdx = prevList.findIndex((m) => m.id === incoming.id);
             if (exactIdx !== -1) {
               const next = [...prevList];
@@ -2453,7 +2553,7 @@ export default function App() {
                 ...incoming,
                 status: incoming.status || next[exactIdx].status
               };
-              return { ...prevMessages, [cKey]: next };
+              return { ...prevMessages, [activeKey]: next };
             }
 
             // 2. Se for mensagem enviada por nós (outgoing / echo do webhook), funde com a mensagem otimista
@@ -2485,13 +2585,13 @@ export default function App() {
                   id: incoming.id,
                   status: incoming.status || 'delivered'
                 };
-                return { ...prevMessages, [cKey]: next };
+                return { ...prevMessages, [activeKey]: next };
               }
             }
 
             return {
               ...prevMessages,
-              [cKey]: [...prevList, incoming]
+              [activeKey]: [...prevList, incoming]
             };
           });
 

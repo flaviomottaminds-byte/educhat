@@ -982,6 +982,16 @@ export default function ChatArea({
         continue;
       }
 
+      // Blindagem estrita de isolamento de mensagens (Prevenção de State Leakage entre DMs)
+      if (isDM && target?.id) {
+        const isFromMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
+        const isFromTarget = m.senderId === target.id;
+        const isToTarget = m.recipientId === target.id || m.recipient_id === target.id;
+        if (!isFromMe && !isFromTarget && !isToTarget) {
+          continue;
+        }
+      }
+
       const isMe =
         m.senderId === currentUser?.id ||
         m.senderId === 'u_matriz' ||
