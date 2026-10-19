@@ -7,32 +7,33 @@ import { supabase } from './supabase';
  */
 
 /**
- * Detecta e seleciona o melhor MIME type suportado pelo navegador
- * para captura de áudio com MediaRecorder, garantindo compatibilidade cruzada
- * (Chrome, Edge, Firefox, Safari no macOS e iOS).
+ * Detecta e seleciona dinamicamente o melhor MIME type suportado pelo navegador
+ * para captura de áudio com MediaRecorder usando MediaRecorder.isTypeSupported().
+ * Ordem de prioridade estrita:
+ * 1. audio/mp4 (ecossistema Apple/Safari)
+ * 2. audio/mpeg
+ * 3. audio/webm (Chrome / Android)
+ * 4. audio/ogg
+ * Se nenhuma for suportada, retorna mimeType vazio para usar o formato padrão nativo.
  */
 export function getSupportedAudioMimeType() {
-  if (typeof window === 'undefined' || typeof MediaRecorder === 'undefined') {
-    return { mimeType: 'audio/webm;codecs=opus', extension: 'webm' };
+  if (
+    typeof window === 'undefined' ||
+    typeof MediaRecorder === 'undefined' ||
+    typeof MediaRecorder.isTypeSupported !== 'function'
+  ) {
+    return { mimeType: '', extension: 'mp4' };
   }
 
-  // Lista priorizada de codecs
-  // 1. WebM Opus (Padrão Chrome, Edge, Firefox, Android)
-  // 2. MP4 / AAC (Padrão nativo do Safari macOS / iOS e amplamente suportado)
-  // 3. OGG Opus
-  // 4. WAV
-  const candidateTypes = [
-    { mimeType: 'audio/webm;codecs=opus', extension: 'webm' },
-    { mimeType: 'audio/webm', extension: 'webm' },
+  // Array com a ordem exata de prioridade de compatibilidade cruzada
+  const priorityTypes = [
     { mimeType: 'audio/mp4', extension: 'mp4' },
-    { mimeType: 'audio/mp4;codecs=mp4a.40.2', extension: 'mp4' },
-    { mimeType: 'audio/aac', extension: 'aac' },
-    { mimeType: 'audio/ogg;codecs=opus', extension: 'ogg' },
-    { mimeType: 'audio/ogg', extension: 'ogg' },
-    { mimeType: 'audio/wav', extension: 'wav' }
+    { mimeType: 'audio/mpeg', extension: 'mp3' },
+    { mimeType: 'audio/webm', extension: 'webm' },
+    { mimeType: 'audio/ogg', extension: 'ogg' }
   ];
 
-  for (const candidate of candidateTypes) {
+  for (const candidate of priorityTypes) {
     try {
       if (MediaRecorder.isTypeSupported(candidate.mimeType)) {
         return candidate;
@@ -40,7 +41,8 @@ export function getSupportedAudioMimeType() {
     } catch {}
   }
 
-  return { mimeType: '', extension: 'webm' };
+  // Se nenhuma for explicitamente suportada, retorna vazio para o navegador assumir o nativo
+  return { mimeType: '', extension: 'mp4' };
 }
 
 /**
@@ -141,7 +143,7 @@ export function detectAudioMimeType(u8arr) {
  */
 export function processAudioSource(audioUrl) {
   if (!audioUrl || typeof audioUrl !== 'string') {
-    return { blobUrl: '', mimeType: 'audio/webm; codecs=opus', arrayBuffer: null };
+    return { blobUrl: '', mimeType: '', arrayBuffer: null };
   }
 
   // Resolve primeiro caminhos do Supabase Storage se necessário
@@ -150,11 +152,11 @@ export function processAudioSource(audioUrl) {
 
   // Se já for uma URL HTTP/HTTPS ou Blob existente
   if (trimmed.startsWith('blob:') || trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-    let guessedMime = 'audio/webm; codecs=opus';
+    let guessedMime = '';
     if (trimmed.includes('.mp4') || trimmed.includes('.m4a') || trimmed.includes('audio/mp4')) guessedMime = 'audio/mp4';
-    else if (trimmed.includes('.webm') || trimmed.includes('audio/webm')) guessedMime = 'audio/webm; codecs=opus';
-    else if (trimmed.includes('.ogg') || trimmed.includes('.opus')) guessedMime = 'audio/ogg; codecs=opus';
-    else if (trimmed.includes('.mp3')) guessedMime = 'audio/mpeg';
+    else if (trimmed.includes('.mp3') || trimmed.includes('audio/mpeg')) guessedMime = 'audio/mpeg';
+    else if (trimmed.includes('.webm') || trimmed.includes('audio/webm')) guessedMime = 'audio/webm';
+    else if (trimmed.includes('.ogg') || trimmed.includes('.opus')) guessedMime = 'audio/ogg';
     else if (trimmed.includes('.wav')) guessedMime = 'audio/wav';
 
     return { blobUrl: trimmed, mimeType: guessedMime, arrayBuffer: null };

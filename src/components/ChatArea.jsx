@@ -183,7 +183,7 @@ function parseMessageContent(m) {
   };
 }
 
-// Player interativo e de alta fidelidade para áudios do WhatsApp e Equipe Interna com suporte cruzado (Opus, WebM, MP4, AAC)
+// Player interativo e de alta fidelidade para áudios do WhatsApp e Equipe Interna com suporte cruzado (MP4, MPEG, WebM, OGG)
 function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false, isInternal = false }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -198,10 +198,13 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     return resolvePublicAudioUrl(audioUrl);
   }, [audioUrl]);
 
-  // Converte fluxos (Base64, Data URLs ou HTTPS) em Blobs estáveis e detecta MIME / codecs exatos
+  // Converte fluxos (Base64 ou Data URLs) se necessário para Blob estável
   const audioSource = React.useMemo(() => {
     return processAudioSource(resolvedAudioUrl);
   }, [resolvedAudioUrl]);
+
+  // URL final para o player: confia na URL pública gerada no Supabase
+  const audioPlaySrc = resolvedAudioUrl || audioSource.blobUrl;
 
   // Libera a URL do Blob criada quando o componente desmontar ou audioUrl mudar
   useEffect(() => {
@@ -219,9 +222,9 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     };
   }, [audioSource]);
 
-  // Recarrega o elemento <audio> nativo quando a fonte ou blob mudar
+  // Recarrega o elemento <audio> nativo quando a fonte mudar
   useEffect(() => {
-    if (audioRef.current && audioSource.blobUrl) {
+    if (audioRef.current && audioPlaySrc) {
       try {
         audioRef.current.load();
         setAudioError(false);
@@ -229,7 +232,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
         console.warn('Erro ao carregar fontes de áudio no elemento <audio>:', err);
       }
     }
-  }, [audioSource.blobUrl]);
+  }, [audioPlaySrc]);
 
   // Duração em segundos calculada
   const parsedDurationSec = React.useMemo(() => {
@@ -326,7 +329,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
     }
 
     // 1. Tenta reproduzir pelo elemento nativo com a URL resolvida
-    if (audioRef.current && audioSource.blobUrl && !audioError) {
+    if (audioRef.current && audioPlaySrc && !audioError) {
       audioRef.current.playbackRate = playbackRate;
       try {
         await audioRef.current.play();
@@ -414,12 +417,12 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
 
   return (
     <div className="space-y-1.5 max-w-sm sm:max-w-md my-1">
-      {/* Elemento de Player de Áudio Nativo do Navegador (<audio controls ... />) */}
-      {audioSource.blobUrl ? (
+      {/* Elemento de Player de Áudio Nativo do Navegador (<audio controls ... />) sem atributo type hardcoded */}
+      {audioPlaySrc ? (
         <div className="w-full max-w-xs space-y-1">
           <audio
             ref={audioRef}
-            src={audioSource.blobUrl}
+            src={audioPlaySrc}
             controls
             preload="metadata"
             className="w-full max-w-xs my-1 rounded-lg block accent-emerald-600 dark:accent-emerald-400"
@@ -446,7 +449,7 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
                     Falha ao reproduzir áudio no navegador
                   </p>
                   <p className="text-[10.5px] opacity-80 mt-0.5 leading-snug">
-                    O formato deste arquivo ({audioSource.mimeType || 'áudio'}) não pôde ser decodificado nativamente neste navegador.
+                    O formato deste arquivo não pôde ser decodificado nativamente neste navegador.
                   </p>
                 </div>
               </div>
@@ -466,10 +469,10 @@ function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutg
                   <RotateCcw size={11} /> Tentar Novamente
                 </button>
 
-                {audioSource.blobUrl && (
+                {audioPlaySrc && (
                   <a
-                    href={audioSource.blobUrl}
-                    download={audioSource.mimeType?.includes('mp4') ? 'audio_chat.mp4' : 'audio_chat.webm'}
+                    href={audioPlaySrc}
+                    download="audio_chat"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="px-2.5 py-1 rounded bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-current font-medium text-[10.5px] transition flex items-center gap-1"
@@ -869,7 +872,7 @@ export default function ChatArea({
     }
   };
 
-  // Iniciar Gravação de Áudio Nativa com Suporte Multi-Navegador (Item 1 e 2)
+  // Iniciar Gravação de Áudio Nativa com Seleção Dinâmica Cross-Browser (Item 1)
   const startRecording = async () => {
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -879,17 +882,23 @@ export default function ChatArea({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioChunksRef.current = [];
 
-      // Detecta formato ideal com maior compatibilidade entre navegadores (WebM Opus / MP4 Safari / OGG)
+      // SELEÇÃO DINÂMICA CROSS-BROWSER:
+      // Testa a ordem: 1. audio/mp4, 2. audio/mpeg, 3. audio/webm, 4. audio/ogg
+      // Se nenhuma for suportada, inicializa o MediaRecorder sem o parâmetro mimeType
       const { mimeType: chosenMime, extension: chosenExt } = getSupportedAudioMimeType();
       recordedMimeTypeRef.current = chosenMime;
       recordedExtensionRef.current = chosenExt;
 
-      const options = chosenMime ? { mimeType: chosenMime } : undefined;
       let recorder;
       try {
-        recorder = options ? new MediaRecorder(stream, options) : new MediaRecorder(stream);
+        if (chosenMime) {
+          recorder = new MediaRecorder(stream, { mimeType: chosenMime });
+        } else {
+          // Deixa o navegador assumir o seu formato padrão nativo
+          recorder = new MediaRecorder(stream);
+        }
       } catch (recErr) {
-        console.warn('Erro ao instanciar MediaRecorder com opções, usando padrão do navegador:', recErr);
+        console.warn('Erro ao instanciar MediaRecorder com opções, usando formato nativo do navegador:', recErr);
         recorder = new MediaRecorder(stream);
       }
       mediaRecorderRef.current = recorder;
@@ -933,10 +942,19 @@ export default function ChatArea({
       }
 
       // Identifica o MIME type real gravado pelo navegador
-      const mimeType = recordedMimeTypeRef.current || recorder.mimeType || 'audio/webm';
-      const cleanMime = mimeType.split(';')[0] || 'audio/webm';
-      const ext = recordedExtensionRef.current || (cleanMime.includes('mp4') ? 'mp4' : cleanMime.includes('ogg') ? 'ogg' : 'webm');
-      const blob = new Blob(audioChunksRef.current, { type: cleanMime });
+      const mimeType = recorder.mimeType || recordedMimeTypeRef.current || '';
+      const cleanMime = mimeType ? mimeType.split(';')[0].trim() : '';
+
+      // Determina a extensão de acordo com o MIME type real gravado
+      let ext = recordedExtensionRef.current || 'mp4';
+      if (cleanMime.includes('mp4')) ext = 'mp4';
+      else if (cleanMime.includes('mpeg') || cleanMime.includes('mp3')) ext = 'mp3';
+      else if (cleanMime.includes('webm')) ext = 'webm';
+      else if (cleanMime.includes('ogg')) ext = 'ogg';
+
+      const blob = cleanMime
+        ? new Blob(audioChunksRef.current, { type: cleanMime })
+        : new Blob(audioChunksRef.current);
 
       const mins = Math.floor(durationSec / 60);
       const secs = durationSec % 60;
@@ -947,13 +965,17 @@ export default function ChatArea({
       // ETAPA 1: Upload obrigatório no Supabase Storage (bucket 'chat-audios')
       let uploadError = null;
       try {
+        const uploadOptions = {
+          cacheControl: '3600',
+          upsert: true
+        };
+        if (cleanMime) {
+          uploadOptions.contentType = cleanMime;
+        }
+
         const { error } = await supabase.storage
           .from('chat-audios')
-          .upload(filePath, blob, {
-            contentType: cleanMime,
-            cacheControl: '3600',
-            upsert: true
-          });
+          .upload(filePath, blob, uploadOptions);
         uploadError = error;
       } catch (uploadErr) {
         uploadError = uploadErr;
