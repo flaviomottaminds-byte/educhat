@@ -17,7 +17,6 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { Shield } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { INITIAL_EDUCONTROL_STUDENTS, matchStudentByPhone } from './lib/eduControl';
-import { playMessageSound } from './lib/audioNotification';
 import {
   requestDesktopNotificationPermission,
   notifyIncomingMessage,
@@ -59,7 +58,6 @@ import {
   isChatAssignedToUser,
   normalizeName,
   canUserViewChat,
-  shouldPlayMessageSound,
   canUserViewTask,
   isTaskAssignedToUser,
   isTaskRequestedByUser
@@ -374,18 +372,6 @@ export default function App() {
                 next[chatKey] = [...existingList, ...toAdd];
                 const studentMessages = toAdd.filter((m) => m.fromStudent);
                 if (studentMessages.length > 0) {
-                  studentMessages.forEach((sm) => {
-                    if (
-                      shouldPlayMessageSound(chatKey, sm, activeUser, {
-                        whatsAppContacts: whatsAppContactsRef.current,
-                        assignmentsCache: assignmentsCacheRef.current,
-                        collaborators: collaboratorsRef.current
-                      })
-                    ) {
-                      shouldPlayAlert = true;
-                    }
-                  });
-
                   const timeInfo = getBrasiliaTime();
                   if (!timeInfo.isAfterHours) {
                     console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
@@ -401,10 +387,7 @@ export default function App() {
               }
             });
 
-            if (shouldPlayAlert && !document.hidden) {
-              playMessageSound();
-            }
-
+            // Notificação sonora desativada totalmente no frontend (apenas visual)
             return next;
           });
         }
@@ -1353,16 +1336,7 @@ export default function App() {
       }
     }
 
-    // REGRA DE ÁUDIO RIGOROSA: Toca som APENAS se a mensagem for destinada ao usuário logado
-    if (
-      shouldPlayMessageSound(cKey, msg, activeUser, {
-        whatsAppContacts: whatsAppContactsRef.current,
-        assignmentsCache: assignmentsCacheRef.current,
-        collaborators: collaboratorsRef.current
-      })
-    ) {
-      playMessageSound();
-    }
+    // NOTIFICAÇÃO 100% VISUAL: Áudio totalmente desativado a pedido da diretoria
 
     const currentKey = getChatKey(activeChatRef.current, currentUserId);
     const isCurrentActive =
@@ -1421,16 +1395,6 @@ export default function App() {
           const currentActiveKey = getChatKey(activeChatRef.current, activeUser?.id || 'u1');
           if (chatKey !== currentActiveKey || document.hidden) {
             handleIncomingNotification(incomingMsg, chatKey);
-          } else {
-            if (
-              shouldPlayMessageSound(chatKey, incomingMsg, activeUser, {
-                whatsAppContacts: whatsAppContactsRef.current,
-                assignmentsCache: assignmentsCacheRef.current,
-                collaborators: collaboratorsRef.current
-              })
-            ) {
-              playMessageSound();
-            }
           }
         }
       },
@@ -3303,8 +3267,6 @@ export default function App() {
         }]).then(({ error }) => {
           if (error) console.warn('Erro ao salvar resposta da IA:', error);
         });
-
-        playMessageSound();
       }, 500);
       return;
     }
@@ -3403,7 +3365,6 @@ export default function App() {
               (triageResult.assigned_to && String(triageResult.assigned_to).toLowerCase() === String(currentUser.id).toLowerCase()) ||
               (currentUser.name && normalizeName(currentUser.name) === normalizeName(triageResult.assignee));
             if (isMyAssignment) {
-              playMessageSound();
               notifyIncomingMessage('EduChat Triagem URA', `Nova demanda encaminhada para você: ${contact.name}`);
             }
           }, 600);
@@ -3804,7 +3765,6 @@ export default function App() {
       (routingResult.targetAssignee && normalizeName(routingResult.targetAssignee) === normalizeName(currentUser.name)) ||
       (routingResult.assigned_to && String(routingResult.assigned_to).toLowerCase() === String(currentUser.id).toLowerCase());
     if (isMyLead) {
-      playMessageSound();
       notifyIncomingMessage(senderName, messageText);
     }
 
@@ -4140,8 +4100,6 @@ export default function App() {
     } catch (err) {
       console.warn('Falha ao gravar tarefas do Meet no banco:', err);
     }
-
-    playMessageSound();
   };
 
   const handleSaveChannel = (newChannel) => {
@@ -4436,8 +4394,7 @@ export default function App() {
       console.warn('Erro ao inserir leads no Supabase:', dbErr);
     }
 
-    // 6. Tocar som de notificação e atualizar contador não lido em #expansao
-    playMessageSound();
+    // 6. Atualizar contador não lido em #expansao (notificação visual)
     if (activeChat.id !== 'c-expansao') {
       setUnreadCounts((prev) => ({
         ...prev,
@@ -4588,8 +4545,6 @@ export default function App() {
     } catch (err) {
       console.warn('Aviso ao sincronizar alunos no Supabase:', err);
     }
-
-    playMessageSound();
   };
 
   // Reatribuição Manual / Automática de Fila e Consultor Responsável com Suporte a Round-Robin e Co-atribuição
