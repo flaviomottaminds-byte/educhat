@@ -43,6 +43,7 @@ import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
 import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
 import { processAudioSource, playDecodedAudioBuffer, getSupportedAudioMimeType, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
+import { toast } from '../lib/toast';
 
 // Helper para renderizar texto com links clicáveis (Item 6)
 function FormattedMessageText({ text }) {
@@ -832,7 +833,7 @@ export default function ChatArea({
     };
   }, []);
 
-  const handleSend = (e) => {
+  const handleSend = async (e) => {
     e?.preventDefault();
     if (!inputText.trim() && !pendingAttachment) return;
 
@@ -847,11 +848,25 @@ export default function ChatArea({
       textareaRef.current.style.height = 'auto';
     }
 
-    onSendMessage(textToSend, attachmentToSend, {
-      replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null
-    });
+    try {
+      const result = await onSendMessage(textToSend, attachmentToSend, {
+        replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null
+      });
 
-    requestAnimationFrame(() => scrollToBottom(true));
+      if (result && result.success === false) {
+        // Falha no INSERT: restaura o texto para o usuário não perder a digitação
+        setInputText(textToSend);
+        setPendingAttachment(attachmentToSend);
+        setReplyingTo(replyingToSend);
+      } else {
+        requestAnimationFrame(() => scrollToBottom(true));
+      }
+    } catch (err) {
+      console.error('Erro ao enviar mensagem:', err);
+      setInputText(textToSend);
+      setPendingAttachment(attachmentToSend);
+      setReplyingTo(replyingToSend);
+    }
   };
 
   // Iniciar Gravação de Áudio Nativa com Suporte Multi-Navegador (Item 1 e 2)
@@ -897,7 +912,8 @@ export default function ChatArea({
     }
   };
 
-  // Finalizar e Enviar Gravação de Áudio Nativa com Upload para Bucket 'chat-audios' (Item 1, 2 e 3)
+  // Finalizar e Enviar Gravação de Áudio com Fluxo Obrigatório Estrito (Item 1 e 2)
+  // 1º Upload no Storage -> 2º Garantir retorno da URL pública -> 3º Insert na tabela. Se falhar, aborte!
   const stopAndSendRecording = () => {
     if (!mediaRecorderRef.current) return;
     const recorder = mediaRecorderRef.current;
@@ -911,6 +927,11 @@ export default function ChatArea({
     setRecordingDuration(0);
 
     recorder.onstop = async () => {
+      if (!audioChunksRef.current || audioChunksRef.current.length === 0) {
+        toast.error('Nenhum áudio foi capturado.');
+        return;
+      }
+
       // Identifica o MIME type real gravado pelo navegador
       const mimeType = recordedMimeTypeRef.current || recorder.mimeType || 'audio/webm';
       const cleanMime = mimeType.split(';')[0] || 'audio/webm';
@@ -923,59 +944,69 @@ export default function ChatArea({
       const fileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
       const filePath = `internal/${fileName}`;
 
-      let publicAudioUrl = null;
-
-      // 1. Envia para o Supabase Storage no bucket 'chat-audios' para gerar URL pública válida
+      // ETAPA 1: Upload obrigatório no Supabase Storage (bucket 'chat-audios')
+      let uploadError = null;
       try {
-        const { error: uploadError } = await supabase.storage
+        const { error } = await supabase.storage
           .from('chat-audios')
           .upload(filePath, blob, {
             contentType: cleanMime,
             cacheControl: '3600',
             upsert: true
           });
-
-        if (!uploadError) {
-          const { data: pubData } = supabase.storage
-            .from('chat-audios')
-            .getPublicUrl(filePath);
-          if (pubData?.publicUrl) {
-            publicAudioUrl = pubData.publicUrl;
-          }
-        } else {
-          console.warn('[Audio] Upload para bucket chat-audios falhou, utilizando dataUrl local:', uploadError);
-        }
+        uploadError = error;
       } catch (uploadErr) {
-        console.warn('[Audio] Erro ao enviar áudio para Supabase Storage:', uploadErr);
+        uploadError = uploadErr;
       }
 
-      // 2. Leitura local DataURL como fallback garantido caso upload falhe
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const finalUrl = publicAudioUrl || reader.result;
+      if (uploadError) {
+        console.error('[Audio Storage] Falha no upload:', uploadError);
+        toast.error(`Falha ao enviar áudio para o servidor: ${uploadError.message || 'Erro no Storage'}. Envio cancelado.`);
+        return; // ABORTA A OPERAÇÃO IMEDIATAMENTE!
+      }
 
-        onSendMessage(
-          `🎙️ Mensagem de voz (${formattedTime})`,
-          {
-            name: fileName,
-            size: `${(blob.size / 1024).toFixed(1)} KB`,
-            type: cleanMime,
-            url: publicAudioUrl || null,
-            dataUrl: finalUrl,
-            storagePath: filePath,
-            duration: formattedTime,
-            isAudio: true
-          },
-          {
-            replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
-            isAudio: true,
-            audioUrl: finalUrl,
-            duration: formattedTime
-          }
-        );
-        setReplyingTo(null);
+      // ETAPA 2: Garantir retorno da URL pública válida do Storage
+      const { data: pubData } = supabase.storage
+        .from('chat-audios')
+        .getPublicUrl(filePath);
+
+      const publicAudioUrl = pubData?.publicUrl;
+
+      if (!publicAudioUrl || !publicAudioUrl.startsWith('http')) {
+        console.error('[Audio Storage] Falha ao gerar URL pública:', pubData);
+        toast.error('Não foi possível gerar a URL pública do áudio gravado. Envio cancelado.');
+        return; // ABORTA A OPERAÇÃO!
+      }
+
+      // ETAPA 3: Insert na tabela messages via onSendMessage com a URL pública
+      const attachment = {
+        name: fileName,
+        size: `${(blob.size / 1024).toFixed(1)} KB`,
+        type: cleanMime,
+        url: publicAudioUrl,
+        dataUrl: publicAudioUrl, // Leve, sem strings Base64 gigantes
+        storagePath: filePath,
+        duration: formattedTime,
+        isAudio: true
       };
-      reader.readAsDataURL(blob);
+
+      const sendResult = await onSendMessage(
+        `🎙️ Mensagem de voz (${formattedTime})`,
+        attachment,
+        {
+          replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
+          isAudio: true,
+          audioUrl: publicAudioUrl,
+          duration: formattedTime
+        }
+      );
+
+      if (sendResult && sendResult.success === false) {
+        // Falha no INSERT: aviso já exibido pelo toast
+        return;
+      }
+
+      setReplyingTo(null);
 
       try {
         recorder.stream.getTracks().forEach((track) => track.stop());
