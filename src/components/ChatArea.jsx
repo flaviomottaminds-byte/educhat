@@ -686,6 +686,19 @@ export default function ChatArea({
   const target = chatMeta?.data || {};
   const isBotChat = isDM && (target?.isBot || target?.id === 'u_ia_copilot');
 
+  // 1. AUTO-FOCUS NA SELEÇÃO DE CONTATO (EQUIPE INTERNA / CHAT):
+  // Sempre que o usuário clicar no nome de um colega ou canal na barra lateral,
+  // aciona automaticamente o .focus() no textarea para digitação imediata sem clique do mouse.
+  useEffect(() => {
+    const focusTimer = setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }, 50);
+
+    return () => clearTimeout(focusTimer);
+  }, [chatMeta?.type, chatMeta?.id, target?.id]);
+
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp
     ? matchStudentByPhone(target?.id || target?.phone, eduControlStudents)
@@ -886,7 +899,10 @@ export default function ChatArea({
         setPendingAttachment(attachmentToSend);
         setReplyingTo(replyingToSend);
       } else {
-        requestAnimationFrame(() => scrollToBottom(true));
+        requestAnimationFrame(() => {
+          scrollToBottom(true);
+          textareaRef.current?.focus();
+        });
       }
     } catch (err) {
       console.error('Erro ao enviar mensagem:', err);
