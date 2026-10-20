@@ -67,11 +67,18 @@ export default class ErrorBoundary extends React.Component {
             </button>
           </div>
 
-          {process.env.NODE_ENV !== 'production' && this.state.error && (
-            <div className="mt-6 text-left max-w-lg p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-[11px] text-rose-800 dark:text-rose-300 font-mono overflow-auto max-h-32">
-              <p className="font-bold mb-1">Debug Error:</p>
-              <p>{String(this.state.error?.message || this.state.error)}</p>
-            </div>
+          {this.state.error && (
+            <details className="mt-5 text-left max-w-lg w-full p-3 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-[11px] text-rose-800 dark:text-rose-300 font-mono">
+              <summary className="font-bold cursor-pointer select-none text-rose-900 dark:text-rose-200 hover:underline">
+                Detalhes técnicos do erro ({String(this.state.error?.name || 'Error')})
+              </summary>
+              <div className="mt-2 text-[10.5px] leading-relaxed whitespace-pre-wrap break-all overflow-auto max-h-48">
+                <p className="font-semibold text-rose-950 dark:text-rose-100">{String(this.state.error?.message || this.state.error)}</p>
+                {this.state.error?.stack && (
+                  <p className="mt-1 opacity-80 text-[10px]">{String(this.state.error.stack)}</p>
+                )}
+              </div>
+            </details>
           )}
         </div>
       );

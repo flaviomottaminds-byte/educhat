@@ -865,7 +865,7 @@ export default function ChatArea({
         recent.forEach((m) => {
           if (!m || !m.id || m.senderId === 'system' || m.senderId === currentUser.id || String(m.id).startsWith('temp_')) return;
 
-          if (activeChannel) {
+          if (isChannel) {
             // Em canais/grupos: adiciona currentUser.id ao read_by de forma 100% segura
             let currentList = [];
             const rawVal = localReadByMap?.[m.id] ?? (Array.isArray(m?.read_by) ? m.read_by : (Array.isArray(m?.readBy) ? m.readBy : null));
@@ -907,7 +907,7 @@ export default function ChatArea({
                 })
                 .catch(() => {});
             }
-          } else if (selectedUser) {
+          } else if (isDM) {
             // Em conversas 1 a 1: marca is_read = true e STATUS:read
             const isRead =
               m.is_read === true ||
@@ -966,34 +966,34 @@ export default function ChatArea({
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
     };
-  }, [messages, isGeral, activeChannel, selectedUser, currentUser?.id]);
+  }, [messages, isGeral, isChannel, isDM, currentUser?.id]);
 
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp
     ? matchStudentByPhone(target?.id || target?.phone, eduControlStudents)
     : null;
 
-  const [selectedDept, setSelectedDept] = useState(target.department || 'Comercial');
-  const [selectedAssignee, setSelectedAssignee] = useState(target.assignee || '');
+  const [selectedDept, setSelectedDept] = useState(target?.department || 'Comercial');
+  const [selectedAssignee, setSelectedAssignee] = useState(target?.assignee || '');
   const [selectedCoAssignees, setSelectedCoAssignees] = useState(() => {
-    const list = Array.isArray(target.assignees)
-      ? target.assignees.filter((a) => a && a !== target.assignee)
+    const list = Array.isArray(target?.assignees)
+      ? target.assignees.filter((a) => a && a !== target?.assignee)
       : [];
     return list;
   });
-  const [selectedStatus, setSelectedStatus] = useState(target.status || 'carteira_ativa');
+  const [selectedStatus, setSelectedStatus] = useState(target?.status || 'carteira_ativa');
 
   useEffect(() => {
     if (target) {
-      setSelectedDept(target.department || 'Comercial');
-      setSelectedAssignee(target.assignee || '');
-      setSelectedStatus(target.status || 'carteira_ativa');
-      const list = Array.isArray(target.assignees)
-        ? target.assignees.filter((a) => a && a !== target.assignee)
+      setSelectedDept(target?.department || 'Comercial');
+      setSelectedAssignee(target?.assignee || '');
+      setSelectedStatus(target?.status || 'carteira_ativa');
+      const list = Array.isArray(target?.assignees)
+        ? target.assignees.filter((a) => a && a !== target?.assignee)
         : [];
       setSelectedCoAssignees(list);
     }
-  }, [target.id, target.department, target.assignee, target.status, JSON.stringify(target.assignees)]);
+  }, [target?.id, target?.department, target?.assignee, target?.status, JSON.stringify(target?.assignees || [])]);
 
   // Fechar popover de atribuição ao clicar fora
   useEffect(() => {
@@ -1040,94 +1040,100 @@ export default function ChatArea({
   // 2. LIMPEZA NA INTERFACE (FRONTEND):
   // Garante mensagens únicas no chat, fundindo o estado da mensagem otimista com a confirmada pelo servidor
   const uniqueMessages = useMemo(() => {
-    if (!Array.isArray(messages) || messages.length === 0) return [];
+    try {
+      if (!Array.isArray(messages) || messages.length === 0) return [];
 
-    const result = [];
-    const seenIds = new Set();
-    const seenSignatures = new Map(); // key: "side:cleanBody:timestamp" -> index in result
+      const result = [];
+      const seenIds = new Set();
+      const seenSignatures = new Map(); // key: "side:cleanBody:timestamp" -> index in result
 
-    for (const m of messages) {
-      if (!m) continue;
+      for (const m of messages) {
+        if (!m || typeof m !== 'object') continue;
 
-      // Se for mensagem de sistema, preserva
-      if (m.senderId === 'system') {
-        if (m.id) seenIds.add(m.id);
-        result.push(m);
-        continue;
-      }
-
-      // Deduplicação estrita por ID
-      if (m.id && seenIds.has(m.id)) {
-        continue;
-      }
-
-      // Blindagem estrita de isolamento de mensagens (Prevenção de State Leakage entre DMs)
-      if (isDM && target?.id) {
-        const isFromMe = m.senderId === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
-        const isFromTarget = m.senderId === target.id;
-        const isToTarget = m.recipientId === target.id || m.recipient_id === target.id;
-        if (!isFromMe && !isFromTarget && !isToTarget) {
+        // Se for mensagem de sistema, preserva
+        if (m.senderId === 'system' || m.sender_id === 'system') {
+          if (m.id) seenIds.add(m.id);
+          result.push(m);
           continue;
         }
-      }
 
-      const isMe =
-        m.senderId === currentUser?.id ||
-        m.senderId === 'u_matriz' ||
-        Boolean(m.fromMe) ||
-        (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
-      const cleanBody = (m.text || '')
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
-        .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
-        .trim();
-      const timeStr = getSaoPauloTime(m.timestamp || m.created_at);
-      const signature = `${isMe ? 'out' : 'in'}:${cleanBody}:${timeStr}`;
-
-      if (cleanBody && seenSignatures.has(signature)) {
-        const existingIdx = seenSignatures.get(signature);
-        const existing = result[existingIdx];
-
-        const existingIsOptimistic = String(existing.id || '').startsWith('m_') || String(existing.id || '').startsWith('opt_');
-        const incomingIsReal = String(m.id || '').startsWith('wa_');
-
-        const statusWeight = { failed: 0, sent: 1, delivered: 2, read: 3 };
-        const existingWeight = statusWeight[existing.status] || 1;
-        const incomingWeight = statusWeight[m.status] || (incomingIsReal ? 2 : 1);
-
-        // Se a nova mensagem é do servidor ou tem status mais recente/confirmado, funde nela
-        if (incomingIsReal || incomingWeight >= existingWeight || existingIsOptimistic) {
-          result[existingIdx] = {
-            ...existing,
-            ...m,
-            id: incomingIsReal ? m.id : existing.id,
-            status: incomingWeight >= existingWeight ? (m.status || 'delivered') : existing.status,
-            senderId: existing.senderId || m.senderId,
-            senderName: existing.senderName || m.senderName,
-          };
-          if (m.id) seenIds.add(m.id);
+        // Deduplicação estrita por ID
+        if (m.id && seenIds.has(m.id)) {
+          continue;
         }
-        continue;
+
+        // Blindagem estrita de isolamento de mensagens (Prevenção de State Leakage entre DMs)
+        if (isDM && target?.id) {
+          const isFromMe = m.senderId === currentUser?.id || m.sender_id === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
+          const isFromTarget = m.senderId === target.id || m.sender_id === target.id;
+          const isToTarget = m.recipientId === target.id || m.recipient_id === target.id;
+          if (!isFromMe && !isFromTarget && !isToTarget) {
+            continue;
+          }
+        }
+
+        const isMe =
+          m.senderId === currentUser?.id ||
+          m.sender_id === currentUser?.id ||
+          m.senderId === 'u_matriz' ||
+          Boolean(m.fromMe) ||
+          (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
+        const cleanBody = (typeof m.text === 'string' ? m.text : '')
+          .replace(/<!--[\s\S]*?-->/g, '')
+          .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+          .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+          .trim();
+        const timeStr = getSaoPauloTime(m.timestamp || m.created_at);
+        const signature = `${isMe ? 'out' : 'in'}:${cleanBody}:${timeStr}`;
+
+        if (cleanBody && seenSignatures.has(signature)) {
+          const existingIdx = seenSignatures.get(signature);
+          const existing = result[existingIdx];
+
+          const existingIsOptimistic = String(existing?.id || '').startsWith('m_') || String(existing?.id || '').startsWith('opt_');
+          const incomingIsReal = String(m.id || '').startsWith('wa_');
+
+          const statusWeight = { failed: 0, sent: 1, delivered: 2, read: 3 };
+          const existingWeight = statusWeight[existing?.status] || 1;
+          const incomingWeight = statusWeight[m.status] || (incomingIsReal ? 2 : 1);
+
+          // Se a nova mensagem é do servidor ou tem status mais recente/confirmado, funde nela
+          if (incomingIsReal || incomingWeight >= existingWeight || existingIsOptimistic) {
+            result[existingIdx] = {
+              ...existing,
+              ...m,
+              id: incomingIsReal ? m.id : (existing?.id || m.id),
+              status: incomingWeight >= existingWeight ? (m.status || 'delivered') : existing?.status,
+              senderId: existing?.senderId || m.senderId,
+              senderName: existing?.senderName || m.senderName,
+            };
+            if (m.id) seenIds.add(m.id);
+          }
+          continue;
+        }
+
+        if (m.id) seenIds.add(m.id);
+        if (cleanBody) {
+          seenSignatures.set(signature, result.length);
+        }
+        result.push(m);
       }
 
-      if (m.id) seenIds.add(m.id);
-      if (cleanBody) {
-        seenSignatures.set(signature, result.length);
-      }
-      result.push(m);
+      result.sort((a, b) => {
+        const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
+        const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
+        if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
+          return timeA - timeB;
+        }
+        return 0;
+      });
+
+      return result;
+    } catch (err) {
+      console.warn('[ChatArea] uniqueMessages fallback seguro:', err);
+      return Array.isArray(messages) ? messages.filter(Boolean) : [];
     }
-
-    result.sort((a, b) => {
-      const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
-      const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
-      if (!isNaN(timeA) && !isNaN(timeB) && timeA !== timeB) {
-        return timeA - timeB;
-      }
-      return 0;
-    });
-
-    return result;
-  }, [messages, currentUser?.id]);
+  }, [messages, currentUser?.id, isDM, isWhatsApp, target?.id]);
 
   const scrollToBottom = (instant = true) => {
     if (messagesContainerRef.current) {
@@ -1841,16 +1847,16 @@ export default function ChatArea({
 
       {/* Área de Mensagens com Textura Oficial do WhatsApp */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2.5 whatsapp-bg">
-        {uniqueMessages.length === 0 ? (
+        {(uniqueMessages || []).length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-[#667781]">
             <div className="bg-white/85 dark:bg-chatCard/90 backdrop-blur-xs p-5 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-sm shadow-sm space-y-2">
-              <span className="text-4xl block">{target.avatar || '💬'}</span>
+              <span className="text-4xl block">{target?.avatar || '💬'}</span>
               <p className="text-sm font-bold text-chatTextTitle">
                 {isBotChat
                   ? 'Assistente IA Institucional'
                   : isDM
-                  ? `Conversa com ${target.name}`
-                  : `Canal #${target.name}`}
+                  ? `Conversa com ${target?.name || 'Colega'}`
+                  : `Canal #${target?.name || 'Geral'}`}
               </p>
               <p className="text-xs text-[#667781] leading-relaxed">
                 {isBotChat
@@ -1860,23 +1866,28 @@ export default function ChatArea({
             </div>
           </div>
         ) : (
-          uniqueMessages.map((m) => {
-            if (m.senderId === 'system') {
-              return (
-                <div key={m.id} className="flex justify-center my-2 animate-in fade-in">
-                  <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
-                    <span className="leading-tight">
-                      {m.text?.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').trim()}
-                    </span>
-                    <span className="text-[9.5px] opacity-75 font-mono shrink-0">{getSaoPauloTime(m.timestamp || m.created_at)}</span>
+          (uniqueMessages || []).map((m) => {
+            if (!m || typeof m !== 'object') return null;
+            try {
+              if (m.senderId === 'system' || m.sender_id === 'system') {
+                return (
+                  <div key={m.id || Math.random()} className="flex justify-center my-2 animate-in fade-in">
+                    <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
+                      <span className="leading-tight">
+                        {typeof m.text === 'string'
+                          ? m.text.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').trim()
+                          : ''}
+                      </span>
+                      <span className="text-[9.5px] opacity-75 font-mono shrink-0">{getSaoPauloTime(m.timestamp || m.created_at)}</span>
+                    </div>
                   </div>
-                </div>
-              );
-            }
+                );
+              }
 
-            const isMe =
-              m.senderId === currentUser?.id ||
-              m.senderId === 'u_matriz' ||
+              const isMe =
+                m.senderId === currentUser?.id ||
+                m.sender_id === currentUser?.id ||
+                m.senderId === 'u_matriz' ||
               Boolean(m.fromMe) ||
               (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
             const isBot = !isWhatsApp && (m.senderId === 'bot' || m.senderId === 'u_ia_copilot');
@@ -2289,8 +2300,12 @@ export default function ChatArea({
                 </div>
               </div>
             );
-          })
-        )}
+          } catch (err) {
+            console.warn('[ChatArea] Falha defensiva na renderização da mensagem:', m?.id, err);
+            return null;
+          }
+        })
+      )}
         <div ref={messagesEndRef} />
       </div>
 
