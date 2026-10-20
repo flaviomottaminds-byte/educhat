@@ -10,6 +10,7 @@ export default function UserSelectionModal({
   onSelectUser,
   onEditCollaborator,
   onNewCollaborator,
+  onLogout,
   currentUserId
 }) {
   const [search, setSearch] = useState('');
@@ -195,19 +196,33 @@ export default function UserSelectionModal({
         </div>
 
         {/* Rodapé informativo */}
-        <div className="px-6 py-3.5 bg-slate-50 dark:bg-chatSidebar border-t border-chatBorder flex items-center justify-between text-xs text-chatTextMuted shrink-0">
+        <div className="px-6 py-3.5 bg-slate-50 dark:bg-chatSidebar border-t border-chatBorder flex items-center justify-between text-xs text-chatTextMuted shrink-0 flex-wrap gap-2">
           <span className="flex items-center gap-1.5">
             <CheckCircle2 size={14} className="text-emerald-500" />
             Sua sessão será salva automaticamente neste navegador.
           </span>
-          {currentUserId && (
-            <button
-              onClick={onClose}
-              className="text-xs text-[#54656f] dark:text-[#aebac1] hover:underline font-medium"
-            >
-              Continuar com perfil atual
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {onLogout && (
+              <button
+                type="button"
+                onClick={() => {
+                  onLogout();
+                  onClose();
+                }}
+                className="text-xs text-rose-600 dark:text-rose-400 hover:underline font-semibold cursor-pointer"
+              >
+                Limpar Sessão / Sair
+              </button>
+            )}
+            {currentUserId && (
+              <button
+                onClick={onClose}
+                className="text-xs text-[#54656f] dark:text-[#aebac1] hover:underline font-medium cursor-pointer"
+              >
+                Continuar com perfil atual
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

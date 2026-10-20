@@ -698,6 +698,59 @@ export default function App() {
   const learnedDocumentsRef = useRef(learnedDocuments);
   learnedDocumentsRef.current = learnedDocuments;
 
+  const handleLogoutRef = useRef(null);
+
+  // 0. Sincronização e Blindagem de Sessão com Supabase Auth (Prevenção de Session Leakage)
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncAuthSession = (session) => {
+      if (!isMounted) return;
+      if (session?.user) {
+        const u = session.user;
+        const currentList = collaboratorsRef.current || [];
+        const matched = currentList.find(
+          (c) => c.id === u.id || (c.email && u.email && c.email.toLowerCase() === u.email.toLowerCase())
+        );
+        const resolvedUser = {
+          id: u.id,
+          name: matched?.name || u.user_metadata?.name || u.user_metadata?.full_name || u.email?.split('@')[0] || 'Colaborador',
+          email: u.email || '',
+          role: matched?.role || u.user_metadata?.role || 'Colaborador',
+          roleType: matched?.roleType || u.user_metadata?.role_type || 'colaborador',
+          department: matched?.department || u.user_metadata?.department || 'Comercial',
+          avatar: matched?.avatar || u.user_metadata?.avatar || '👤',
+        };
+        setCurrentUser(resolvedUser);
+        currentUserRef.current = resolvedUser;
+        try {
+          localStorage.setItem('educhat_user_id', resolvedUser.id);
+        } catch {}
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session) {
+        syncAuthSession(data.session);
+      }
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+        syncAuthSession(session);
+      } else if (event === 'SIGNED_OUT') {
+        if (handleLogoutRef.current) {
+          handleLogoutRef.current(false);
+        }
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      authListener?.subscription?.unsubscribe();
+    };
+  }, []);
+
   const assignmentsCacheRef = useRef({});
   useEffect(() => {
     try {
@@ -3425,11 +3478,35 @@ export default function App() {
       (!attMime && /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || ''))
     );
 
+    // 0. BLINDAGEM DO SENDER_ID NA INSERÇÃO:
+    // Validação estrita da sessão diretamente no momento do envio com supabase.auth.getSession()
+    let verifiedSenderId = currentUserRef.current?.id || currentUser?.id || 'u1';
+    let verifiedSenderName = currentUserRef.current?.name || currentUser?.name || 'Colaborador';
+
+    try {
+      const { data: authData } = await supabase.auth.getSession();
+      const sessionUser = authData?.session?.user;
+      if (sessionUser?.id) {
+        verifiedSenderId = sessionUser.id;
+        const matched = (collaborators || []).find(
+          (c) => c.id === sessionUser.id || (c.email && sessionUser.email && c.email.toLowerCase() === sessionUser.email.toLowerCase())
+        );
+        verifiedSenderName =
+          matched?.name ||
+          sessionUser.user_metadata?.name ||
+          sessionUser.user_metadata?.full_name ||
+          sessionUser.email?.split('@')[0] ||
+          verifiedSenderName;
+      }
+    } catch (authErr) {
+      console.warn('[handleSendMessage] Falha ao verificar supabase.auth.getSession():', authErr);
+    }
+
     const messageId = 'm_' + Date.now();
     const newMsg = {
       id: messageId,
-      senderId: currentUser.id,
-      senderName: currentUser.name,
+      senderId: verifiedSenderId,
+      senderName: verifiedSenderName,
       text: rawText,
       timestamp: timeStr,
       attachment: attachment ? {
@@ -3503,14 +3580,14 @@ export default function App() {
 
           const rawId = String(result.messageId);
           const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
-          messageToRender = { ...newMsg, id: realId, status: 'sent' };
+          messageToRender = { ...newMsg, id: realId, senderId: verifiedSenderId, senderName: verifiedSenderName, status: 'sent' };
 
-          // Persistência obrigatória no Supabase com o ID real da mensagem
+          // Persistência obrigatória no Supabase com o ID real da mensagem e sender_id autenticado
           const { error: waInsertError } = await supabase.from('messages').insert([{
             id: realId,
             chat_id: currentChatKey,
-            sender_id: messageToRender.senderId,
-            sender_name: messageToRender.senderName,
+            sender_id: verifiedSenderId,
+            sender_name: verifiedSenderName,
             text: payloadText,
             timestamp: messageToRender.timestamp
           }]).select();
@@ -3531,8 +3608,8 @@ export default function App() {
           const { error: insertError } = await supabase.from('messages').insert([{
             id: newMsg.id,
             chat_id: currentChatKey,
-            sender_id: newMsg.senderId,
-            sender_name: newMsg.senderName,
+            sender_id: verifiedSenderId,
+            sender_name: verifiedSenderName,
             text: payloadText,
             timestamp: newMsg.timestamp
           }]).select();
@@ -3578,8 +3655,8 @@ export default function App() {
         const { error: insertError } = await supabase.from('messages').insert([{
           id: newMsg.id,
           chat_id: currentChatKey,
-          sender_id: newMsg.senderId,
-          sender_name: newMsg.senderName,
+          sender_id: verifiedSenderId,
+          sender_name: verifiedSenderName,
           text: payloadText,
           timestamp: newMsg.timestamp
         }]).select();
@@ -3974,6 +4051,30 @@ export default function App() {
     // Metadados explícitos de encaminhamento
     payloadText = `${payloadText}\n<!-- FORWARDED:true -->\n<!-- FORWARDED_FROM:${JSON.stringify(originalSender)} -->`;
 
+    // BLINDAGEM DO SENDER_ID NO ENCAMINHAMENTO:
+    // Validação estrita da sessão diretamente no momento do envio com supabase.auth.getSession()
+    let verifiedSenderId = currentUserRef.current?.id || currentUser?.id || 'u1';
+    let verifiedSenderName = currentUserRef.current?.name || currentUser?.name || 'Colaborador';
+
+    try {
+      const { data: authData } = await supabase.auth.getSession();
+      const sessionUser = authData?.session?.user;
+      if (sessionUser?.id) {
+        verifiedSenderId = sessionUser.id;
+        const matched = (collaborators || []).find(
+          (c) => c.id === sessionUser.id || (c.email && sessionUser.email && c.email.toLowerCase() === sessionUser.email.toLowerCase())
+        );
+        verifiedSenderName =
+          matched?.name ||
+          sessionUser.user_metadata?.name ||
+          sessionUser.user_metadata?.full_name ||
+          sessionUser.email?.split('@')[0] ||
+          verifiedSenderName;
+      }
+    } catch (authErr) {
+      console.warn('[handleForwardMessage] Falha ao verificar supabase.auth.getSession():', authErr);
+    }
+
     const targetType = target.type; // 'channel' | 'dm'
     const targetId = target.id;
     let targetChatKey = '';
@@ -3983,7 +4084,7 @@ export default function App() {
       targetChatKey = targetId.startsWith('c-') ? targetId : `c-${targetId}`;
       recipientId = null;
     } else {
-      targetChatKey = getChatKey({ type: 'dm', id: targetId }, currentUser?.id || 'u1');
+      targetChatKey = getChatKey({ type: 'dm', id: targetId }, verifiedSenderId);
       recipientId = targetId;
     }
 
@@ -3991,8 +4092,8 @@ export default function App() {
     const dbRecord = {
       id: newId,
       chat_id: targetChatKey,
-      sender_id: currentUser.id,
-      sender_name: currentUser.name,
+      sender_id: verifiedSenderId,
+      sender_name: verifiedSenderName,
       recipient_id: recipientId,
       text: payloadText,
       timestamp: timeStr
@@ -4018,8 +4119,8 @@ export default function App() {
 
     const forwardedMsg = {
       id: newId,
-      senderId: currentUser.id,
-      senderName: currentUser.name,
+      senderId: verifiedSenderId,
+      senderName: verifiedSenderName,
       recipientId: recipientId,
       text: baseText,
       timestamp: timeStr,
@@ -4764,6 +4865,10 @@ export default function App() {
   };
 
   const handleSaveCollaborator = async (newCollaborator) => {
+    const isNew = !(collaborators || []).some(
+      (c) => c.id === newCollaborator.id || (c.name && newCollaborator.name && c.name.trim().toLowerCase() === newCollaborator.name.trim().toLowerCase())
+    );
+
     // 1. Atualização Instantânea no Estado Local e LocalStorage
     setCollaborators((prev) => {
       const idx = prev.findIndex(
@@ -4784,6 +4889,11 @@ export default function App() {
 
     setActiveChat({ type: 'dm', id: newCollaborator.id });
     setActiveView('chat');
+
+    // Se for novo perfil cadastrado, sincroniza o usuário ativo imediatamente para evitar contaminação
+    if (isNew) {
+      handleSwitchUser(newCollaborator);
+    }
 
     // 2. Persistência na tabela 'profiles' do Supabase (se tabela estiver disponível)
     try {
@@ -4840,6 +4950,50 @@ export default function App() {
     // Recarrega dados com as regras do novo usuário ativo
     fetchSupabaseData();
   };
+
+  // Limpeza Completa de Cache e Estado no Logout (Prevenção de Cruzamento de Identidades)
+  const handleLogout = async (triggerSignOut = true) => {
+    try {
+      if (triggerSignOut) {
+        await supabase.auth.signOut();
+      }
+    } catch (err) {
+      console.warn('Erro ao deslogar do Supabase Auth:', err);
+    }
+
+    try {
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (
+          key &&
+          (key.startsWith('sb-') ||
+            key.startsWith('supabase.') ||
+            key.startsWith('educhat_user') ||
+            key.startsWith('educhat_active_') ||
+            key === 'user' ||
+            key === 'session')
+        ) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach((k) => {
+        try {
+          localStorage.removeItem(k);
+        } catch {}
+      });
+      localStorage.removeItem('educhat_user_id');
+    } catch (storageErr) {
+      console.warn('Erro ao limpar localStorage:', storageErr);
+    }
+
+    const fallbackUser = (collaborators || INITIAL_COLLABORATORS)[0] || null;
+    setCurrentUser(fallbackUser);
+    currentUserRef.current = fallbackUser;
+    toast.success('Sessão desconectada e cache de usuário limpo.');
+    setIsUserSelectOpen(true);
+  };
+  handleLogoutRef.current = handleLogout;
 
   const handleCreateTasksFromDossier = (tasksToAdd) => {
     const mapped = tasksToAdd.map((t, idx) => ({
@@ -5509,6 +5663,7 @@ export default function App() {
           onToggleAvailability={handleToggleAvailability}
           realtimeStatus={realtimeStatus}
           onOpenUserSelectModal={() => setIsUserSelectOpen(true)}
+          onLogout={handleLogout}
           unreadCounts={unreadCounts}
           lastSyncTime={lastSyncTime}
           officialWhatsAppNumber="+55 (11) 93059-4591"
@@ -5678,6 +5833,7 @@ export default function App() {
         onClose={() => setIsUserSelectOpen(false)}
         collaborators={resolvedCollaborators}
         onSelectUser={handleSwitchUser}
+        onLogout={handleLogout}
         onEditCollaborator={(collab) => {
           setIsUserSelectOpen(false);
           setModalItem({ isOpen: true, type: 'collaborator', initialData: collab });

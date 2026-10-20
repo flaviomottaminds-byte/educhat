@@ -25,7 +25,8 @@ import {
   Trash2,
   Database,
   GraduationCap,
-  Edit2
+  Edit2,
+  LogOut
 } from 'lucide-react';
 import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat } from '../lib/portfolioAccess';
 import { getCanonicalPhoneKey, getChatKey } from '../data/initialData';
@@ -134,6 +135,7 @@ export default function Sidebar({
   onToggleAvailability,
   realtimeStatus = 'connected',
   onOpenUserSelectModal,
+  onLogout,
   unreadCounts = {},
   lastSyncTime = '',
   officialWhatsAppNumber = import.meta.env.VITE_OFFICIAL_WHATSAPP_NUMBER || '+55 (11) 93059-4591',
@@ -981,6 +983,17 @@ export default function Sidebar({
             >
               Trocar
             </button>
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                title="Desconectar do usuário e limpar cache de sessão"
+                className="text-[10px] bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-600 dark:text-rose-400 font-semibold px-2 py-1 rounded-md border border-rose-200 dark:border-rose-800/40 transition cursor-pointer flex items-center gap-1"
+              >
+                <LogOut size={11} />
+                <span>Sair</span>
+              </button>
+            )}
             {/* Botão Sol/Lua Discreto */}
             <button
               type="button"
