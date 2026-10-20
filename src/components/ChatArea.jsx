@@ -33,7 +33,8 @@ import {
   UserMinus,
   AlertCircle,
   RotateCcw,
-  Info
+  Info,
+  Forward
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment, getChatAssignedToId, normalizeName } from '../lib/portfolioAccess';
@@ -42,6 +43,7 @@ import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
+import ForwardMessageModal from './ForwardMessageModal';
 import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
 import { processAudioSource, playDecodedAudioBuffer, getSupportedAudioMimeType, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
 import { toast } from '../lib/toast';
@@ -745,14 +747,17 @@ export default function ChatArea({
   onRemoveCoAssignee,
   currentUser,
   realtimeStatus = 'connected',
+  channels = [],
   collaborators = [],
-  eduControlStudents = []
+  eduControlStudents = [],
+  onForwardMessage
 }) {
   const [inputText, setInputText] = useState('');
   const [pendingAttachment, setPendingAttachment] = useState(null);
   const [activeScheduleId, setActiveScheduleId] = useState(null);
   const [activeDelegateId, setActiveDelegateId] = useState(null);
   const [replyingTo, setReplyingTo] = useState(null); // Estado para Resposta / Quote (Item 5)
+  const [forwardingMessage, setForwardingMessage] = useState(null); // Estado para Encaminhamento de Mensagem
   const [isStudentDossierOpen, setIsStudentDossierOpen] = useState(false); // Dossiê Acadêmico EduControl
 
   // Estado do Seletor Interativo de Fila & Responsável (Item 1)
@@ -1824,6 +1829,28 @@ export default function ChatArea({
                         : 'bg-white dark:bg-chatBubbleOther text-[#111b21] dark:text-chatBubbleOtherText rounded-lg rounded-tl-none'
                     }`}
                   >
+                    {/* Identificação de Mensagem Encaminhada (Estilo WhatsApp) */}
+                    {(m.isForwarded || m.is_forwarded || (typeof m.text === 'string' && m.text.includes('<!-- FORWARDED'))) && (
+                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 pb-1 border-b border-black/5 dark:border-white/5 select-none">
+                        <Forward size={12} className="text-slate-500 dark:text-slate-400 shrink-0" />
+                        <span className="italic">Encaminhada</span>
+                        {(() => {
+                          let fwdFrom = m.forwardedFrom;
+                          if (!fwdFrom && typeof m.text === 'string') {
+                            const match = m.text.match(/<!-- FORWARDED_FROM:([\s\S]+?) -->/);
+                            if (match) {
+                              try { fwdFrom = JSON.parse(match[1]); } catch { fwdFrom = match[1]; }
+                            }
+                          }
+                          return fwdFrom ? (
+                            <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
+                              • de {fwdFrom}
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
+                    )}
+
                     {/* Bloco de Citação no Balão (Item 5) */}
                     {m.replyTo && (
                       <div className="mb-2 p-2 bg-black/5 dark:bg-white/5 border-l-4 border-brand-600 dark:border-brand-500 rounded-r-lg text-xs">
@@ -2080,8 +2107,21 @@ export default function ChatArea({
                       </div>
                     )}
 
-                    {/* Confirmação de Leitura Dinâmica & Ação de Excluir */}
+                    {/* Confirmação de Leitura Dinâmica & Ações */}
                     <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-[#667781] dark:text-chatTextMuted select-none">
+                      {!isWhatsApp && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setForwardingMessage(m);
+                          }}
+                          title="Encaminhar mensagem"
+                          className="opacity-60 hover:opacity-100 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 p-0.5 rounded transition cursor-pointer"
+                        >
+                          <Forward size={11} />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={(e) => {
@@ -2126,11 +2166,23 @@ export default function ChatArea({
                       type="button"
                       onClick={() => setReplyingTo(m)}
                       title="Responder a esta mensagem diretamente"
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition"
+                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
                     >
                       <Reply size={11} className="text-blue-300" />
                       <span>Responder</span>
                     </button>
+
+                    {!isWhatsApp && (
+                      <button
+                        type="button"
+                        onClick={() => setForwardingMessage(m)}
+                        title="Encaminhar esta mensagem"
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
+                      >
+                        <Forward size={11} className="text-emerald-400" />
+                        <span>Encaminhar</span>
+                      </button>
+                    )}
 
                     {!isBot && (
                       <button
@@ -2632,6 +2684,22 @@ export default function ChatArea({
             </div>
           </div>
         </div>
+      )}
+      {/* Modal de Encaminhamento de Mensagem */}
+      {forwardingMessage && (
+        <ForwardMessageModal
+          isOpen={Boolean(forwardingMessage)}
+          onClose={() => setForwardingMessage(null)}
+          message={forwardingMessage}
+          currentUser={currentUser}
+          channels={channels}
+          collaborators={collaborators}
+          onConfirmForward={async (target) => {
+            if (onForwardMessage) {
+              await onForwardMessage(forwardingMessage, target);
+            }
+          }}
+        />
       )}
     </section>
   );

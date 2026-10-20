@@ -1033,6 +1033,24 @@ export default function App() {
       }
     }
 
+    let isForwarded = false;
+    let forwardedFrom = null;
+    if (cleanText.includes('<!-- FORWARDED:')) {
+      isForwarded = true;
+      cleanText = cleanText.replace(/<!-- FORWARDED:[\s\S]+? -->/, '').trim();
+    }
+    if (cleanText.includes('<!-- FORWARDED_FROM:')) {
+      const match = cleanText.match(/<!-- FORWARDED_FROM:([\s\S]+?) -->/);
+      if (match) {
+        try {
+          forwardedFrom = JSON.parse(match[1]);
+        } catch {
+          forwardedFrom = match[1];
+        }
+      }
+      cleanText = cleanText.replace(/<!-- FORWARDED_FROM:[\s\S]+? -->/, '').trim();
+    }
+
     const rawDate = m.created_at || m.timestamp || new Date().toISOString();
     return {
       id: m.id,
@@ -1044,6 +1062,8 @@ export default function App() {
       timestampRaw: rawDate,
       attachment: parsedAttachment,
       replyTo: parsedReplyTo,
+      isForwarded,
+      forwardedFrom,
       status: parsedStatus,
       read_by: readBy,
       readBy: readBy,
@@ -3716,6 +3736,148 @@ export default function App() {
     return { success: true, message: messageToRender };
   };
 
+  // 3. ENCAMINHAMENTO DE MENSAGENS NO CHAT INTERNO (Estilo WhatsApp)
+  const handleForwardMessage = async (originalMessage, target) => {
+    if (!originalMessage || !target) return { success: false, error: 'Dados inválidos' };
+
+    const timeStr = getSaoPauloTime();
+    const rawText = originalMessage.text || '';
+    const cleanText = rawText
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+      .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+      .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
+      .trim();
+
+    const originalSender = originalMessage.senderName || 'Colega';
+
+    let attachment = originalMessage.attachment || null;
+    if (!attachment && rawText.includes('[ARQUIVO_ANEXO:')) {
+      const extracted = extractAttachmentFromText(rawText);
+      if (extracted?.attachment) {
+        attachment = extracted.attachment;
+      }
+    }
+
+    const isImage = Boolean(
+      originalMessage.isImage ||
+      attachment?.isImage ||
+      attachment?.type?.startsWith('image/') ||
+      /\.(png|jpe?g|gif|webp|svg)$/i.test(attachment?.name || '')
+    );
+
+    const isAudio = !isImage && Boolean(
+      originalMessage.isAudio ||
+      attachment?.isAudio ||
+      attachment?.type?.startsWith('audio/') ||
+      /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(attachment?.name || '') ||
+      rawText.includes('<!-- AUDIO_URL:')
+    );
+
+    let audioUrl = null;
+    if (isAudio) {
+      audioUrl = originalMessage.audioUrl || attachment?.url || attachment?.dataUrl || null;
+      if (!audioUrl && rawText.includes('<!-- AUDIO_URL:')) {
+        const match = rawText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
+        if (match) audioUrl = match[1].trim();
+      }
+    }
+
+    let duration = originalMessage.duration || attachment?.duration || '0:14';
+
+    let baseText = cleanText;
+    if (isAudio && !baseText) {
+      baseText = '🎙️ Mensagem de voz';
+    }
+
+    let payloadText = baseText || '';
+    if (attachment) {
+      payloadText = `${payloadText ? payloadText + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachment)}]`;
+    }
+    if (isAudio && audioUrl) {
+      payloadText = `${payloadText}\n<!-- AUDIO_URL:${audioUrl} -->\n<!-- IS_AUDIO:true -->`;
+      if (duration) {
+        payloadText = `${payloadText}\n<!-- DURATION:${duration} -->`;
+      }
+    }
+
+    // Metadados explícitos de encaminhamento
+    payloadText = `${payloadText}\n<!-- FORWARDED:true -->\n<!-- FORWARDED_FROM:${JSON.stringify(originalSender)} -->`;
+
+    const targetType = target.type; // 'channel' | 'dm'
+    const targetId = target.id;
+    let targetChatKey = '';
+    let recipientId = null;
+
+    if (targetType === 'channel') {
+      targetChatKey = targetId.startsWith('c-') ? targetId : `c-${targetId}`;
+      recipientId = null;
+    } else {
+      targetChatKey = getChatKey({ type: 'dm', id: targetId }, currentUser?.id || 'u1');
+      recipientId = targetId;
+    }
+
+    const newId = 'fwd_' + Date.now();
+    const dbRecord = {
+      id: newId,
+      chat_id: targetChatKey,
+      sender_id: currentUser.id,
+      sender_name: currentUser.name,
+      recipient_id: recipientId,
+      text: payloadText,
+      timestamp: timeStr
+    };
+
+    // SÓ ADICIONA NO ESTADO APÓS CONFIRMAÇÃO DE SUCESSO NO BANCO (Fim da inserção otimista)
+    try {
+      const { error: insertError } = await supabase
+        .from('messages')
+        .insert([dbRecord])
+        .select();
+
+      if (insertError) {
+        console.error('[Encaminhar] Erro no Supabase:', insertError);
+        toast.error(`Falha ao encaminhar: ${insertError.message || 'Erro no banco'}`);
+        return { success: false, error: insertError };
+      }
+    } catch (err) {
+      console.error('[Encaminhar] Exceção de rede:', err);
+      toast.error('Erro de conexão ao encaminhar mensagem');
+      return { success: false, error: err };
+    }
+
+    const forwardedMsg = {
+      id: newId,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      recipientId: recipientId,
+      text: baseText,
+      timestamp: timeStr,
+      created_at: new Date().toISOString(),
+      attachment,
+      isAudio,
+      audioUrl,
+      duration,
+      isImage,
+      isForwarded: true,
+      forwardedFrom: originalSender,
+      status: 'delivered',
+      actionExtracted: false
+    };
+
+    // Sincroniza no cache de mensagens da conversa de destino
+    setMessages((prev) => ({
+      ...prev,
+      [targetChatKey]: [...(prev[targetChatKey] || []), forwardedMsg]
+    }));
+
+    // Dispara relay em tempo real para os outros colaboradores
+    publishInternalMessage(targetChatKey, forwardedMsg);
+
+    toast.success(`Mensagem encaminhada para ${target.name || 'o destino'}!`);
+    return { success: true };
+  };
+
   const createAutoTask = (rawTitle, fullText, timeStr, wasAutonomous = false, matchedVip = null) => {
     // 1. Análise de Prioridade 100% IA (considerando memorandos aprendidos)
     const aiAnalysis = analyzeTaskPriorityAI(rawTitle, fullText, vipClients, learnedDocuments);
@@ -5218,8 +5380,10 @@ export default function App() {
             onRemoveCoAssignee={handleRemoveCoAssignee}
             currentUser={currentUser}
             realtimeStatus={realtimeStatus}
+            channels={channels}
             collaborators={resolvedCollaborators}
             eduControlStudents={eduControlStudents}
+            onForwardMessage={handleForwardMessage}
           />
         </ErrorBoundary>
       )}
