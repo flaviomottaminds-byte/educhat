@@ -14,17 +14,29 @@ import {
   getFileExtension,
   formatFileSize,
   openDocument,
-  downloadDocument
+  downloadDocument,
+  resolvePublicMediaUrl
 } from '../lib/attachmentParser';
 
 export default function FileAttachmentCard({ attachment, isOutgoing = false }) {
-  if (!attachment || !attachment.name) return null;
+  if (!attachment || typeof attachment !== 'object') return null;
 
-  const name = attachment.name;
-  const category = getFileCategory(name, attachment.type);
-  const ext = getFileExtension(name).toUpperCase() || 'ARQ';
+  const rawUrl = attachment.url || attachment.dataUrl || attachment.storagePath || attachment.path || attachment.mediaUrl;
+  const resolvedUrl = resolvePublicMediaUrl(rawUrl, 'chat-attachments');
+  const name = attachment.name || attachment.fileName || attachment.filename || 'Arquivo Anexo';
+  const rawType = (attachment.type || attachment.mimetype || attachment.mimeType || '').toLowerCase().trim();
+  const category = getFileCategory(name, rawType);
+  const ext = getFileExtension(name).toUpperCase() || (rawType.includes('pdf') ? 'PDF' : 'ARQ');
   const formattedSize = formatFileSize(attachment.size);
-  const hasUrl = Boolean(attachment.dataUrl || attachment.url);
+  const hasUrl = Boolean(resolvedUrl);
+
+  const safeAttachment = {
+    ...attachment,
+    name,
+    type: rawType,
+    url: resolvedUrl,
+    dataUrl: resolvedUrl || attachment.dataUrl
+  };
 
   // Paleta de cores e ícones conforme a categoria do documento
   const categoryConfig = {
@@ -83,18 +95,18 @@ export default function FileAttachmentCard({ attachment, isOutgoing = false }) {
 
   const handleCardClick = () => {
     if (hasUrl) {
-      openDocument(attachment);
+      openDocument(safeAttachment);
     }
   };
 
   const handleDownloadClick = (e) => {
     e.stopPropagation();
-    downloadDocument(attachment);
+    downloadDocument(safeAttachment);
   };
 
   const handleOpenClick = (e) => {
     e.stopPropagation();
-    openDocument(attachment);
+    openDocument(safeAttachment);
   };
 
   return (

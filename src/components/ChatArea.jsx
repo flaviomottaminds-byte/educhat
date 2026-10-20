@@ -44,7 +44,7 @@ import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
 import ForwardMessageModal from './ForwardMessageModal';
-import { extractAttachmentFromText, openDocument, downloadDocument } from '../lib/attachmentParser';
+import { extractAttachmentFromText, openDocument, downloadDocument, resolvePublicMediaUrl } from '../lib/attachmentParser';
 import { processAudioSource, playDecodedAudioBuffer, getSupportedAudioMimeType, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
 import { toast } from '../lib/toast';
 
@@ -90,7 +90,7 @@ function FormattedMessageText({ text }) {
 
 // Helper para interceptar tags [ARQUIVO_ANEXO], metadados de áudio e sanitizar o texto da mensagem
 function parseMessageContent(m) {
-  if (!m) return { cleanText: '', isAudio: false, isOnlyAudioPlaceholder: true };
+  if (!m) return { cleanText: '', isAudio: false, isOnlyAudioPlaceholder: false, isImage: false, isFile: false, attachment: null };
 
   const rawText = m.text || '';
   let extractedAttachment = m.attachment || null;
@@ -101,67 +101,124 @@ function parseMessageContent(m) {
     extractedAttachment = parsedFromText;
   }
 
-  // Identificação inequívoca de imagem (anexo de imagem nunca pode ser tratado como áudio)
-  const isImage = Boolean(
-    extractedAttachment?.isImage ||
-    extractedAttachment?.type?.startsWith('image/') ||
-    /\.(png|jpe?g|gif|webp|svg)$/i.test(extractedAttachment?.name || '') ||
-    m.isImage
-  );
+  // Normalização do anexo (se existir)
+  let attachment = null;
+  if (extractedAttachment && typeof extractedAttachment === 'object') {
+    const rawName = extractedAttachment.name || extractedAttachment.fileName || extractedAttachment.filename || 'Arquivo';
+    const rawType = (
+      extractedAttachment.type ||
+      extractedAttachment.mimetype ||
+      extractedAttachment.mimeType ||
+      m.mimetype ||
+      m.mime_type ||
+      ''
+    ).toLowerCase().trim();
 
-  let extractedAudioUrl = null;
-  let isAudio = false;
+    const rawUrl =
+      extractedAttachment.url ||
+      extractedAttachment.dataUrl ||
+      extractedAttachment.storagePath ||
+      extractedAttachment.path ||
+      extractedAttachment.mediaUrl ||
+      m.mediaUrl ||
+      m.media_url ||
+      '';
 
-  // Se NÃO for imagem, verifica se é áudio
-  if (!isImage) {
-    extractedAudioUrl = m.audioUrl || m.audio_url || (extractedAttachment?.type?.startsWith('audio/') ? (extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath) : null);
-    isAudio = Boolean((m.isAudio || m.is_audio || extractedAudioUrl) && !isImage);
+    const resolvedUrl = resolvePublicMediaUrl(rawUrl, rawType.startsWith('audio/') ? 'chat-audios' : 'chat-attachments');
+
+    attachment = {
+      ...extractedAttachment,
+      name: rawName,
+      type: rawType,
+      url: resolvedUrl || rawUrl,
+      dataUrl: resolvedUrl || extractedAttachment.dataUrl || rawUrl,
+      size: extractedAttachment.size || ''
+    };
   }
 
-  let duration = m.duration || extractedAttachment?.duration || null;
+  // Extração do MIME Type Real
+  const mimeType = (
+    attachment?.type ||
+    m.mimetype ||
+    m.mime_type ||
+    m.mimeType ||
+    ''
+  ).toLowerCase().trim();
+
+  // CLASSIFICAÇÃO RIGOROSA BASEADA EM MIME-TYPE:
+
+  // 1. É IMAGEM?
+  // mimeType deve ser image/* (ou fallback por extensão se o mimeType for vazio e não conflitante)
+  const isImageMime = mimeType.startsWith('image/');
+  const isImageExt = !mimeType && attachment?.name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(attachment.name);
+  const isImage = Boolean((isImageMime || isImageExt || m.isImage || m.is_image) && !mimeType.startsWith('audio/') && !mimeType.includes('pdf'));
+
+  // 2. É ÁUDIO?
+  // REGRA ESTRITA:
+  // - Se existir anexo: SÓ pode ser áudio se o MIME-type for explicitamente audio/* (ex: audio/ogg, audio/mp3, audio/wav, audio/webm).
+  // - Se o mimeType for nulo, vazio, desconhecido ('application/octet-stream') ou de documento ('application/pdf', etc.):
+  //   NUNCA PODE SER ÁUDIO! Deve ser renderizado como cartão de arquivo genérico.
+  // - Se NÃO houver anexo: pode ser mensagem de voz WhatsApp/interna caso tenha áudio explícito (audioUrl ou flag isAudio).
+  const isAudioMime = mimeType.startsWith('audio/');
+  let isAudio = false;
+  let extractedAudioUrl = null;
+  let duration = m.duration || attachment?.duration || null;
   let transcription = m.audioTranscription || null;
 
-  if (extractedAttachment && !isImage) {
-    const isAudioType =
-      extractedAttachment.type?.startsWith('audio/') ||
-      extractedAttachment.isAudio ||
-      /\.(ogg|opus|mp3|wav|webm|m4a|aac)$/i.test(extractedAttachment.name || '');
-
-    if (isAudioType) {
+  if (attachment) {
+    if (isAudioMime) {
       isAudio = true;
-      if (!extractedAudioUrl) {
-        extractedAudioUrl = extractedAttachment.url || extractedAttachment.dataUrl || extractedAttachment.storagePath || extractedAttachment.path || extractedAttachment.base64;
-      }
-      if (extractedAttachment.duration && !duration) {
-        duration = extractedAttachment.duration;
-      }
+      extractedAudioUrl = attachment.url || attachment.dataUrl;
+    } else {
+      // Existe anexo mas o MIME não é audio/* -> JAMAIS é áudio!
+      isAudio = false;
+    }
+  } else {
+    // Sem anexo de arquivo: verifica se é mensagem de voz pura
+    const hasAudioIndicators = Boolean(
+      m.isAudio ||
+      m.is_audio ||
+      m.audioUrl ||
+      m.audio_url ||
+      rawText.includes('<!-- AUDIO_URL:') ||
+      rawText.includes('<!-- IS_AUDIO:true -->') ||
+      rawText.includes('🎙️ [Áudio recebido via WhatsApp]') ||
+      (rawText.includes('🎙️') && (rawText.includes('Áudio') || rawText.includes('Mensagem de voz')))
+    );
+
+    if (hasAudioIndicators && !isImage) {
+      isAudio = true;
+      extractedAudioUrl = m.audioUrl || m.audio_url || null;
     }
   }
 
-  // 2. Intercepta comentários de controle de áudio SOMENTE se não for imagem
-  if (!isImage && rawText.includes('<!-- AUDIO_URL:')) {
+  // Intercepta AUDIO_URL nos metadados somente se isAudio for verdadeiro
+  if (isAudio && !extractedAudioUrl && rawText.includes('<!-- AUDIO_URL:')) {
     const match = rawText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
-    if (match && !extractedAudioUrl) {
-      extractedAudioUrl = match[1].trim();
-      isAudio = true;
+    if (match) {
+      extractedAudioUrl = resolvePublicAudioUrl(match[1].trim());
     }
   }
 
-  if (!isImage && rawText.includes('<!-- DURATION:')) {
+  if (isAudio && !duration && rawText.includes('<!-- DURATION:')) {
     const match = rawText.match(/<!-- DURATION:([\s\S]+?) -->/);
-    if (match && !duration) {
+    if (match) {
       duration = match[1].trim();
     }
   }
 
-  if (!isImage && rawText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
+  if (rawText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
     const match = rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
     if (match) {
       transcription = match[1].replace(/^["']|["']$/g, '');
     }
   }
 
-  // 3. Limpa tags e metadados de controle do texto de exibição
+  // 3. É ARQUIVO/DOCUMENTO GENÉRICO?
+  // Qualquer anexo que NÃO seja imagem e NÃO seja áudio é um documento/arquivo
+  const isFile = Boolean(attachment && !isImage && !isAudio);
+
+  // 4. Limpeza de texto
   let cleanText = sanitizedText
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
@@ -169,25 +226,22 @@ function parseMessageContent(m) {
     .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
     .trim();
 
-  // 4. Se o texto tiver indicador de áudio e NÃO for imagem
-  if (
-    !isImage && (
-      cleanText.includes('🎙️ [Áudio recebido via WhatsApp]') ||
-      (cleanText.includes('🎙️') && (cleanText.includes('Áudio') || cleanText.includes('Mensagem de voz'))) ||
-      cleanText.toLowerCase().includes('áudio recebido via whatsapp') ||
-      rawText.includes('<!-- IS_AUDIO:true -->')
-    )
-  ) {
-    isAudio = true;
-    if (!duration) {
-      const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
-      if (durMatch) duration = durMatch[1];
-    }
+  // Se for documento ou arquivo, remove placeholders textuais genéricos se forem redundantes
+  if (isFile && (cleanText === '📄 Documento recebido' || cleanText.startsWith('📄 Documento recebido:'))) {
+    cleanText = '';
+  }
+  if (isImage && cleanText === '🖼️ Imagem recebida') {
+    cleanText = '';
   }
 
-  // Verifica se o texto restante é apenas o placeholder de áudio
+  // Se for áudio, extrai duração caso não tenha
+  if (isAudio && !duration) {
+    const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
+    if (durMatch) duration = durMatch[1];
+  }
+
   const isOnlyAudioPlaceholder =
-    isAudio && !isImage && (
+    isAudio && !attachment && (
       !cleanText ||
       cleanText === '🎙️ [Áudio recebido via WhatsApp]' ||
       /^🎙️\s*(Mensagem de voz|Áudio)\s*(\(\d{1,2}:\d{2}\))?$/i.test(cleanText.trim())
@@ -196,10 +250,11 @@ function parseMessageContent(m) {
   return {
     cleanText,
     isOnlyAudioPlaceholder,
-    attachment: extractedAttachment,
+    attachment,
     isImage,
-    audioUrl: isAudio && !isImage ? extractedAudioUrl : null,
-    isAudio: isAudio && !isImage,
+    isAudio,
+    isFile,
+    audioUrl: isAudio ? resolvePublicAudioUrl(extractedAudioUrl) : null,
     duration: duration || '0:14',
     transcription
   };
@@ -1953,22 +2008,11 @@ export default function ChatArea({
                     {/* Parse e renderização segura da mensagem (Áudio Nativo, Anexos, Texto) */}
                     {(() => {
                       const parsed = parseMessageContent(m);
-                      const isImageAttachment = parsed.isImage || Boolean(
-                        parsed.attachment?.isImage ||
-                        parsed.attachment?.type?.startsWith('image/') ||
-                        /\.(png|jpe?g|gif|webp|svg)$/i.test(parsed.attachment?.name || '')
-                      );
-                      const isAudioAttachment = !isImageAttachment && Boolean(
-                        parsed.isAudio ||
-                        parsed.attachment?.isAudio ||
-                        parsed.attachment?.type?.startsWith('audio/') ||
-                        /\.(ogg|opus|mp3|wav|webm|m4a)$/i.test(parsed.attachment?.name || '')
-                      );
 
                       return (
                         <>
                           {/* 1. Imagem anexada (JAMAIS reproduzida como áudio) */}
-                          {parsed.attachment && isImageAttachment && (
+                          {parsed.attachment && parsed.isImage && (
                             <div className="mb-2">
                               <div className="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 max-w-sm shadow-xs">
                                 <img
@@ -1991,16 +2035,16 @@ export default function ChatArea({
                             </div>
                           )}
 
-                          {/* 2. Arquivo/Documento anexado (PDF, DOCX, XLSX, etc.) */}
-                          {parsed.attachment && !isImageAttachment && !isAudioAttachment && (
+                          {/* 2. Arquivo/Documento anexado (PDF, DOCX, XLSX ou MIME nulo/desconhecido) - NUNCA ÁUDIO */}
+                          {parsed.attachment && parsed.isFile && (
                             <FileAttachmentCard
                               attachment={parsed.attachment}
                               isOutgoing={isMe}
                             />
                           )}
 
-                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp - NUNCA RENDERIZAR SE FOR IMAGEM */}
-                          {isAudioAttachment && parsed.audioUrl && !isImageAttachment && (
+                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp - SOMENTE SE FOR STRICT AUDIO */}
+                          {parsed.isAudio && parsed.audioUrl && !parsed.isImage && !parsed.isFile && (
                             <AudioMessagePlayer
                               audioUrl={parsed.audioUrl}
                               duration={parsed.duration}

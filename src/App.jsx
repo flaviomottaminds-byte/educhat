@@ -3411,18 +3411,18 @@ export default function App() {
     // O texto deve ser estritamente bruto (raw), sem tradução, corte ou modificação de middleware.
     const rawText = String(text ?? '').trimEnd();
 
-    // 3. SEPARAÇÃO ESTRITA ENTRE IMAGEM E ÁUDIO (FIM DE DADOS CRUZADOS):
+    const attMime = (attachment?.type || attachment?.mimetype || '').toLowerCase().trim();
     const isImageMsg = Boolean(
-      attachment?.isImage ||
-      attachment?.type?.startsWith('image/') ||
-      /\.(png|jpe?g|gif|webp|svg)$/i.test(attachment?.name || '')
+      attMime.startsWith('image/') ||
+      (!attMime && attachment?.isImage) ||
+      (!attMime && /\.(png|jpe?g|gif|webp|svg)$/i.test(attachment?.name || ''))
     );
 
     const isAudioMsg = !isImageMsg && Boolean(
-      options.isAudio ||
-      attachment?.isAudio ||
-      attachment?.type?.startsWith('audio/') ||
-      /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || '')
+      attMime.startsWith('audio/') ||
+      (options.isAudio && !attachment) ||
+      (!attMime && attachment?.isAudio) ||
+      (!attMime && /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || ''))
     );
 
     const messageId = 'm_' + Date.now();

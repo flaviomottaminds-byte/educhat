@@ -501,15 +501,20 @@ function extractMessageContent(
   if (isDocType) {
     const doc = msg?.documentMessage || msg?.documentWithCaptionMessage?.message?.documentMessage || item?.documentMessage || {};
     const fileName = doc.fileName || doc.title || item?.fileName || "";
-    const docUrl = doc.url || doc.mediaUrl || item?.mediaUrl || item?.url || "";
+    const docUrl = doc.mediaUrl || item?.mediaUrl || doc.url || item?.url || "";
+    const base64 = doc.base64 || item?.base64 || "";
     const mimetype = doc.mimetype || "application/pdf";
+    let dataUrl = docUrl;
+    if (base64) {
+      dataUrl = base64.startsWith("data:") ? base64 : `data:${mimetype};base64,${base64}`;
+    }
 
     let text = docCaption
       ? docCaption
       : (fileName ? `📄 Documento recebido: ${fileName}` : "📄 Documento recebido");
 
-    if (docUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName || "documento.pdf", type: mimetype, dataUrl: docUrl })}]`;
+    if (dataUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName || "documento.pdf", type: mimetype, dataUrl: dataUrl, url: dataUrl })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }

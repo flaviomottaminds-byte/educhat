@@ -248,7 +248,7 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         m.message ||
         {};
 
-      const text =
+      let text =
         (typeof unwrapped?.conversation === 'string' && unwrapped.conversation.trim()) ||
         (typeof unwrapped?.extendedTextMessage?.text === 'string' && unwrapped.extendedTextMessage.text.trim()) ||
         (typeof unwrapped?.imageMessage?.caption === 'string' && unwrapped.imageMessage.caption.trim()) ||
@@ -256,11 +256,53 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         (typeof unwrapped?.documentMessage?.caption === 'string' && unwrapped.documentMessage.caption.trim()) ||
         (typeof unwrapped?.documentMessage?.title === 'string' && unwrapped.documentMessage.title.trim()) ||
         (typeof unwrapped?.documentMessage?.fileName === 'string' && unwrapped.documentMessage.fileName.trim()) ||
-        (unwrapped?.audioMessage ? '🎵 Áudio recebido' :
-         (unwrapped?.imageMessage ? '🖼️ Imagem recebida' :
-          (unwrapped?.stickerMessage ? '💟 Figurinha recebida' :
-           (unwrapped?.documentMessage ? '📄 Documento recebido' :
-            (unwrapped?.videoMessage ? '🎥 Vídeo recebido' : (m.text || m.body || ''))))));
+        '';
+
+      let attachmentObj = null;
+
+      if (unwrapped?.documentMessage) {
+        const doc = unwrapped.documentMessage;
+        const fileName = doc.fileName || doc.title || 'documento.pdf';
+        const mimetype = doc.mimetype || 'application/pdf';
+        const docUrl = doc.mediaUrl || doc.url || (doc.base64 ? (doc.base64.startsWith('data:') ? doc.base64 : `data:${mimetype};base64,${doc.base64}`) : '');
+        attachmentObj = {
+          name: fileName,
+          type: mimetype,
+          url: docUrl,
+          dataUrl: docUrl
+        };
+        if (!text) text = `📄 Documento: ${fileName}`;
+      } else if (unwrapped?.imageMessage) {
+        const img = unwrapped.imageMessage;
+        const mimetype = img.mimetype || 'image/jpeg';
+        const imgUrl = img.mediaUrl || img.url || (img.base64 ? (img.base64.startsWith('data:') ? img.base64 : `data:${mimetype};base64,${img.base64}`) : '');
+        attachmentObj = {
+          name: 'imagem.jpg',
+          type: mimetype,
+          url: imgUrl,
+          dataUrl: imgUrl,
+          isImage: true
+        };
+        if (!text) text = '🖼️ Imagem recebida';
+      } else if (unwrapped?.audioMessage) {
+        const aud = unwrapped.audioMessage;
+        const mimetype = aud.mimetype || 'audio/ogg';
+        const audUrl = aud.mediaUrl || aud.url || (aud.base64 ? (aud.base64.startsWith('data:') ? aud.base64 : `data:${mimetype};base64,${aud.base64}`) : '');
+        attachmentObj = {
+          name: 'audio.ogg',
+          type: mimetype,
+          url: audUrl,
+          dataUrl: audUrl,
+          isAudio: true
+        };
+        if (!text) text = '🎵 Áudio recebido';
+      } else if (!text) {
+        text = unwrapped?.stickerMessage ? '💟 Figurinha recebida' : (unwrapped?.videoMessage ? '🎥 Vídeo recebido' : (m.text || m.body || ''));
+      }
+
+      if (attachmentObj) {
+        text = `${text ? text + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(attachmentObj)}]`;
+      }
 
       if (!text && !unwrapped?.audioMessage && !unwrapped?.imageMessage && !unwrapped?.documentMessage && !unwrapped?.stickerMessage) return;
 
@@ -314,7 +356,7 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         id: m.key?.id || m.id || `wa_${Date.now()}_${Math.random()}`,
         senderId: fromMe ? 'u1' : chatKey,
         senderName: fromMe ? 'Você' : contactName,
-        text: text || '🎙️ [Áudio recebido]',
+        text: text || 'Mensagem',
         timestamp: time,
         isWhatsApp: true,
         fromStudent: !fromMe,

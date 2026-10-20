@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { resolvePublicMediaUrl } from './attachmentParser';
 
 /**
  * Utilitário avançado de processamento e compatibilidade de áudio do EduChat e WhatsApp.
@@ -51,44 +52,7 @@ export function getSupportedAudioMimeType() {
  * URLs completas (https://), blobs e data URLs.
  */
 export function resolvePublicAudioUrl(audioUrl) {
-  if (!audioUrl || typeof audioUrl !== 'string') return '';
-  const trimmed = audioUrl.trim();
-
-  // Se já for URL web pronta, blob ou base64 dataUrl
-  if (
-    trimmed.startsWith('blob:') ||
-    trimmed.startsWith('data:') ||
-    trimmed.startsWith('http://') ||
-    trimmed.startsWith('https://')
-  ) {
-    return trimmed;
-  }
-
-  // Trata caminhos relativos ou caminhos de bucket do Supabase Storage
-  let cleanPath = trimmed.replace(/^\/+/, '');
-  let bucketName = 'chat-audios';
-
-  if (cleanPath.startsWith('chat-audios/')) {
-    cleanPath = cleanPath.replace(/^chat-audios\//, '');
-    bucketName = 'chat-audios';
-  } else if (cleanPath.startsWith('chat-attachments/')) {
-    cleanPath = cleanPath.replace(/^chat-attachments\//, '');
-    bucketName = 'chat-attachments';
-  } else if (cleanPath.startsWith('attachments/')) {
-    cleanPath = cleanPath.replace(/^attachments\//, '');
-    bucketName = 'attachments';
-  }
-
-  try {
-    const { data } = supabase.storage.from(bucketName).getPublicUrl(cleanPath);
-    if (data?.publicUrl) {
-      return data.publicUrl;
-    }
-  } catch (err) {
-    console.warn('[Audio] Erro ao obter URL pública do Supabase Storage:', err);
-  }
-
-  return trimmed;
+  return resolvePublicMediaUrl(audioUrl, 'chat-audios');
 }
 
 /**

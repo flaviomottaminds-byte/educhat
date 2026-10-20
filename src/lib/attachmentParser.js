@@ -4,6 +4,60 @@
  * Chromium (evitando bloqueios de navegação para data URLs) e padroniza metadados.
  */
 
+const SUPABASE_BASE_URL = 'https://yuhtzkhoxnabrsrhqdni.supabase.co';
+const EVOLUTION_BASE_URL = 'https://evolution-api-production-3fb2.up.railway.app';
+
+/**
+ * Converte qualquer URL, caminho do Supabase Storage ou Evolution API em URL pública absoluta válida.
+ * Evita links quebrados ou caminhos relativos que impedem a abertura do anexo.
+ */
+export function resolvePublicMediaUrl(urlOrPath, defaultBucket = 'chat-attachments') {
+  if (!urlOrPath || typeof urlOrPath !== 'string') return '';
+  const trimmed = urlOrPath.trim();
+  if (!trimmed) return '';
+
+  // 1. Data URLs (Base64) e Blobs locais já são válidos para renderização direta
+  if (trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
+    return trimmed;
+  }
+
+  // 2. Protocol-relative URL (ex: //domain.com/path)
+  if (trimmed.startsWith('//')) {
+    return `https:${trimmed}`;
+  }
+
+  // 3. URLs HTTP/HTTPS completas
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+    return trimmed;
+  }
+
+  // 4. Caminhos que já começam com a rota do storage do Supabase (/storage/v1/object/public/...)
+  if (trimmed.startsWith('/storage/v1/object/public/') || trimmed.startsWith('storage/v1/object/public/')) {
+    const clean = trimmed.replace(/^\/?storage\/v1\/object\/public\//, '');
+    return `${SUPABASE_BASE_URL}/storage/v1/object/public/${clean}`;
+  }
+
+  // 5. Caminhos da Evolution API (ex: /media/... ou media/...)
+  if (trimmed.startsWith('/media/') || trimmed.startsWith('media/')) {
+    const clean = trimmed.replace(/^\/+/, '');
+    return `${EVOLUTION_BASE_URL}/${clean}`;
+  }
+
+  // 6. Caminhos com nome de bucket conhecido do Supabase
+  let cleanPath = trimmed.replace(/^\/+/, '');
+  const knownBuckets = ['chat-attachments', 'chat-audios', 'attachments', 'chat-files', 'documents', 'messages'];
+  for (const b of knownBuckets) {
+    if (cleanPath.startsWith(`${b}/`)) {
+      const rest = cleanPath.slice(b.length + 1);
+      return `${SUPABASE_BASE_URL}/storage/v1/object/public/${b}/${rest}`;
+    }
+  }
+
+  // 7. Caminho relativo padrão do Storage do Supabase (ex: "2026/10/arquivo.pdf" ou "meu-doc.pdf")
+  const targetBucket = defaultBucket || 'chat-attachments';
+  return `${SUPABASE_BASE_URL}/storage/v1/object/public/${targetBucket}/${cleanPath}`;
+}
+
 export function extractAttachmentFromText(rawText) {
   if (!rawText || typeof rawText !== 'string') {
     return { attachment: null, cleanText: '' };
@@ -86,16 +140,17 @@ export function extractAttachmentFromText(rawText) {
               attachment = JSON.parse(sanitizedJson);
             } catch {
               // Extração resiliente via expressões regulares
-              const nameMatch = jsonStr.match(/["']?name["']?\s*:\s*["']([^"']+)["']/i);
+              const nameMatch = jsonStr.match(/["']?(?:name|fileName|filename)["']?\s*:\s*["']([^"']+)["']/i);
               const sizeMatch = jsonStr.match(/["']?size["']?\s*:\s*["']?([^"',}]+)["']?/i);
-              const typeMatch = jsonStr.match(/["']?type["']?\s*:\s*["']([^"']+)["']/i);
-              const urlMatch = jsonStr.match(/["']?(?:dataUrl|url)["']?\s*:\s*["']([^"']+)["']/i);
-              if (nameMatch) {
+              const typeMatch = jsonStr.match(/["']?(?:type|mimetype|mimeType)["']?\s*:\s*["']([^"']+)["']/i);
+              const urlMatch = jsonStr.match(/["']?(?:dataUrl|url|mediaUrl|storagePath|path)["']?\s*:\s*["']([^"']+)["']/i);
+              if (nameMatch || urlMatch) {
                 attachment = {
-                  name: nameMatch[1],
+                  name: nameMatch ? nameMatch[1] : 'arquivo',
                   size: sizeMatch ? sizeMatch[1].trim() : '',
                   type: typeMatch ? typeMatch[1] : '',
-                  dataUrl: urlMatch ? urlMatch[1] : ''
+                  dataUrl: urlMatch ? urlMatch[1] : '',
+                  url: urlMatch ? urlMatch[1] : ''
                 };
               }
             }
@@ -114,6 +169,22 @@ export function extractAttachmentFromText(rawText) {
         break;
       }
     }
+  }
+
+  // Normalização do anexo extraído
+  if (attachment && typeof attachment === 'object') {
+    const rawName = attachment.name || attachment.fileName || attachment.filename || 'arquivo';
+    const rawType = (attachment.type || attachment.mimetype || attachment.mimeType || '').toLowerCase().trim();
+    const rawUrl = attachment.url || attachment.dataUrl || attachment.mediaUrl || attachment.storagePath || attachment.path || '';
+    const resolvedUrl = resolvePublicMediaUrl(rawUrl, rawType.startsWith('audio/') ? 'chat-audios' : 'chat-attachments');
+
+    attachment = {
+      ...attachment,
+      name: rawName,
+      type: rawType,
+      url: resolvedUrl || rawUrl,
+      dataUrl: resolvedUrl || attachment.dataUrl || rawUrl
+    };
   }
 
   // Salvaguarda final: remove qualquer resquício de tags de anexo ou controle
@@ -165,33 +236,58 @@ export function getFileExtension(filename = '') {
 }
 
 /**
- * Classifica a categoria do arquivo para estilização de cores e ícones
+ * Classifica a categoria do arquivo para estilização de cores e ícones.
+ * Dá prioridade absoluta ao MIME-type real para evitar que documentos virem áudio.
  */
 export function getFileCategory(filename = '', mimeType = '') {
+  const mime = (mimeType || '').toLowerCase().trim();
   const ext = getFileExtension(filename);
-  const mime = (mimeType || '').toLowerCase();
 
-  if (ext === 'pdf' || mime.includes('pdf')) {
+  if (mime.includes('pdf') || ext === 'pdf') {
     return 'pdf';
   }
-  if (['xlsx', 'xls', 'csv', 'ods'].includes(ext) || mime.includes('spreadsheet') || mime.includes('csv') || mime.includes('excel')) {
-    return 'spreadsheet';
-  }
-  if (['docx', 'doc', 'txt', 'rtf', 'odt'].includes(ext) || mime.includes('word') || mime.includes('text/plain')) {
-    return 'document';
-  }
-  if (['pptx', 'ppt', 'odp'].includes(ext) || mime.includes('presentation') || mime.includes('powerpoint')) {
-    return 'presentation';
-  }
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext) || mime.startsWith('image/')) {
+  if (mime.startsWith('image/') || (!mime && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'].includes(ext))) {
     return 'image';
   }
-  if (['mp3', 'wav', 'ogg', 'opus', 'webm', 'm4a', 'aac'].includes(ext) || mime.startsWith('audio/')) {
+  if (mime.startsWith('audio/')) {
     return 'audio';
   }
-  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext) || mime.includes('zip') || mime.includes('compressed')) {
+  if (
+    mime.includes('spreadsheet') ||
+    mime.includes('csv') ||
+    mime.includes('excel') ||
+    ['xlsx', 'xls', 'csv', 'ods'].includes(ext)
+  ) {
+    return 'spreadsheet';
+  }
+  if (
+    mime.includes('word') ||
+    mime.includes('text/plain') ||
+    mime.includes('officedocument') ||
+    ['docx', 'doc', 'txt', 'rtf', 'odt'].includes(ext)
+  ) {
+    return 'document';
+  }
+  if (
+    mime.includes('presentation') ||
+    mime.includes('powerpoint') ||
+    ['pptx', 'ppt', 'odp'].includes(ext)
+  ) {
+    return 'presentation';
+  }
+  if (
+    mime.includes('zip') ||
+    mime.includes('compressed') ||
+    ['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)
+  ) {
     return 'archive';
   }
+
+  // Se o MIME for desconhecido e a extensão for de áudio
+  if (!mime && ['mp3', 'wav', 'ogg', 'opus', 'webm', 'm4a', 'aac'].includes(ext)) {
+    return 'audio';
+  }
+
   return 'other';
 }
 
@@ -222,17 +318,17 @@ export function dataUrlToBlob(dataUrl) {
  */
 export function openDocument(attachment) {
   if (!attachment) return;
-  const fileUrl = attachment.dataUrl || attachment.url;
-  const filename = attachment.name || 'documento';
+  const rawUrl =
+    attachment.url ||
+    attachment.dataUrl ||
+    attachment.storagePath ||
+    attachment.path ||
+    attachment.mediaUrl;
+  const fileUrl = resolvePublicMediaUrl(rawUrl, 'chat-attachments');
+  const filename = attachment.name || attachment.fileName || 'documento';
 
   if (!fileUrl) {
     alert(`O arquivo "${filename}" não possui URL válida de visualização.`);
-    return;
-  }
-
-  // Se já for URL web externa ou blob existente
-  if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://') || fileUrl.startsWith('blob:')) {
-    window.open(fileUrl, '_blank');
     return;
   }
 
@@ -247,6 +343,12 @@ export function openDocument(attachment) {
     }
   }
 
+  // Se já for URL web externa ou blob existente
+  if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://') || fileUrl.startsWith('blob:')) {
+    window.open(fileUrl, '_blank');
+    return;
+  }
+
   // Fallback para download direto caso a abertura em aba falhe
   downloadDocument(attachment);
 }
@@ -256,43 +358,77 @@ export function openDocument(attachment) {
  */
 export function downloadDocument(attachment) {
   if (!attachment) return;
-  const fileUrl = attachment.dataUrl || attachment.url;
-  const filename = attachment.name || 'documento';
+  const rawUrl =
+    attachment.url ||
+    attachment.dataUrl ||
+    attachment.storagePath ||
+    attachment.path ||
+    attachment.mediaUrl;
+  const fileUrl = resolvePublicMediaUrl(rawUrl, 'chat-attachments');
+  const filename = attachment.name || attachment.fileName || 'documento';
 
   if (!fileUrl) {
     alert(`O arquivo "${filename}" não pôde ser baixado.`);
     return;
   }
 
-  try {
-    let finalUrl = fileUrl;
-    let shouldRevoke = false;
-
-    if (fileUrl.startsWith('data:')) {
+  // Se for Base64 (dataUrl)
+  if (fileUrl.startsWith('data:')) {
+    try {
       const blob = dataUrlToBlob(fileUrl);
       if (blob) {
-        finalUrl = URL.createObjectURL(blob);
-        shouldRevoke = true;
+        const finalUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = finalUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(finalUrl), 60000);
+        return;
       }
+    } catch (err) {
+      console.warn('Erro ao baixar dataUrl base64:', err);
     }
-
-    const a = document.createElement('a');
-    a.href = finalUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-
-    if (shouldRevoke) {
-      setTimeout(() => URL.revokeObjectURL(finalUrl), 60000);
-    }
-  } catch (err) {
-    console.warn('Erro no download:', err);
-    const a = document.createElement('a');
-    a.href = fileUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
   }
+
+  // Para URLs remotas (HTTP / HTTPS):
+  // Tenta fetch para criar Blob local e forçar download com o nome correto do arquivo
+  if (fileUrl.startsWith('http://') || fileUrl.startsWith('https://')) {
+    fetch(fileUrl)
+      .then((res) => {
+        if (!res.ok) throw new Error('Falha HTTP ao obter arquivo');
+        return res.blob();
+      })
+      .then((blob) => {
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(objUrl), 60000);
+      })
+      .catch((err) => {
+        console.warn('Fallback para download direto do link:', err);
+        const a = document.createElement('a');
+        a.href = fileUrl;
+        a.download = filename;
+        a.target = '_blank';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+    return;
+  }
+
+  // Fallback padrão
+  const a = document.createElement('a');
+  a.href = fileUrl;
+  a.download = filename;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
