@@ -1065,6 +1065,7 @@ export default function App() {
       isForwarded,
       forwardedFrom,
       status: parsedStatus,
+      is_read: parsedStatus === 'read' || m.is_read === true,
       read_by: readBy,
       readBy: readBy,
       taskId: linkedTaskId,
@@ -1154,6 +1155,87 @@ export default function App() {
         return next;
       });
 
+      // 1A. Dispara UPDATE imediato no Supabase na tabela messages para todas as mensagens não lidas deste grupo
+      const updateChannelMessagesInDb = async () => {
+        try {
+          let { data: channelMsgs, error } = await supabase
+            .from('messages')
+            .select('id, text, sender_id, read_by')
+            .or(`chat_id.eq.${channelId},chat_id.eq.${strippedId},chat_id.eq.${prefixedId}`)
+            .neq('sender_id', currentUserId);
+
+          if (error) {
+            // Fallback se a coluna read_by ainda não existir na tabela
+            const fallbackRes = await supabase
+              .from('messages')
+              .select('id, text, sender_id')
+              .or(`chat_id.eq.${channelId},chat_id.eq.${strippedId},chat_id.eq.${prefixedId}`)
+              .neq('sender_id', currentUserId);
+            channelMsgs = fallbackRes.data;
+          }
+
+          if (Array.isArray(channelMsgs) && channelMsgs.length > 0) {
+            channelMsgs.forEach((row) => {
+              let currentReadBy = [];
+              if (Array.isArray(row.read_by)) {
+                currentReadBy = [...row.read_by];
+              } else if (typeof row.read_by === 'string') {
+                try {
+                  currentReadBy = JSON.parse(row.read_by);
+                } catch {
+                  currentReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+                }
+              }
+
+              if (row.text && row.text.includes('<!-- READ_BY:')) {
+                const match = row.text.match(/<!-- READ_BY:([\s\S]+?) -->/);
+                if (match) {
+                  try {
+                    const parsed = JSON.parse(match[1]);
+                    if (Array.isArray(parsed)) {
+                      currentReadBy = Array.from(new Set([...currentReadBy, ...parsed]));
+                    }
+                  } catch {}
+                }
+              }
+
+              if (!currentReadBy.includes(currentUserId)) {
+                currentReadBy.push(currentUserId);
+                let updatedText = row.text || '';
+                const readByTag = `<!-- READ_BY:${JSON.stringify(currentReadBy)} -->`;
+                if (updatedText.includes('<!-- READ_BY:')) {
+                  updatedText = updatedText.replace(/<!-- READ_BY:[\s\S]+? -->/g, readByTag);
+                } else {
+                  updatedText = `${updatedText}\n${readByTag}`;
+                }
+
+                // Tenta atualizar read_by e text no Supabase
+                supabase
+                  .from('messages')
+                  .update({
+                    read_by: currentReadBy,
+                    text: updatedText
+                  })
+                  .eq('id', row.id)
+                  .then(({ error: upErr }) => {
+                    if (upErr) {
+                      supabase
+                        .from('messages')
+                        .update({ text: updatedText })
+                        .eq('id', row.id)
+                        .catch(() => {});
+                    }
+                  })
+                  .catch(() => {});
+              }
+            });
+          }
+        } catch (err) {
+          console.warn('[markMessagesAsRead] Erro ao atualizar mensagens do canal no Supabase:', err);
+        }
+      };
+      updateChannelMessagesInDb();
+
       // Persiste no Supabase (chat_id: 'sys_channel_reads')
       supabase
         .from('messages')
@@ -1189,7 +1271,8 @@ export default function App() {
         const next = {
           ...prev,
           [contactId]: nowIso,
-          [dmKey]: nowIso
+          [dmKey]: nowIso,
+          [reverseDmKey]: nowIso
         };
         try {
           localStorage.setItem(`educhat_dm_reads_${currentUserId}`, JSON.stringify(next));
@@ -1199,32 +1282,53 @@ export default function App() {
       });
 
       // UPDATE no Supabase para todas as mensagens não lidas onde sender_id é o contato e recipient_id é o currentUser.id
-      supabase
-        .from('messages')
-        .select('id, text, sender_id, recipient_id')
-        .or(`chat_id.eq.${dmKey},chat_id.eq.${reverseDmKey},and(sender_id.eq.${contactId},recipient_id.eq.${currentUserId})`)
-        .eq('sender_id', contactId)
-        .not('text', 'like', '%<!-- STATUS:read -->%')
-        .then(({ data }) => {
-          if (data && data.length > 0) {
-            data.forEach((row) => {
-              const newText = row.text?.includes('<!-- STATUS:')
-                ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->')
-                : `${row.text || ''}\n<!-- STATUS:read -->`;
+      const updateDmMessagesInDb = async () => {
+        try {
+          const { data, error } = await supabase
+            .from('messages')
+            .select('id, text, sender_id, recipient_id')
+            .or(`chat_id.eq.${dmKey},chat_id.eq.${reverseDmKey},and(sender_id.eq.${contactId},recipient_id.eq.${currentUserId})`)
+            .eq('sender_id', contactId);
 
-              supabase
-                .from('messages')
-                .update({
-                  text: newText,
-                  recipient_id: currentUserId
-                })
-                .eq('id', row.id)
-                .then(() => {})
-                .catch(() => {});
+          if (!error && Array.isArray(data) && data.length > 0) {
+            data.forEach((row) => {
+              const isAlreadyRead = (row.text && row.text.includes('<!-- STATUS:read -->')) || row.is_read === true;
+              if (!isAlreadyRead) {
+                const newText = row.text?.includes('<!-- STATUS:')
+                  ? row.text.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->')
+                  : `${row.text || ''}\n<!-- STATUS:read -->`;
+
+                supabase
+                  .from('messages')
+                  .update({
+                    text: newText,
+                    recipient_id: currentUserId,
+                    is_read: true,
+                    read_by: [currentUserId]
+                  })
+                  .eq('id', row.id)
+                  .then(({ error: upErr }) => {
+                    if (upErr) {
+                      // Fallback se is_read ou read_by não existirem como colunas na tabela
+                      supabase
+                        .from('messages')
+                        .update({
+                          text: newText,
+                          recipient_id: currentUserId
+                        })
+                        .eq('id', row.id)
+                        .catch(() => {});
+                    }
+                  })
+                  .catch(() => {});
+              }
             });
           }
-        })
-        .catch(() => {});
+        } catch (err) {
+          console.warn('[markMessagesAsRead] Erro ao atualizar mensagens 1-a-1 no Supabase:', err);
+        }
+      };
+      updateDmMessagesInDb();
 
       // Persiste recibo de leitura de DM no Supabase (chat_id: 'sys_dm_reads')
       supabase
@@ -1263,43 +1367,71 @@ export default function App() {
         .catch(() => {});
     }
 
-    // 4. Atualiza estado em memória imediatamente
+    // 4. Atualiza estado em memória imediatamente para todas as chaves equivalentes da conversa
     setMessages((prev) => {
-      const list = prev[cKey];
-      if (!list || list.length === 0) return prev;
+      const keysToUpdate = [];
+      if (chat.type === 'channel') {
+        const strippedId = chat.id.replace(/^c-/, '');
+        keysToUpdate.push(chat.id, strippedId, `c-${strippedId}`);
+      } else if (chat.type === 'dm') {
+        const contactId = chat.id;
+        const dmKey = getChatKey({ type: 'dm', id: contactId }, currentUserId);
+        const reverseDmKey = `dm-${contactId}-${currentUserId}`;
+        keysToUpdate.push(contactId, dmKey, reverseDmKey);
+      } else if (chat.type === 'whatsapp') {
+        keysToUpdate.push(chat.id, cKey);
+      }
 
-      let hasUnread = false;
-      const updated = list.map((m) => {
-        const senderId = m.senderId || m.sender_id;
-        const isFromContact = senderId ? senderId !== currentUserId : !m.fromMe;
-        const isRead =
-          m.is_read === true ||
-          m.status === 'read' ||
-          (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+      let hasAnyChange = false;
+      const next = { ...prev };
 
-        if (isFromContact && !isRead) {
-          hasUnread = true;
-          let newText = m.text || '';
-          if (typeof newText === 'string') {
-            if (newText.includes('<!-- STATUS:')) {
-              newText = newText.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->');
-            } else {
-              newText = `${newText}\n<!-- STATUS:read -->`;
+      keysToUpdate.forEach((k) => {
+        const list = next[k];
+        if (Array.isArray(list) && list.length > 0) {
+          const updated = list.map((m) => {
+            const senderId = m.senderId || m.sender_id;
+            const isFromContact = senderId ? senderId !== currentUserId : !m.fromMe;
+            if (!isFromContact) return m;
+
+            // Para canal ou DM, garante que o currentUser.id conste em read_by / readBy
+            let readByList = Array.isArray(m.read_by) ? [...m.read_by] : (Array.isArray(m.readBy) ? [...m.readBy] : []);
+            if (!readByList.includes(currentUserId)) {
+              readByList.push(currentUserId);
             }
-          }
-          return {
-            ...m,
-            status: 'read',
-            is_read: true,
-            text: newText,
-            recipient_id: currentUserId
-          };
+
+            const isRead =
+              m.is_read === true ||
+              m.status === 'read' ||
+              (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+
+            if (!isRead || !readByList.includes(currentUserId)) {
+              hasAnyChange = true;
+            }
+
+            let newText = m.text || '';
+            if (typeof newText === 'string') {
+              if (newText.includes('<!-- STATUS:')) {
+                newText = newText.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->');
+              } else {
+                newText = `${newText}\n<!-- STATUS:read -->`;
+              }
+            }
+
+            return {
+              ...m,
+              status: 'read',
+              is_read: true,
+              text: newText,
+              recipient_id: currentUserId,
+              read_by: readByList,
+              readBy: readByList
+            };
+          });
+          next[k] = updated;
         }
-        return m;
       });
 
-      if (!hasUnread) return prev;
-      return { ...prev, [cKey]: updated };
+      return hasAnyChange ? next : prev;
     });
   };
 
@@ -1812,10 +1944,18 @@ export default function App() {
           grouped[key].push(parsedMsg);
 
           const isFromMe = m.sender_id === activeUser.id;
-          const isRead =
+
+          // Verifica se o usuário ativo já consta no array read_by / readBy
+          const readByList = Array.isArray(parsedMsg.readBy) ? parsedMsg.readBy : (Array.isArray(m.read_by) ? m.read_by : []);
+          const hasReadBy = readByList.includes(activeUser.id);
+
+          const isExplicitRead =
             m.is_read === true ||
-            m.status === 'read' ||
+            parsedMsg.is_read === true ||
+            parsedMsg.status === 'read' ||
             (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+
+          const isRead = isExplicitRead || hasReadBy;
 
           if (!isFromMe && !isRead && key !== currentActiveKey) {
             // Se for canal, verifica contra o lastReadAt do canal
@@ -1906,14 +2046,17 @@ export default function App() {
           return next;
         });
 
-        setUnreadCounts((prev) => {
-          const merged = { ...prev, ...unreadMap };
+        setUnreadCounts(() => {
+          const freshCounts = { ...unreadMap };
           if (activeChatRef.current?.id) {
-            delete merged[activeChatRef.current.id];
+            delete freshCounts[activeChatRef.current.id];
+            if (activeChatRef.current.id.startsWith('c-')) {
+              delete freshCounts[activeChatRef.current.id.replace(/^c-/, '')];
+            }
           }
-          const totalUnread = Object.values(merged).reduce((a, b) => a + (Number(b) || 0), 0);
+          const totalUnread = Object.values(freshCounts).reduce((a, b) => a + (Number(b) || 0), 0);
           document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
-          return merged;
+          return freshCounts;
         });
 
         setChannels((prev) =>
@@ -1929,7 +2072,8 @@ export default function App() {
 
         setCollaborators((prev) =>
           prev.map((u) => {
-            const count = unreadMap[u.id] || 0;
+            const dmKey = getChatKey({ type: 'dm', id: u.id }, activeUser.id);
+            const count = unreadMap[u.id] || unreadMap[dmKey] || 0;
             return {
               ...u,
               unread: count,

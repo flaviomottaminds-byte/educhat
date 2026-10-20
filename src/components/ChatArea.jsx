@@ -833,48 +833,88 @@ export default function ChatArea({
     target?.phone
   ]);
 
-  // 2. RECIBOS DE LEITURA (READ RECEIPTS) NO GRUPO #GERAL:
-  // Toda a vez que um utilizador visualizar ou focar no canal #geral,
-  // dá UPDATE nas mensagens recentes, fazendo push do currentUser.id para o array read_by
+  // 2. RECIBOS DE LEITURA (READ RECEIPTS) EM CANAIS E CONVERSAS 1-A-1:
+  // Toda a vez que um utilizador visualizar ou focar na conversa aberta,
+  // dá UPDATE nas mensagens recentes, fazendo push do currentUser.id para o array read_by (em canais)
+  // ou marcando is_read = true e STATUS:read (em DMs)
   const [localReadByMap, setLocalReadByMap] = useState({});
   const markedReadIdsRef = useRef(new Set());
 
   useEffect(() => {
-    if (!isGeral || !currentUser?.id) return;
+    if (!currentUser?.id) return;
 
     const markRecentMessagesAsRead = () => {
       if (typeof document !== 'undefined' && document.hidden) return;
       const recent = (messages || []).slice(-50);
       recent.forEach((m) => {
-        if (!m || !m.id || m.senderId === 'system' || String(m.id).startsWith('temp_')) return;
-        const currentList = localReadByMap[m.id] || m.read_by || m.readBy || [];
-        if (!currentList.includes(currentUser.id)) {
-          if (markedReadIdsRef.current.has(m.id)) return;
-          markedReadIdsRef.current.add(m.id);
+        if (!m || !m.id || m.senderId === 'system' || m.senderId === currentUser.id || String(m.id).startsWith('temp_')) return;
 
-          const nextReadBy = Array.from(new Set([...currentList, currentUser.id]));
-          setLocalReadByMap((prev) => ({ ...prev, [m.id]: nextReadBy }));
+        if (activeChannel) {
+          // Em canais/grupos: adiciona currentUser.id ao read_by
+          const currentList = localReadByMap[m.id] || m.read_by || m.readBy || [];
+          if (!currentList.includes(currentUser.id)) {
+            if (markedReadIdsRef.current.has(m.id)) return;
+            markedReadIdsRef.current.add(m.id);
 
-          supabase
-            .from('messages')
-            .update({ read_by: nextReadBy })
-            .eq('id', m.id)
-            .then(({ error }) => {
-              if (error && (error.code === '42703' || error.message?.includes('read_by'))) {
-                const rawText = m.text || '';
-                const cleanText = rawText.replace(/<!-- READ_BY:[\s\S]*?-->/g, '').trim();
-                const fallbackText = `${cleanText} <!-- READ_BY:${JSON.stringify(nextReadBy)} -->`;
-                supabase
-                  .from('messages')
-                  .update({ text: fallbackText })
-                  .eq('id', m.id)
-                  .then(() => {})
-                  .catch(() => {});
-              }
-            })
-            .catch((err) => {
-              console.warn('[ReadReceipts] Erro ao registrar leitura no Supabase:', err);
-            });
+            const nextReadBy = Array.from(new Set([...currentList, currentUser.id]));
+            setLocalReadByMap((prev) => ({ ...prev, [m.id]: nextReadBy }));
+
+            supabase
+              .from('messages')
+              .update({ read_by: nextReadBy })
+              .eq('id', m.id)
+              .then(({ error }) => {
+                if (error && (error.code === '42703' || error.message?.includes('read_by'))) {
+                  const rawText = m.text || '';
+                  const cleanText = rawText.replace(/<!-- READ_BY:[\s\S]*?-->/g, '').trim();
+                  const fallbackText = `${cleanText} <!-- READ_BY:${JSON.stringify(nextReadBy)} -->`;
+                  supabase
+                    .from('messages')
+                    .update({ text: fallbackText })
+                    .eq('id', m.id)
+                    .then(() => {})
+                    .catch(() => {});
+                }
+              })
+              .catch((err) => {
+                console.warn('[ReadReceipts] Erro ao registrar leitura no Supabase:', err);
+              });
+          }
+        } else if (selectedUser) {
+          // Em conversas 1 a 1: marca is_read = true e STATUS:read
+          const isRead = m.is_read === true || m.status === 'read' || (typeof m.text === 'string' && m.text.includes('<!-- STATUS:read -->'));
+          if (!isRead) {
+            if (markedReadIdsRef.current.has(m.id)) return;
+            markedReadIdsRef.current.add(m.id);
+
+            const rawText = m.text || '';
+            const newText = rawText.includes('<!-- STATUS:')
+              ? rawText.replace(/<!-- STATUS:[^\s>]+ -->/g, '<!-- STATUS:read -->')
+              : `${rawText}\n<!-- STATUS:read -->`;
+
+            supabase
+              .from('messages')
+              .update({
+                text: newText,
+                recipient_id: currentUser.id,
+                is_read: true,
+                read_by: [currentUser.id]
+              })
+              .eq('id', m.id)
+              .then(({ error }) => {
+                if (error) {
+                  supabase
+                    .from('messages')
+                    .update({
+                      text: newText,
+                      recipient_id: currentUser.id
+                    })
+                    .eq('id', m.id)
+                    .catch(() => {});
+                }
+              })
+              .catch(() => {});
+          }
         }
       });
     };
@@ -886,13 +926,13 @@ export default function ChatArea({
     };
 
     window.addEventListener('focus', handleFocusOrVisible);
-    window.addEventListener('visibilitychange', handleFocusOrVisible);
+    document.addEventListener('visibilitychange', handleFocusOrVisible);
 
     return () => {
       window.removeEventListener('focus', handleFocusOrVisible);
-      window.removeEventListener('visibilitychange', handleFocusOrVisible);
+      document.removeEventListener('visibilitychange', handleFocusOrVisible);
     };
-  }, [isGeral, messages, currentUser?.id]);
+  }, [messages, isGeral, activeChannel, selectedUser, currentUser?.id]);
 
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp

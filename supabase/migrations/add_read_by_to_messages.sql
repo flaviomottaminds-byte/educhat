@@ -1,16 +1,18 @@
 -- ========================================================
 -- EDUCHAT: RECIBOS DE LEITURA (READ RECEIPTS) NA TABELA MESSAGES
--- Adiciona a coluna read_by para rastrear quais usuários visualizaram
--- cada mensagem no grupo #geral.
--- Usamos text[] DEFAULT '{}'::text[] para comportar tanto UUIDs quanto
--- IDs em formato string (ex: 'u1', 'u2', 'u_1792429986084').
+-- Adiciona as colunas read_by e is_read para rastrear leitura de
+-- mensagens em canais/grupos e conversas 1-a-1.
 -- ========================================================
 
 ALTER TABLE public.messages 
   ADD COLUMN IF NOT EXISTS read_by text[] DEFAULT '{}'::text[];
 
--- Índice GIN para consultas eficientes com arrays
+ALTER TABLE public.messages 
+  ADD COLUMN IF NOT EXISTS is_read boolean DEFAULT false;
+
+-- Índices para consultas eficientes com arrays e boolean
 CREATE INDEX IF NOT EXISTS idx_messages_read_by ON public.messages USING GIN (read_by);
+CREATE INDEX IF NOT EXISTS idx_messages_is_read ON public.messages (is_read);
 
 -- Garantir que atualizações na tabela messages estejam 100% liberadas
 DO $$

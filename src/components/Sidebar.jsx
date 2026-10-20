@@ -33,10 +33,11 @@ import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
 import { formatRelativeChatTime, parseDateSafely } from '../lib/timezone';
 
-// 1. FILTRO DE NÃO LIDAS (UNREAD COUNT) COM CONTROLE DE TIMESTAMP:
+// 1. FILTRO DE NÃO LIDAS (UNREAD COUNT) COM CONTROLE DE TIMESTAMP E READ_BY:
 // A variável que alimenta o badge numérico deve ser um .filter() do array de mensagens daquela sessão.
 // A regra de contagem: mensagens onde o remetente é o contato (sender_id !== currentUser.id ou fromMe === false)
 // AND o status é não lido (is_read === false ou status !== 'read')
+// AND o currentUser.id NÃO consta no array read_by / readBy da mensagem
 // AND se houver lastReadTimestamp persistido, apenas mensagens posteriores a esse timestamp.
 export function countUnreadMessages(messageList, currentUserId, lastReadTimestamp = null) {
   if (!Array.isArray(messageList) || messageList.length === 0) return 0;
@@ -56,6 +57,25 @@ export function countUnreadMessages(messageList, currentUserId, lastReadTimestam
 
       if (isExplicitRead) return false;
 
+      // Verifica se o usuário logado já consta no array read_by / readBy da mensagem
+      const readByList = Array.isArray(m.read_by) ? m.read_by : (Array.isArray(m.readBy) ? m.readBy : null);
+      if (readByList && currentUserId && readByList.includes(currentUserId)) {
+        return false;
+      }
+
+      // Verifica tag embutida <!-- READ_BY:[...] --> no texto
+      if (typeof m.text === 'string' && m.text.includes('<!-- READ_BY:')) {
+        try {
+          const match = m.text.match(/<!-- READ_BY:([\s\S]*?) -->/);
+          if (match && match[1]) {
+            const list = JSON.parse(match[1]);
+            if (Array.isArray(list) && currentUserId && list.includes(currentUserId)) {
+              return false;
+            }
+          }
+        } catch {}
+      }
+
       // Se há um timestamp de última leitura persistido, descarta mensagens anteriores ou iguais
       if (lastReadTime > 0) {
         const rawTime = m.created_at || m.timestampRaw;
@@ -66,7 +86,6 @@ export function countUnreadMessages(messageList, currentUserId, lastReadTimestam
           if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
             return false;
           }
-          // Se lastReadTime está registrado e a mensagem é antiga/legada
           return false;
         }
 
@@ -287,9 +306,13 @@ export default function Sidebar({
 
   const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
     if (!c) return sum;
-    const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
-    const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && activeChat?.id === c.id;
     const strippedId = (c.id || '').replace(/^c-/, '');
+    const channelMessages = Array.isArray(messages?.[c.id])
+      ? messages[c.id]
+      : (Array.isArray(messages?.[`c-${strippedId}`])
+          ? messages[`c-${strippedId}`]
+          : (Array.isArray(messages?.[strippedId]) ? messages[strippedId] : []));
+    const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === strippedId || activeChat?.id === `c-${strippedId}`);
     const lastReadAt =
       channelReadReceipts?.[c.id] ||
       channelReadReceipts?.[c.name] ||
@@ -300,11 +323,14 @@ export default function Sidebar({
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
     const dmKey = getChatKey({ type: 'dm', id: u.id }, currentUserId);
+    const reverseDmKey = `dm-${u.id}-${currentUserId}`;
     const sessionMessages = Array.isArray(messages?.[dmKey])
       ? messages[dmKey]
-      : (Array.isArray(messages?.[u.id]) ? messages[u.id] : []);
+      : (Array.isArray(messages?.[reverseDmKey])
+          ? messages[reverseDmKey]
+          : (Array.isArray(messages?.[u.id]) ? messages[u.id] : []));
     const isDmActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === u.id;
-    const lastReadAt = dmReadReceipts?.[u.id] || dmReadReceipts?.[dmKey];
+    const lastReadAt = dmReadReceipts?.[u.id] || dmReadReceipts?.[dmKey] || dmReadReceipts?.[reverseDmKey];
     const count = isDmActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
     return sum + Number(count || 0);
   }, 0);
@@ -737,9 +763,13 @@ export default function Sidebar({
                 {filteredChannels && filteredChannels.length > 0 ? (
                   filteredChannels.map((c) => {
                     if (!c) return null;
-                    const isActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === c.name);
-                    const channelMessages = Array.isArray(messages?.[c.id]) ? messages[c.id] : [];
                     const strippedId = (c.id || '').replace(/^c-/, '');
+                    const isActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === c.name || activeChat?.id === strippedId || activeChat?.id === `c-${strippedId}`);
+                    const channelMessages = Array.isArray(messages?.[c.id])
+                      ? messages[c.id]
+                      : (Array.isArray(messages?.[`c-${strippedId}`])
+                          ? messages[`c-${strippedId}`]
+                          : (Array.isArray(messages?.[strippedId]) ? messages[strippedId] : []));
                     const lastReadAt =
                       channelReadReceipts?.[c.id] ||
                       channelReadReceipts?.[c.name] ||
@@ -810,11 +840,14 @@ export default function Sidebar({
                     if (!user) return null;
                     const isActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === user.id;
                     const dmKey = getChatKey({ type: 'dm', id: user.id }, currentUserId);
+                    const reverseDmKey = `dm-${user.id}-${currentUserId}`;
                     const sessionMessages = Array.isArray(messages?.[dmKey])
                       ? messages[dmKey]
-                      : (Array.isArray(messages?.[user.id]) ? messages[user.id] : []);
+                      : (Array.isArray(messages?.[reverseDmKey])
+                          ? messages[reverseDmKey]
+                          : (Array.isArray(messages?.[user.id]) ? messages[user.id] : []));
 
-                    const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey];
+                    const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey] || dmReadReceipts?.[reverseDmKey];
                     const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
                     return (
                        <div
