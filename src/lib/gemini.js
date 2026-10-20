@@ -411,13 +411,83 @@ const PT_STOPWORDS = new Set([
 ]);
 
 /**
+ * Extrai a intenção e o termo de busca (Nome do aluno, CPF ou Código de Verificação)
+ * a partir da mensagem em linguagem natural do usuário.
+ */
+export function extractSearchTermFromQuery(queryText = '') {
+  if (!queryText || typeof queryText !== 'string') return '';
+  const trimmed = queryText.trim();
+
+  // 1. Código de Verificação / Autenticidade (Ex: FACOB-JAJQP-8DYYR)
+  const codeMatch =
+    trimmed.match(/FACOB-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i) ||
+    trimmed.match(/[A-Z0-9]{4,6}-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i);
+  if (codeMatch) {
+    return codeMatch[0].toUpperCase();
+  }
+
+  // 2. CPF (com ou sem pontuação)
+  const cpfFormatted = trimmed.match(/\d{3}\.\d{3}\.\d{3}-\d{2}/);
+  if (cpfFormatted) return cpfFormatted[0];
+  const cpfRaw = trimmed.replace(/\D/g, '').match(/\d{11}/);
+  if (cpfRaw) return cpfRaw[0];
+
+  // 3. Extração por padrões de intenção em linguagem natural
+  const intentPatterns = [
+    // "aluno: José Alexandre", "aluna José Alexandre", "estudante José Alexandre"
+    /(?:alun[oa]|estudante|cliente|usuári[oa]|nome|candidat[oa])\s*[:\-]?\s*(?:de\s+|do\s+|da\s+)?([A-ZÀ-Úa-zà-ú\s]{2,50}?)(?=\s+(?:concluiu|está|tem|foi|é|no|na|em|sobre|com|polo|curso|ead|cpf|matriculad[oa]|\?|\.|$)|$)/i,
+    // "verificar/consultar/status de José Alexandre"
+    /(?:verificar|verifique|consultar|consulte|pesquisar|pesquise|buscar|busque|status\s+d[eoa]|dados\s+d[eoa]|histórico\s+d[eoa]|diploma\s+d[eoa]|certificado\s+d[eoa])\s*(?:o\s+|a\s+)?(?:alun[oa]\s+)?(?:de\s+|do\s+|da\s+)?([A-ZÀ-Úa-zà-ú\s]{2,50}?)(?=\s+(?:concluiu|está|tem|foi|é|no|na|em|sobre|com|polo|curso|ead|cpf|matriculad[oa]|\?|\.|$)|$)/i,
+    // Nomes com maiúsculas consecutivas (ex: José Alexandre Silva)
+    /([A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)+)/
+  ];
+
+  for (const pattern of intentPatterns) {
+    const match = trimmed.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].trim();
+      const cleaned = candidate
+        .replace(/^(o|a|os|as|de|do|da|dos|das|um|uma)\s+/i, '')
+        .replace(/\s+(o|a|os|as|de|do|da|dos|das|um|uma)$/i, '')
+        .trim();
+      if (cleaned.length >= 3 && !/^(aluno|aluna|curso|polo|diploma|certificado|status|ead)$/i.test(cleaned)) {
+        return cleaned;
+      }
+    }
+  }
+
+  // 4. Fallback limpo: remove palavras estruturais e pontuação da frase
+  const noiseWords = new Set([
+    'qual', 'quais', 'como', 'onde', 'quando', 'quem', 'que', 'status', 'situacao', 'situação',
+    'aluno', 'aluna', 'estudante', 'verificar', 'verifique', 'consultar', 'consulte', 'pesquisar',
+    'buscar', 'certificado', 'diploma', 'autenticidade', 'veracidade', 'codigo', 'código',
+    'cpf', 'matricula', 'matrícula', 'matriculado', 'matriculada', 'conclusao', 'conclusão',
+    'concluiu', 'aprovado', 'aprovada', 'curso', 'polo', 'sobre', 'dados', 'favor', 'por'
+  ]);
+
+  const cleanWords = trimmed
+    .replace(/[^\w\sÀ-ú]/gi, ' ')
+    .split(/\s+/)
+    .filter((w) => {
+      const normW = normalizeText(w);
+      return normW.length >= 2 && !PT_STOPWORDS.has(normW) && !noiseWords.has(normW);
+    });
+
+  if (cleanWords.length > 0) {
+    return cleanWords.join(' ');
+  }
+
+  return trimmed;
+}
+
+/**
  * 2. NOVA ARQUITETURA DE BUSCA SOB DEMANDA (PREVENÇÃO DE ESTOURO DE TOKENS - 429)
  * Quando o usuário perguntar sobre um aluno, código de veracidade, certificado ou diploma,
  * o sistema realiza um SELECT/Query pontual no banco de dados / documentos estruturados.
  * Retorna APENAS a linha correspondente:
  * "O banco de dados retornou: [Dados do Aluno X]. Responda à dúvida do usuário com base apenas nisto."
  */
-export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [], studentContext = null) {
+export async function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [], studentContext = null) {
   if (!queryText || typeof queryText !== 'string') return null;
 
   const rawQuery = queryText.trim();
@@ -427,7 +497,7 @@ export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [
     'aluno', 'aluna', 'certificado', 'diploma', 'veracidade', 'verificar', 'autenticidade',
     'codigo', 'código', 'cpf', 'matricula', 'matrícula', 'aprovado', 'aprovada', 'conclusao',
     'conclusão', 'facob', 'certificacao', 'certificação', 'declaracao', 'declaração', 'extensao', 'extensão',
-    'curso', 'polo', 'status'
+    'curso', 'polo', 'status', 'consulta', 'consultar', 'buscar', 'pesquisar'
   ];
 
   const hasSearchIntent = searchKeywords.some((kw) => lowerQuery.includes(kw)) || Boolean(studentContext);
@@ -438,13 +508,80 @@ export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [
     return null;
   }
 
-  const searchCode = codeMatch ? codeMatch[0].toUpperCase() : null;
-  const searchCpfDigits = cpfDigitsMatch ? cpfDigitsMatch[0] : null;
+  // 1. EXTRAÇÃO DO TERMO DE BUSCA:
+  const extractedTerm = extractSearchTermFromQuery(rawQuery);
+  const searchTerm = extractedTerm || studentContext?.name || '';
 
-  const queryTokens = lowerQuery
-    .replace(/[^\w\s]/gi, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length >= 3 && !PT_STOPWORDS.has(w) && !searchKeywords.includes(w));
+  // 3. VALIDAÇÃO NO CONSOLE:
+  console.log("Termo pesquisado no BD:", searchTerm);
+
+  if (!searchTerm) {
+    return null;
+  }
+
+  // 2. APLICAÇÃO DO FILTRO (WHERE / ILIKE) NO SUPABASE:
+  if (supabase && searchTerm) {
+    try {
+      const { data: studentRows, error: stErr } = await supabase
+        .from('students')
+        .select('*')
+        .ilike('nome_aluno', `%${searchTerm}%`)
+        .limit(1);
+
+      if (!stErr && Array.isArray(studentRows) && studentRows.length > 0) {
+        const rec = studentRows[0];
+        const formattedPairs = Object.entries(rec)
+          .filter(([k, v]) => v !== null && v !== undefined && k !== 'id' && !k.startsWith('sys_'))
+          .map(([k, v]) => `${k}: ${v}`);
+        return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
+      }
+    } catch {}
+
+    try {
+      const { data: alunoRows, error: alErr } = await supabase
+        .from('alunos')
+        .select('*')
+        .or(`nome.ilike.%${searchTerm}%,nome_aluno.ilike.%${searchTerm}%`)
+        .limit(1);
+
+      if (!alErr && Array.isArray(alunoRows) && alunoRows.length > 0) {
+        const rec = alunoRows[0];
+        const formattedPairs = Object.entries(rec)
+          .filter(([k, v]) => v !== null && v !== undefined && k !== 'id' && !k.startsWith('sys_'))
+          .map(([k, v]) => `${k}: ${v}`);
+        return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
+      }
+    } catch {}
+
+    try {
+      const { data: msgRows, error: msgErr } = await supabase
+        .from('messages')
+        .select('id, text')
+        .eq('chat_id', 'sys_educontrol_students')
+        .ilike('text', `%${searchTerm}%`)
+        .limit(1);
+
+      if (!msgErr && Array.isArray(msgRows) && msgRows.length > 0) {
+        const rawText = msgRows[0].text;
+        const match = rawText.match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
+        if (match) {
+          try {
+            const parsed = JSON.parse(match[1]);
+            const formattedPairs = Object.entries(parsed)
+              .filter(([k, v]) => v !== null && v !== undefined && k !== 'id')
+              .map(([k, v]) => `${k}: ${v}`);
+            return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
+          } catch {}
+        }
+      }
+    } catch {}
+  }
+
+  // BUSCA DINÂMICA NA BASE DE CONHECIMENTO E DOCUMENTOS ESTRUTURADOS (CSV / TSV)
+  const normSearchTerm = normalizeText(searchTerm);
+  const searchTokens = normSearchTerm.split(/\s+/).filter((t) => t.length >= 2);
+  const isSearchCode = Boolean(codeMatch);
+  const isSearchCpf = Boolean(cpfDigitsMatch);
 
   const candidateDocs = (learnedDocuments || []).filter((doc) => {
     if (!doc) return false;
@@ -475,32 +612,62 @@ export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [
     const delim = isSemicolon ? ';' : ',';
     headerCols = rawHeader.split(delim).map((c) => c.replace(/^["']|["']$/g, '').trim());
 
+    const nameColIdx = headerCols.findIndex((c) => /aluno|nome|estudante/i.test(c));
+    const codeColIdx = headerCols.findIndex((c) => /código|codigo|verificação|verificacao|autenticidade/i.test(c));
+    const cpfColIdx = headerCols.findIndex((c) => /cpf/i.test(c));
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i];
       if (!line.trim()) continue;
 
-      // Match prioritário por Código de Veracidade
-      if (searchCode && line.toUpperCase().includes(searchCode)) {
-        matchedLine = line;
-        break;
-      }
+      const values = line.split(delim).map((v) => v.replace(/^["']|["']$/g, '').trim());
 
-      // Match por CPF
-      if (searchCpfDigits && line.replace(/\D/g, '').includes(searchCpfDigits)) {
-        matchedLine = line;
-        break;
-      }
-
-      // Match por Tokens de Nome
-      if (queryTokens.length > 0) {
-        const normLine = normalizeText(line);
-        const matchedTokens = queryTokens.filter((token) => normLine.includes(token));
-        if (queryTokens.length === 1 && matchedTokens.length === 1 && queryTokens[0].length >= 5) {
+      // 1. Match prioritário por Código de Veracidade
+      if (isSearchCode) {
+        if (codeColIdx !== -1 && values[codeColIdx]) {
+          if (values[codeColIdx].toUpperCase().includes(searchTerm)) {
+            matchedLine = line;
+            break;
+          }
+        } else if (line.toUpperCase().includes(searchTerm)) {
           matchedLine = line;
           break;
-        } else if (queryTokens.length >= 2 && matchedTokens.length >= 2) {
+        }
+        continue;
+      }
+
+      // 2. Match por CPF
+      if (isSearchCpf) {
+        const cleanSearchDigits = searchTerm.replace(/\D/g, '');
+        if (cpfColIdx !== -1 && values[cpfColIdx]) {
+          if (values[cpfColIdx].replace(/\D/g, '').includes(cleanSearchDigits)) {
+            matchedLine = line;
+            break;
+          }
+        } else if (line.replace(/\D/g, '').includes(cleanSearchDigits)) {
           matchedLine = line;
           break;
+        }
+        continue;
+      }
+
+      // 3. Match estrito por Nome do Aluno
+      if (searchTokens.length > 0) {
+        if (nameColIdx !== -1 && values[nameColIdx]) {
+          const studentNameNorm = normalizeText(values[nameColIdx]);
+          // Todos os tokens do termo pesquisado DEVEM constar no nome do aluno
+          const allTokensMatch = searchTokens.every((tok) => studentNameNorm.includes(tok));
+          if (allTokensMatch) {
+            matchedLine = line;
+            break;
+          }
+        } else {
+          const normLine = normalizeText(line);
+          const allTokensMatch = searchTokens.every((tok) => normLine.includes(tok));
+          if (allTokensMatch) {
+            matchedLine = line;
+            break;
+          }
         }
       }
     }
@@ -508,7 +675,7 @@ export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [
     if (matchedLine) break;
   }
 
-  // Se encontrou a linha de dados no banco, formata apenas ela
+  // Se encontrou a linha de dados correspondente, formata apenas ela
   if (matchedLine) {
     const isSemicolon = matchedLine.includes(';');
     const delim = isSemicolon ? ';' : ',';
@@ -527,13 +694,8 @@ export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [
     return `O banco de dados retornou: [${formattedData}]. Responda à dúvida do usuário com base apenas nisto.`;
   }
 
-  // Se for busca direta de aluno/código de veracidade e não houver correspondência
-  if (searchCode || searchCpfDigits || (queryTokens.length >= 2 && (lowerQuery.includes('aluno') || lowerQuery.includes('veracidade') || lowerQuery.includes('diploma') || lowerQuery.includes('certificado')))) {
-    const targetLabel = searchCode || searchCpfDigits || queryTokens.join(' ');
-    return `O banco de dados retornou: [Nenhum registro encontrado para a busca "${targetLabel}"]. Informe ao usuário que os dados solicitados não constam na base oficial de registros da instituição ou que pode haver divergência na grafia/código informado.`;
-  }
-
-  return null;
+  // Se o usuário buscou um aluno ou código específico e nada foi encontrado
+  return `O banco de dados retornou: [Nenhum registro encontrado para o termo pesquisado "${searchTerm}"]. Informe ao usuário com clareza que o aluno ou código consultado não consta no banco de dados e nos registros oficiais da instituição.`;
 }
 
 /**
@@ -1070,7 +1232,7 @@ export async function generateGeminiChatReply({
 
   // 2. NOVA ARQUITETURA DE BUSCA (PREVENÇÃO DE ESTOURO DE TOKENS - 429)
   // Consulta prévia pontual no banco de dados / documentos para extrair APENAS a linha de dados correspondente
-  const databaseQueryResult = queryOnDemandDatabaseRecord(
+  const databaseQueryResult = await queryOnDemandDatabaseRecord(
     optimizedUserMessage,
     learnedDocuments,
     student
