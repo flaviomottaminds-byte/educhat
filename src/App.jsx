@@ -3569,9 +3569,23 @@ export default function App() {
             });
           } catch (geminiErr) {
             console.warn('Aviso na chamada do Gemini:', geminiErr);
-            replyText =
-              geminiErr?.message ||
-              '⏳ Muitas consultas simultâneas ou arquivo muito extenso. Por favor, aguarde alguns segundos e tente novamente.';
+            replyText = '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
+          }
+
+          // 3. TRATAMENTO VISUAL DE ERROS GLOBAIS (Impedir log amarelo cru na tela do usuário)
+          if (
+            !replyText ||
+            replyText.includes('models/') ||
+            replyText.includes('is not found') ||
+            replyText.includes('404') ||
+            replyText.includes('429') ||
+            replyText.includes('500') ||
+            replyText.includes('GEMINI_ERROR') ||
+            replyText.includes('FetchError') ||
+            replyText.includes('Failed to fetch') ||
+            replyText.includes('Cannot read')
+          ) {
+            replyText = '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
           }
           console.log('🤖 [AI Chat] Resposta gerada pelo Gemini:', replyText.slice(0, 100) + '...');
         }

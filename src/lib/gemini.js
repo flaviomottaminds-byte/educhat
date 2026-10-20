@@ -4,8 +4,8 @@
 import { supabase } from './supabase';
 
 const GEMINI_ENDPOINT_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-const PRIMARY_GEMINI_MODEL = 'gemini-2.0-flash';
-const FALLBACK_GEMINI_MODEL = 'gemini-1.5-flash';
+const PRIMARY_GEMINI_MODEL = 'gemini-2.5-flash';
+const FALLBACK_GEMINI_MODEL = 'gemini-flash-latest';
 
 export function getGeminiApiKey() {
   if (typeof window === 'undefined') return '';
@@ -398,7 +398,7 @@ const MAX_HISTORY_TURN_CHARS = 700;
 const MAX_HISTORY_TURNS = 6;
 
 export const FRIENDLY_RATE_LIMIT_MESSAGE =
-  '⏳ Muitas consultas simultâneas ou arquivo muito extenso. Por favor, aguarde alguns segundos e tente novamente.';
+  '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
 
 const PT_STOPWORDS = new Set([
   'de', 'da', 'do', 'das', 'dos', 'em', 'na', 'no', 'nas', 'nos', 'para', 'por', 'com', 'sem',
@@ -409,6 +409,132 @@ const PT_STOPWORDS = new Set([
   'ola', 'bom', 'dia', 'boa', 'tarde', 'noite', 'por', 'favor', 'preciso', 'quero', 'saber',
   'me', 'te', 'ele', 'ela', 'nos', 'eles', 'elas', 'meu', 'minha', 'seu', 'sua'
 ]);
+
+/**
+ * 2. NOVA ARQUITETURA DE BUSCA SOB DEMANDA (PREVENÇÃO DE ESTOURO DE TOKENS - 429)
+ * Quando o usuário perguntar sobre um aluno, código de veracidade, certificado ou diploma,
+ * o sistema realiza um SELECT/Query pontual no banco de dados / documentos estruturados.
+ * Retorna APENAS a linha correspondente:
+ * "O banco de dados retornou: [Dados do Aluno X]. Responda à dúvida do usuário com base apenas nisto."
+ */
+export function queryOnDemandDatabaseRecord(queryText = '', learnedDocuments = [], studentContext = null) {
+  if (!queryText || typeof queryText !== 'string') return null;
+
+  const rawQuery = queryText.trim();
+  const lowerQuery = normalizeText(rawQuery);
+
+  const searchKeywords = [
+    'aluno', 'aluna', 'certificado', 'diploma', 'veracidade', 'verificar', 'autenticidade',
+    'codigo', 'código', 'cpf', 'matricula', 'matrícula', 'aprovado', 'aprovada', 'conclusao',
+    'conclusão', 'facob', 'certificacao', 'certificação', 'declaracao', 'declaração', 'extensao', 'extensão',
+    'curso', 'polo', 'status'
+  ];
+
+  const hasSearchIntent = searchKeywords.some((kw) => lowerQuery.includes(kw)) || Boolean(studentContext);
+  const codeMatch = rawQuery.match(/FACOB-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i) || rawQuery.match(/[A-Z0-9]{4,6}-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i);
+  const cpfDigitsMatch = rawQuery.replace(/\D/g, '').match(/\d{9,11}/);
+
+  if (!hasSearchIntent && !codeMatch && !cpfDigitsMatch) {
+    return null;
+  }
+
+  const searchCode = codeMatch ? codeMatch[0].toUpperCase() : null;
+  const searchCpfDigits = cpfDigitsMatch ? cpfDigitsMatch[0] : null;
+
+  const queryTokens = lowerQuery
+    .replace(/[^\w\s]/gi, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 3 && !PT_STOPWORDS.has(w) && !searchKeywords.includes(w));
+
+  const candidateDocs = (learnedDocuments || []).filter((doc) => {
+    if (!doc) return false;
+    const content = doc.content || doc.textContent || '';
+    const title = (doc.title || '').toLowerCase();
+    return (
+      title.endsWith('.csv') ||
+      title.endsWith('.tsv') ||
+      content.includes(';') ||
+      content.includes('Aluno;CPF') ||
+      content.includes('"Aluno","CPF"') ||
+      content.includes('Código Verificação') ||
+      content.includes('Codigo Verificacao') ||
+      content.includes('Nome do Curso')
+    );
+  });
+
+  let matchedLine = null;
+  let headerCols = [];
+
+  for (const doc of candidateDocs) {
+    const content = doc.content || doc.textContent || '';
+    const lines = content.split(/\r?\n/).filter(Boolean);
+    if (lines.length <= 1) continue;
+
+    const rawHeader = lines[0];
+    const isSemicolon = rawHeader.includes(';');
+    const delim = isSemicolon ? ';' : ',';
+    headerCols = rawHeader.split(delim).map((c) => c.replace(/^["']|["']$/g, '').trim());
+
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      // Match prioritário por Código de Veracidade
+      if (searchCode && line.toUpperCase().includes(searchCode)) {
+        matchedLine = line;
+        break;
+      }
+
+      // Match por CPF
+      if (searchCpfDigits && line.replace(/\D/g, '').includes(searchCpfDigits)) {
+        matchedLine = line;
+        break;
+      }
+
+      // Match por Tokens de Nome
+      if (queryTokens.length > 0) {
+        const normLine = normalizeText(line);
+        const matchedTokens = queryTokens.filter((token) => normLine.includes(token));
+        if (queryTokens.length === 1 && matchedTokens.length === 1 && queryTokens[0].length >= 5) {
+          matchedLine = line;
+          break;
+        } else if (queryTokens.length >= 2 && matchedTokens.length >= 2) {
+          matchedLine = line;
+          break;
+        }
+      }
+    }
+
+    if (matchedLine) break;
+  }
+
+  // Se encontrou a linha de dados no banco, formata apenas ela
+  if (matchedLine) {
+    const isSemicolon = matchedLine.includes(';');
+    const delim = isSemicolon ? ';' : ',';
+    const values = matchedLine.split(delim).map((v) => v.replace(/^["']|["']$/g, '').trim());
+
+    const formattedPairs = [];
+    for (let i = 0; i < Math.min(headerCols.length, values.length); i++) {
+      const colName = headerCols[i];
+      const val = values[i];
+      if (colName && val && val !== '—') {
+        formattedPairs.push(`${colName}: ${val}`);
+      }
+    }
+
+    const formattedData = formattedPairs.join(' | ') || matchedLine;
+    return `O banco de dados retornou: [${formattedData}]. Responda à dúvida do usuário com base apenas nisto.`;
+  }
+
+  // Se for busca direta de aluno/código de veracidade e não houver correspondência
+  if (searchCode || searchCpfDigits || (queryTokens.length >= 2 && (lowerQuery.includes('aluno') || lowerQuery.includes('veracidade') || lowerQuery.includes('diploma') || lowerQuery.includes('certificado')))) {
+    const targetLabel = searchCode || searchCpfDigits || queryTokens.join(' ');
+    return `O banco de dados retornou: [Nenhum registro encontrado para a busca "${targetLabel}"]. Informe ao usuário que os dados solicitados não constam na base oficial de registros da instituição ou que pode haver divergência na grafia/código informado.`;
+  }
+
+  return null;
+}
 
 /**
  * Detecta se um erro retornado pela API ou rede refere-se a Rate Limit / Cota Excedida (HTTP 429)
@@ -636,7 +762,8 @@ export function buildSystemInstruction({
   slas = [],
   customPrompt = '',
   department = 'Geral',
-  userName = 'Colaborador'
+  userName = 'Colaborador',
+  databaseQueryResult = null
 }) {
   const extraContext = [
     department,
@@ -759,16 +886,35 @@ export function buildSystemInstruction({
         prompt += `Prazos: ${doc.deadlines.slice(0, 5).join(' | ').slice(0, 250)}\n`;
       }
       const rawText = doc.content || doc.textContent;
-      if (rawText) {
+      const isBulkTableDoc = Boolean(
+        doc.title?.toLowerCase().endsWith('.csv') ||
+        doc.title?.toLowerCase().endsWith('.tsv') ||
+        (rawText && (
+          rawText.includes('Aluno;CPF') ||
+          rawText.includes('Código Verificação') ||
+          rawText.includes('"Aluno","CPF"') ||
+          rawText.length > 40000
+        ))
+      );
+
+      // REGRA ESTRITA: É expressamente proibido enviar a base inteira de "códigos de veracidade" ou tabelas CSV volumosas no system_instruction.
+      // Tabelas volumosas são consultadas exclusivamente sob demanda (SELECT pontual).
+      if (!isBulkTableDoc && rawText) {
         const relevantExcerpt = extractRelevantContextFromText(rawText, keywords, {
-          maxChars: 2000,
-          maxRows: 30,
+          maxChars: 1200,
+          maxRows: 15,
           department
         });
         prompt += `Conteúdo/Trecho Oficial:\n${relevantExcerpt}\n`;
       }
       prompt += `\n`;
     });
+  }
+
+  // Injeção estrita da linha retornada pelo banco de dados (RAG pontual)
+  if (databaseQueryResult) {
+    prompt += `=== RETORNO DA CONSULTA PONTUAL AO BANCO DE DADOS ===\n`;
+    prompt += `${databaseQueryResult}\n\n`;
   }
 
   prompt += `=== LEGISLAÇÃO E DIRETRIZES OFICIAIS DO MEC ===\n`;
@@ -867,21 +1013,14 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
       errorDetail = await response.text();
     }
 
-    // Tratamento Elegante de Rate Limit (Erro 429 / Quota Exceeded / 250k tokens)
-    if (isRateLimitError(response.status, errorDetail)) {
-      const rateErr = new Error(FRIENDLY_RATE_LIMIT_MESSAGE);
-      rateErr.isRateLimit = true;
-      rateErr.status = 429;
-      throw rateErr;
-    }
-
-    throw new Error(`Não foi possível concluir a consulta no momento (${response.status}). Tente novamente em instantes.`);
+    console.warn(`[Gemini HTTP Error ${response.status}]:`, errorDetail);
+    throw new Error(FRIENDLY_RATE_LIMIT_MESSAGE);
   }
 
   const data = await response.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
-    throw new Error('A IA processou a solicitação, mas retornou uma resposta vazia. Por favor, reformule sua pergunta.');
+    throw new Error(FRIENDLY_RATE_LIMIT_MESSAGE);
   }
   return text.trim();
 }
@@ -909,9 +1048,7 @@ export async function generateGeminiChatReply({
   }
 
   if (!apiKey) {
-    throw new Error(
-      'Chave da API Gemini não configurada. Clique em "Cérebro da IA (Regras & VIPs)" no menu lateral e insira sua Chave da API do Google Gemini para ativar a inteligência real.'
-    );
+    return 'Chave da API Gemini não configurada. Clique em "Cérebro da IA (Regras & VIPs)" no menu lateral e insira sua Chave da API do Google Gemini para ativar a inteligência real.';
   }
 
   // Higieniza a mensagem atual e extrai apenas trechos/linhas relevantes caso o usuário tenha colado uma planilha/documento extenso
@@ -931,6 +1068,14 @@ export async function generateGeminiChatReply({
         })
       : rawUserMessage || 'Analise o contexto e oriente o próximo passo.';
 
+  // 2. NOVA ARQUITETURA DE BUSCA (PREVENÇÃO DE ESTOURO DE TOKENS - 429)
+  // Consulta prévia pontual no banco de dados / documentos para extrair APENAS a linha de dados correspondente
+  const databaseQueryResult = queryOnDemandDatabaseRecord(
+    optimizedUserMessage,
+    learnedDocuments,
+    student
+  );
+
   const systemInstruction = buildSystemInstruction({
     query: optimizedUserMessage,
     student,
@@ -940,7 +1085,8 @@ export async function generateGeminiChatReply({
     slas,
     customPrompt,
     department,
-    userName
+    userName,
+    databaseQueryResult
   });
 
   const contents = [];
@@ -951,7 +1097,8 @@ export async function generateGeminiChatReply({
       if (
         h.text.includes('Erro na API Gemini') ||
         h.text.includes('free_tier_input_token_count') ||
-        h.text.includes('Muitas consultas simultâneas')
+        h.text.includes('Muitas consultas simultâneas') ||
+        h.text.includes('sistemas estão sobrecarregados')
       ) {
         return false;
       }
@@ -984,9 +1131,14 @@ export async function generateGeminiChatReply({
     });
   });
 
+  // Injete no prompt do Gemini APENAS a linha de dados que o banco retornar
+  const userTurnText = databaseQueryResult
+    ? `${databaseQueryResult}\n\n${optimizedUserMessage}`
+    : optimizedUserMessage;
+
   contents.push({
     role: 'user',
-    parts: [{ text: optimizedUserMessage }]
+    parts: [{ text: userTurnText }]
   });
 
   try {
@@ -995,15 +1147,13 @@ export async function generateGeminiChatReply({
       contents,
       systemInstruction,
       generationConfig: {
-        temperature: 0.5,
+        temperature: 0.35,
         maxOutputTokens: 1500
       }
     });
   } catch (err) {
-    if (err?.isRateLimit || isRateLimitError(err?.status, err?.message)) {
-      return FRIENDLY_RATE_LIMIT_MESSAGE;
-    }
-    throw err;
+    console.warn('[Gemini AI] Erro interceptado:', err);
+    return FRIENDLY_RATE_LIMIT_MESSAGE;
   }
 }
 

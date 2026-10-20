@@ -77,10 +77,16 @@ export default function AICopilotModal({
       department: channel?.department || 'Geral'
     })
       .then((res) => {
-        if (!cancelled) setGeminiInsight(res);
+        if (!cancelled) {
+          if (!res || res.includes('models/') || res.includes('is not found') || res.includes('404') || res.includes('429') || res.includes('500') || res.includes('GEMINI_ERROR')) {
+            setGeminiInsight('⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.');
+          } else {
+            setGeminiInsight(res);
+          }
+        }
       })
       .catch((err) => {
-        if (!cancelled) setGeminiInsight(`⚠️ ${err.message}`);
+        if (!cancelled) setGeminiInsight('⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.');
       })
       .finally(() => {
         if (!cancelled) setLoadingInsight(false);
