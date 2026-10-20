@@ -58,18 +58,18 @@ export function countUnreadMessages(messageList, currentUserId, lastReadTimestam
       if (isExplicitRead) return false;
 
       // Verifica se o usuário logado já consta no array read_by / readBy da mensagem
-      const readByList = Array.isArray(m.read_by) ? m.read_by : (Array.isArray(m.readBy) ? m.readBy : null);
-      if (readByList && currentUserId && readByList.includes(currentUserId)) {
+      const readByList = Array.isArray(m?.read_by) ? m.read_by : (Array.isArray(m?.readBy) ? m.readBy : []);
+      if (currentUserId && (readByList || []).includes(currentUserId)) {
         return false;
       }
 
       // Verifica tag embutida <!-- READ_BY:[...] --> no texto
-      if (typeof m.text === 'string' && m.text.includes('<!-- READ_BY:')) {
+      if (typeof m?.text === 'string' && m.text.includes('<!-- READ_BY:')) {
         try {
           const match = m.text.match(/<!-- READ_BY:([\s\S]*?) -->/);
           if (match && match[1]) {
             const list = JSON.parse(match[1]);
-            if (Array.isArray(list) && currentUserId && list.includes(currentUserId)) {
+            if (currentUserId && Array.isArray(list) && list.includes(currentUserId)) {
               return false;
             }
           }

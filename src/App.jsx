@@ -1011,16 +1011,20 @@ export default function App() {
     }
 
     let readBy = [];
-    if (Array.isArray(m.read_by)) {
-      readBy = m.read_by;
-    } else if (typeof m.read_by === 'string') {
+    if (Array.isArray(m?.read_by)) {
+      readBy = [...m.read_by];
+    } else if (typeof m?.read_by === 'string') {
       try {
-        readBy = JSON.parse(m.read_by);
+        const parsed = JSON.parse(m.read_by);
+        if (Array.isArray(parsed)) readBy = parsed;
+        else readBy = m.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
       } catch {
         readBy = m.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
       }
     }
-    if (cleanText.includes('<!-- READ_BY:')) {
+    if (!Array.isArray(readBy)) readBy = [];
+
+    if (typeof cleanText === 'string' && cleanText.includes('<!-- READ_BY:')) {
       const match = cleanText.match(/<!-- READ_BY:([\s\S]+?) -->/);
       if (match) {
         try {
@@ -1177,17 +1181,20 @@ export default function App() {
           if (Array.isArray(channelMsgs) && channelMsgs.length > 0) {
             channelMsgs.forEach((row) => {
               let currentReadBy = [];
-              if (Array.isArray(row.read_by)) {
+              if (Array.isArray(row?.read_by)) {
                 currentReadBy = [...row.read_by];
-              } else if (typeof row.read_by === 'string') {
+              } else if (typeof row?.read_by === 'string') {
                 try {
-                  currentReadBy = JSON.parse(row.read_by);
+                  const parsed = JSON.parse(row.read_by);
+                  if (Array.isArray(parsed)) currentReadBy = parsed;
+                  else currentReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
                 } catch {
                   currentReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
                 }
               }
+              if (!Array.isArray(currentReadBy)) currentReadBy = [];
 
-              if (row.text && row.text.includes('<!-- READ_BY:')) {
+              if (typeof row?.text === 'string' && row.text.includes('<!-- READ_BY:')) {
                 const match = row.text.match(/<!-- READ_BY:([\s\S]+?) -->/);
                 if (match) {
                   try {
@@ -1199,7 +1206,7 @@ export default function App() {
                 }
               }
 
-              if (!currentReadBy.includes(currentUserId)) {
+              if (currentUserId && !currentReadBy.includes(currentUserId)) {
                 currentReadBy.push(currentUserId);
                 let updatedText = row.text || '';
                 const readByTag = `<!-- READ_BY:${JSON.stringify(currentReadBy)} -->`;
@@ -1394,8 +1401,8 @@ export default function App() {
             if (!isFromContact) return m;
 
             // Para canal ou DM, garante que o currentUser.id conste em read_by / readBy
-            let readByList = Array.isArray(m.read_by) ? [...m.read_by] : (Array.isArray(m.readBy) ? [...m.readBy] : []);
-            if (!readByList.includes(currentUserId)) {
+            let readByList = Array.isArray(m?.read_by) ? [...m.read_by] : (Array.isArray(m?.readBy) ? [...m.readBy] : []);
+            if (currentUserId && !readByList.includes(currentUserId)) {
               readByList.push(currentUserId);
             }
 
@@ -1946,8 +1953,8 @@ export default function App() {
           const isFromMe = m.sender_id === activeUser.id;
 
           // Verifica se o usuário ativo já consta no array read_by / readBy
-          const readByList = Array.isArray(parsedMsg.readBy) ? parsedMsg.readBy : (Array.isArray(m.read_by) ? m.read_by : []);
-          const hasReadBy = readByList.includes(activeUser.id);
+          const readByList = Array.isArray(parsedMsg?.readBy) ? parsedMsg.readBy : (Array.isArray(m?.read_by) ? m.read_by : []);
+          const hasReadBy = Boolean(activeUser?.id && (readByList || []).includes(activeUser.id));
 
           const isExplicitRead =
             m.is_read === true ||
@@ -3117,16 +3124,20 @@ export default function App() {
           }
 
           let incomingReadBy = [];
-          if (Array.isArray(row.read_by)) {
-            incomingReadBy = row.read_by;
-          } else if (typeof row.read_by === 'string') {
+          if (Array.isArray(row?.read_by)) {
+            incomingReadBy = [...row.read_by];
+          } else if (typeof row?.read_by === 'string') {
             try {
-              incomingReadBy = JSON.parse(row.read_by);
+              const parsed = JSON.parse(row.read_by);
+              if (Array.isArray(parsed)) incomingReadBy = parsed;
+              else incomingReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
             } catch {
               incomingReadBy = row.read_by.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
             }
           }
-          if (cleanText.includes('<!-- READ_BY:')) {
+          if (!Array.isArray(incomingReadBy)) incomingReadBy = [];
+
+          if (typeof cleanText === 'string' && cleanText.includes('<!-- READ_BY:')) {
             const match = cleanText.match(/<!-- READ_BY:([\s\S]+?) -->/);
             if (match) {
               try {
@@ -3145,8 +3156,9 @@ export default function App() {
               ...prevMessages,
               [cKey]: list.map((m) => {
                 if (m.id === row.id) {
+                  const prevReadBy = Array.isArray(m?.read_by) ? m.read_by : (Array.isArray(m?.readBy) ? m.readBy : []);
                   const combinedReadBy = Array.from(
-                    new Set([...(m.read_by || m.readBy || []), ...incomingReadBy])
+                    new Set([...prevReadBy, ...incomingReadBy])
                   );
                   return {
                     ...m,
