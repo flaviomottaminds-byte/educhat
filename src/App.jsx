@@ -61,6 +61,7 @@ import {
   normalizeName,
   canUserViewChat,
   canUserViewTask,
+  canUserViewChannel,
   isTaskAssignedToUser,
   isTaskRequestedByUser
 } from './lib/portfolioAccess';
@@ -1583,32 +1584,81 @@ export default function App() {
     return () => window.removeEventListener('focus', handleWindowFocus);
   }, []);
 
-  // Helper para processar mensagem recebida, disparar som Web Audio API e atualizar contadores
+  // Helper para processar mensagem recebida, separar estritamente Canal vs DM vs WhatsApp e atualizar contadores
   const handleIncomingNotification = (msg, cKey) => {
     const activeUser = currentUserRef.current || currentUser;
     const currentUserId = activeUser?.id || 'u1';
-    if (msg.senderId === currentUserId || msg.senderId === 'system') return;
+    if (!msg || msg.senderId === currentUserId || msg.senderId === 'system') return;
 
-    // Trava de Privacidade: Se for conversa privada 1 a 1 (DM), só notifica os dois participantes
-    if (cKey.startsWith('dm-')) {
-      const parts = cKey.replace('dm-', '').split('-');
-      if (parts.length >= 2) {
-        const id1 = parts[0];
-        const id2 = parts[1];
-        if (currentUserId !== id1 && currentUserId !== id2) {
-          return;
-        }
+    const rawKey = String(cKey || msg.chat_id || msg.channel_id || '').trim();
+    const cleanRaw = rawKey.replace(/^#/, '').toLowerCase();
+
+    // 1. Identificação Estrita de Tipo: Canal (Grupo), DM (Chat Direto 1 a 1) ou WhatsApp
+    const isChannel = Boolean(
+      msg.channel_id ||
+      msg.channelId ||
+      rawKey.startsWith('c-') ||
+      rawKey.startsWith('#') ||
+      ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao'].includes(cleanRaw)
+    );
+
+    const isWhatsApp = Boolean(
+      !isChannel &&
+      (rawKey.startsWith('wa-') ||
+        rawKey.includes('@s.whatsapp.net') ||
+        rawKey.includes('@c.us') ||
+        rawKey.includes('@lid') ||
+        /^\+?\d{10,15}$/.test(rawKey))
+    );
+
+    const isDm = !isChannel && !isWhatsApp;
+
+    // 2. Trava de Visibilidade e Permissão em Canais de Grupo:
+    // Se o usuário não tem permissão para visualizar o canal (ex: Gislaine em #comercial),
+    // NUNCA incrementa badge e NUNCA dispara notificação!
+    if (isChannel) {
+      const canonicalChannelId = rawKey.startsWith('c-') ? rawKey : `c-${cleanRaw}`;
+      if (!canUserViewChannel(canonicalChannelId, activeUser, channelsRef.current)) {
+        return;
       }
     }
 
-    // Trava de Visibilidade WhatsApp por Departamento e Atribuição:
-    // O atendente só é notificado se o chat estiver atribuído a ele ou na fila do seu departamento
-    if (cKey.startsWith('wa-')) {
+    // 3. Trava Estrita de Privacidade e Destinatário em DMs (1 a 1) - Prevenção de Receiver Leakage:
+    // Mensagem direta SÓ pode ser notificada se o usuário ativo for EXATAMENTE um dos dois participantes
+    // E especificamente o destinatário da mensagem (não o remetente).
+    if (isDm) {
+      let isRecipient = false;
+      let partnerId = null;
+
+      if (rawKey.startsWith('dm-')) {
+        const parts = rawKey.replace('dm-', '').split('-').filter(Boolean);
+        if (parts.length >= 2) {
+          if (parts.includes(currentUserId) && msg.senderId !== currentUserId) {
+            isRecipient = true;
+            partnerId = parts[0] === currentUserId ? parts[1] : parts[0];
+          }
+        }
+      } else if (msg.recipientId || msg.recipient_id) {
+        const rId = msg.recipientId || msg.recipient_id;
+        if (rId === currentUserId && msg.senderId !== currentUserId) {
+          isRecipient = true;
+          partnerId = msg.senderId;
+        }
+      }
+
+      if (!isRecipient) {
+        // Mensagem direta não é endereçada a este usuário: ignora 100%!
+        return;
+      }
+    }
+
+    // 4. Trava de Visibilidade WhatsApp por Departamento e Atribuição:
+    if (isWhatsApp) {
       if (!hasFullPortfolioAccess(activeUser)) {
-        const existing = (whatsAppContactsRef.current || []).find((c) => c.id === cKey);
-        const cachedAsgn = assignmentsCacheRef.current[cKey];
+        const existing = (whatsAppContactsRef.current || []).find((c) => c.id === rawKey);
+        const cachedAsgn = assignmentsCacheRef.current[rawKey];
         const contactToCheck = existing || {
-          id: cKey,
+          id: rawKey,
           assignee: cachedAsgn?.assignee,
           assignees: cachedAsgn?.assignees,
           department: cachedAsgn?.department,
@@ -1620,39 +1670,114 @@ export default function App() {
       }
     }
 
-    // NOTIFICAÇÃO 100% VISUAL: Áudio totalmente desativado a pedido da diretoria
-
     const currentKey = getChatKey(activeChatRef.current, currentUserId);
     const isCurrentActive =
-      (cKey === currentKey || activeChatRef.current?.id === cKey) && !document.hidden;
+      (rawKey === currentKey || activeChatRef.current?.id === rawKey) && !document.hidden;
 
     if (isCurrentActive) {
       markMessagesAsRead(activeChatRef.current);
-    } else {
-      let targetBadgeKey = cKey;
-      let notificationTitle = msg.senderName || 'Nova mensagem';
-      if (cKey.startsWith('dm-')) {
-        const parts = cKey.replace('dm-', '').split('-');
-        targetBadgeKey = parts[0] === currentUserId ? parts[1] : parts[0];
-      } else if (cKey.startsWith('c-')) {
-        targetBadgeKey = cKey;
-        const channelName = cKey.replace('c-', '');
-        notificationTitle = `#${channelName} • ${msg.senderName}`;
-      }
+      return;
+    }
 
+    // =========================================================================
+    // ROTEAMENTO E ATUALIZAÇÃO SEGREGADA DE BADGES (SEM CONTAMINAÇÃO):
+    // =========================================================================
+    if (isChannel) {
+      const canonicalChannelId = rawKey.startsWith('c-') ? rawKey : `c-${cleanRaw}`;
+      const channelName = canonicalChannelId.replace(/^c-/, '');
+
+      // Atualiza funcionalmente o estado do canal
+      setChannels((prevChannels) =>
+        prevChannels.map((c) => {
+          if (c.id === canonicalChannelId || c.name === channelName) {
+            const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
+            return { ...c, unread: currentUnread + 1, unread_count: currentUnread + 1 };
+          }
+          return c;
+        })
+      );
+
+      // Incrementa badge de não lido estritamente para o canal (NUNCA para o remetente nem para DMs!)
       setUnreadCounts((prev) => {
-        const currentCount = Number(prev[targetBadgeKey] || prev[cKey] || 0);
+        const currentCount = Number(prev[canonicalChannelId] || 0);
         const next = {
           ...prev,
-          [targetBadgeKey]: currentCount + 1,
-          [cKey]: currentCount + 1
+          [canonicalChannelId]: currentCount + 1
         };
         const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
         document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
         return next;
       });
 
-      notifyIncomingMessage(notificationTitle, msg.text || 'Novo anexo/áudio recebido');
+      // Notificação nativa e piscar da barra indicando CLARAMENTE o canal
+      notifyIncomingMessage(`#${channelName} • ${msg.senderName}`, msg.text || 'Novo anexo/áudio recebido', {
+        isChannel: true,
+        channelName,
+        senderName: msg.senderName
+      });
+    } else if (isDm) {
+      let partnerId = msg.senderId;
+      if (rawKey.startsWith('dm-')) {
+        const parts = rawKey.replace('dm-', '').split('-').filter(Boolean);
+        partnerId = parts[0] === currentUserId ? parts[1] : parts[0];
+      }
+      const dmKey = `dm-${[currentUserId, partnerId].sort().join('-')}`;
+
+      // Atualiza funcionalmente o colaborador do chat direto
+      setCollaborators((prev) =>
+        prev.map((u) => {
+          if (u.id === partnerId) {
+            const cur = Number(u.unread_count ?? u.unread ?? 0);
+            return { ...u, unread: cur + 1, unread_count: cur + 1 };
+          }
+          return u;
+        })
+      );
+
+      // Incrementa badge de DM apenas para o parceiro
+      setUnreadCounts((prev) => {
+        const cur = Number(prev[partnerId] || 0);
+        const next = {
+          ...prev,
+          [partnerId]: cur + 1,
+          [dmKey]: cur + 1
+        };
+        const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+        document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
+        return next;
+      });
+
+      notifyIncomingMessage(`Mensagem Direta de ${msg.senderName}`, msg.text || 'Novo anexo/áudio recebido', {
+        isDm: true,
+        senderName: msg.senderName
+      });
+    } else if (isWhatsApp) {
+      // Atualiza unreadCounts e contatos do WhatsApp
+      setWhatsAppContacts((prevContacts) =>
+        prevContacts.map((c) => {
+          if (c.id === rawKey) {
+            const cur = Number(c.unread_count ?? c.unread ?? 0);
+            return { ...c, unread: cur + 1, unread_count: cur + 1 };
+          }
+          return c;
+        })
+      );
+
+      setUnreadCounts((prev) => {
+        const cur = Number(prev[rawKey] || 0);
+        const next = {
+          ...prev,
+          [rawKey]: cur + 1
+        };
+        const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+        document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
+        return next;
+      });
+
+      notifyIncomingMessage(msg.senderName || 'WhatsApp Aluno', msg.text || 'Nova mensagem recebida', {
+        isWhatsApp: true,
+        senderName: msg.senderName
+      });
     }
   };
 
@@ -1692,14 +1817,9 @@ export default function App() {
           }
         }
 
-        // Se NÃO pertencer à tela ativa atual, apenas atualiza Sidebar e notificação de background
+        // Se NÃO pertencer à tela ativa atual, apenas atualiza Sidebar e notificação de background de forma estritamente isolada
         if (!belongsToActiveScreen) {
           if (incomingMsg.senderId && incomingMsg.senderId !== currentUserId && incomingMsg.senderId !== 'system') {
-            setUnreadCounts((prev) => ({
-              ...prev,
-              [incomingMsg.senderId]: (prev[incomingMsg.senderId] || 0) + 1,
-              ...(chatKey ? { [chatKey]: (prev[chatKey] || 0) + 1 } : {})
-            }));
             handleIncomingNotification(incomingMsg, chatKey);
           }
           return;
@@ -2018,8 +2138,11 @@ export default function App() {
           const isRead = isExplicitRead || hasReadBy;
 
           if (!isFromMe && !isRead && key !== currentActiveKey) {
-            // Se for canal, verifica contra o lastReadAt do canal
+            // Se for canal, valida permissão de departamento e verifica contra o lastReadAt do canal
             if (key.startsWith('c-')) {
+              if (!canUserViewChannel(key, activeUser, channelsRef.current)) {
+                return;
+              }
               const stripped = key.replace(/^c-/, '');
               const chReadAt =
                 channelReadReceiptsRef.current?.[key] ||
@@ -2040,9 +2163,13 @@ export default function App() {
               }
             }
 
-            // Se for DM, verifica contra o dmReadAt
+            // Se for DM, valida estritamente se o usuário logado é participante e verifica contra o dmReadAt
             if (key.startsWith('dm-')) {
               const parts = key.replace('dm-', '').split('-');
+              if (!parts.includes(activeUser.id)) {
+                // DM entre outros usuários: ignora completamente
+                return;
+              }
               const partnerId = parts[0] === activeUser.id ? parts[1] : parts[0];
               const dmReadAt = dmReadReceiptsRef.current?.[partnerId] || dmReadReceiptsRef.current?.[key];
               if (dmReadAt) {
@@ -2674,11 +2801,34 @@ export default function App() {
             return;
           }
 
-          // Trava de privacidade estrita para DMs 1-a-1:
-          // Se for DM e o usuário logado não for o remetente nem o destinatário, ignora completamente
-          if (cKey.startsWith('dm-')) {
-            const parts = cKey.replace('dm-', '').split('-');
-            const isUserInvolved = parts.includes(currentUserId) || row.sender_id === currentUserId || row.recipient_id === currentUserId;
+          // 1. Identificação Estrita de Tipo de Conversa e Blindagem de Permissão / Privacidade
+          const isChannelRow = Boolean(
+            row.channel_id ||
+            cKey.startsWith('c-') ||
+            cKey.startsWith('#') ||
+            ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao'].includes(
+              String(row.chat_id || cKey).replace(/^[c#]-?/, '').toLowerCase()
+            )
+          );
+
+          // Trava de Visibilidade de Canais: se o usuário não tem permissão para o canal (ex: Gislaine em #comercial), descarta
+          if (isChannelRow) {
+            const channelId = cKey.startsWith('c-') ? cKey : `c-${String(row.chat_id || cKey).replace(/^[c#]-?/, '')}`;
+            if (!canUserViewChannel(channelId, activeUser, channelsRef.current)) {
+              return;
+            }
+          }
+
+          // Trava de Privacidade e Destinatário em DMs 1-a-1: se o usuário logado não for participante, descarta
+          const isDmRow = !isChannelRow && !cKey.startsWith('wa-') && (cKey.startsWith('dm-') || Boolean(row.recipient_id));
+          if (isDmRow) {
+            let isUserInvolved = false;
+            if (cKey.startsWith('dm-')) {
+              const parts = cKey.replace('dm-', '').split('-').filter(Boolean);
+              isUserInvolved = parts.includes(currentUserId);
+            } else if (row.recipient_id) {
+              isUserInvolved = row.recipient_id === currentUserId || row.sender_id === currentUserId;
+            }
             if (!isUserInvolved) {
               return;
             }
@@ -2686,7 +2836,7 @@ export default function App() {
 
           const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
 
-          // 1. FILTRO ESTRITO NO LISTENER DE REALTIME:
+          // 2. FILTRO ESTRITO NO LISTENER DE REALTIME:
           // Verifica se o payload.new pertence exatamente à conversa que está aberta na tela
           let isCurrentActive = false;
           if (currentActiveChat && !document.hidden) {
@@ -2714,49 +2864,12 @@ export default function App() {
             }
           }
 
-          // 2. ATUALIZAÇÃO EXCLUSIVA DE SIDEBAR (BACKGROUND):
+          // 3. ATUALIZAÇÃO EXCLUSIVA DE SIDEBAR (BACKGROUND):
           // Se a mensagem nova for de um contato diferente do que está aberto,
-          // ela NÃO deve ir para o estado messages. O sistema deve apenas atualizar o estado da Sidebar.
+          // ela NÃO deve ir para o estado messages. O sistema atualiza o estado via handleIncomingNotification de forma isolada.
           if (!isCurrentActive) {
             if (row.sender_id !== currentUserId && row.sender_id !== 'system') {
-              const senderKey = row.sender_id;
-              if (senderKey) {
-                setUnreadCounts((prev) => ({
-                  ...prev,
-                  [senderKey]: (prev[senderKey] || 0) + 1,
-                  ...(row.chat_id ? { [row.chat_id]: (prev[row.chat_id] || 0) + 1 } : {})
-                }));
-              }
-
-              if (cKey.startsWith('c-')) {
-                setChannels((prevChannels) =>
-                  prevChannels.map((c) => {
-                    if (c.id === cKey || c.name === cKey.replace(/^c-/, '')) {
-                      const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
-                      return { ...c, unread: currentUnread + 1, unread_count: currentUnread + 1 };
-                    }
-                    return c;
-                  })
-                );
-                setUnreadCounts((prev) => ({
-                  ...prev,
-                  [cKey]: (prev[cKey] || 0) + 1
-                }));
-              }
-
-              if (cKey.startsWith('wa-')) {
-                setWhatsAppContacts((prevContacts) =>
-                  prevContacts.map((c) => {
-                    if (c.id === cKey || c.id === row.chat_id) {
-                      const currentUnread = Number(c.unread_count ?? c.unread ?? 0);
-                      return { ...c, unread: currentUnread + 1, unread_count: currentUnread + 1 };
-                    }
-                    return c;
-                  })
-                );
-              }
-
-              handleIncomingNotification(incoming, cKey);
+              handleIncomingNotification(incoming, row.chat_id || cKey);
             }
 
             // Encerra imediatamente sem contaminar o estado de mensagens da conversa ativa
@@ -3402,6 +3515,39 @@ export default function App() {
           latestRows.forEach((row) => {
             if (!row || !row.chat_id) return;
             const cKey = normalizeChatKey(row.chat_id, currentUserId);
+
+            // Validação de privacidade e visibilidade:
+            // 1. Se for canal de grupo: valida permissão de departamento (ex: bloqueia #comercial para Gislaine)
+            const isChannel = Boolean(
+              cKey.startsWith('c-') ||
+              row.channel_id ||
+              cKey.startsWith('#') ||
+              ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao'].includes(
+                String(row.chat_id || cKey).replace(/^[c#]-?/, '').toLowerCase()
+              )
+            );
+            if (isChannel) {
+              const chId = cKey.startsWith('c-') ? cKey : `c-${String(row.chat_id || cKey).replace(/^[c#]-?/, '')}`;
+              if (!canUserViewChannel(chId, activeUser, channelsRef.current)) {
+                return;
+              }
+            }
+
+            // 2. Se for DM (1 a 1): valida se o usuário ativo é participante
+            const isDm = !isChannel && !cKey.startsWith('wa-') && (cKey.startsWith('dm-') || Boolean(row.recipient_id));
+            if (isDm) {
+              let isUserInvolved = false;
+              if (cKey.startsWith('dm-')) {
+                const parts = cKey.replace('dm-', '').split('-').filter(Boolean);
+                isUserInvolved = parts.includes(currentUserId);
+              } else if (row.recipient_id) {
+                isUserInvolved = row.recipient_id === currentUserId || row.sender_id === currentUserId;
+              }
+              if (!isUserInvolved) {
+                return;
+              }
+            }
+
             const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
 
             setMessages((prev) => {

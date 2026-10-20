@@ -847,7 +847,7 @@ export default function Sidebar({
                       ? messages[dmKey]
                       : (Array.isArray(messages?.[reverseDmKey])
                           ? messages[reverseDmKey]
-                          : (Array.isArray(messages?.[user.id]) ? messages[user.id] : []));
+                          : []);
 
                     const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey] || dmReadReceipts?.[reverseDmKey];
                     const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);

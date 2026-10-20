@@ -17,7 +17,7 @@ export const requestDesktopNotificationPermission = async () => {
 };
 
 // 2. Dispara a notificação nativa do Windows (toast no canto inferior direito)
-export const sendDesktopNotification = (senderName, messageText) => {
+export const sendDesktopNotification = (senderNameOrTitle, messageText, options = {}) => {
   if (typeof window === 'undefined') return;
 
   if ('Notification' in window && Notification.permission === 'granted') {
@@ -26,11 +26,22 @@ export const sendDesktopNotification = (senderName, messageText) => {
         ? messageText.slice(0, 87) + '...'
         : messageText || 'Nova mensagem recebida';
 
-      const notification = new Notification(`EduChat • ${senderName}`, {
-        body: cleanText,
+      let notifTitle = `EduChat • ${senderNameOrTitle}`;
+      if (options.isChannel && options.channelName) {
+        notifTitle = `EduChat • #${options.channelName}`;
+      } else if (options.isDm) {
+        notifTitle = `EduChat • Mensagem Direta`;
+      }
+
+      const notifBody = options.isChannel && options.senderName
+        ? `${options.senderName}: ${cleanText}`
+        : cleanText;
+
+      const notification = new Notification(notifTitle, {
+        body: notifBody,
         icon: '/favicon.svg',
         badge: '/favicon.svg',
-        tag: 'educhat_msg',
+        tag: options.tag || (options.channelName ? `educhat_ch_${options.channelName}` : 'educhat_msg'),
         renotify: true,
         silent: false
       });
@@ -47,7 +58,7 @@ export const sendDesktopNotification = (senderName, messageText) => {
 };
 
 // 3. Efeito Piscar contínuo no Título da Aba (faz o ícone do Windows na barra de tarefas piscar em laranja)
-export const startTaskbarBlink = (senderName) => {
+export const startTaskbarBlink = (senderNameOrTitle, options = {}) => {
   if (typeof window === 'undefined') return;
 
   if (blinkInterval) {
@@ -55,12 +66,24 @@ export const startTaskbarBlink = (senderName) => {
     blinkInterval = null;
   }
 
+  let blinkText = '';
+  if (options.isChannel && options.channelName) {
+    const sName = options.senderName ? options.senderName.split(' ')[0] : '';
+    blinkText = sName ? `🔔 [#${options.channelName}] ${sName}` : `🔔 #${options.channelName}`;
+  } else if (options.isDm) {
+    const sName = (options.senderName || senderNameOrTitle || '').split(' ')[0];
+    blinkText = `🔔 [DM] ${sName || 'Nova Mensagem'}!`;
+  } else {
+    const sName = (senderNameOrTitle || '').split(' ')[0];
+    blinkText = `🔔 ${sName || 'Nova Mensagem'}!`;
+  }
+
   let toggle = false;
   blinkInterval = setInterval(() => {
     toggle = !toggle;
     document.title = toggle
-      ? `🔔 NOVA MENSAGEM de ${senderName.split(' ')[0]}!`
-      : `💬 EduChat WhatsApp`;
+      ? blinkText
+      : `💬 EduChat`;
   }, 1000);
 
   // Limpa o alerta assim que o usuário clicar na janela ou alternar a aba de volta
@@ -89,8 +112,8 @@ export const stopTaskbarBlink = () => {
   document.title = ORIGINAL_TITLE;
 };
 
-// 5. Função Unificada: toca som, exibe toast nativo do Windows e pisca a barra
-export const notifyIncomingMessage = (senderName, text) => {
-  sendDesktopNotification(senderName, text);
-  startTaskbarBlink(senderName);
+// 5. Função Unificada: exibe toast nativo do Windows e pisca a barra
+export const notifyIncomingMessage = (senderNameOrTitle, text, options = {}) => {
+  sendDesktopNotification(senderNameOrTitle, text, options);
+  startTaskbarBlink(senderNameOrTitle, options);
 };

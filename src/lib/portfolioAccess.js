@@ -301,4 +301,43 @@ export function canUserViewTask(task, user) {
   return isTaskAssignedToUser(task, user) || isTaskRequestedByUser(task, user);
 }
 
+/**
+ * Retorna true se o usuário tem permissão para visualizar o canal de grupo.
+ * Gestor/Admin: visualiza todos os canais.
+ * Colaborador comum: visualiza apenas 'geral' ou o canal do seu próprio departamento.
+ */
+export function canUserViewChannel(channelOrId, user, allChannels = []) {
+  if (!channelOrId || !user) return false;
+  if (hasFullPortfolioAccess(user)) return true;
+
+  const rawId = typeof channelOrId === 'object' ? (channelOrId.id || channelOrId.name || '') : String(channelOrId);
+  const cleanId = rawId.replace(/^[c#]-?/, '').trim().toLowerCase();
+
+  if (cleanId === 'geral' || rawId === 'c-geral' || rawId === 'geral') {
+    return true;
+  }
+
+  let chDept = '';
+  if (typeof channelOrId === 'object' && channelOrId.department) {
+    chDept = channelOrId.department;
+  } else {
+    const list = Array.isArray(allChannels) && allChannels.length > 0 ? allChannels : [];
+    const found = list.find((c) => {
+      if (!c) return false;
+      const cId = (c.id || '').replace(/^[c#]-?/, '').toLowerCase();
+      const cName = (c.name || '').replace(/^[c#]-?/, '').toLowerCase();
+      return cId === cleanId || cName === cleanId;
+    });
+    if (found?.department) {
+      chDept = found.department;
+    }
+  }
+
+  if (chDept) {
+    return matchesDepartment(user.department, chDept);
+  }
+
+  return matchesDepartment(user.department, cleanId);
+}
+
 
