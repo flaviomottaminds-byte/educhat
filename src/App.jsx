@@ -5155,6 +5155,96 @@ export default function App() {
     setTasks((prev) => [...mapped, ...prev]);
   };
 
+  // Injeção de Dossiê do WhatsApp com Suporte a Modo "Apenas Chat" ou "Chat + Kanban"
+  const handleInjectDossierToChat = async (dossierData, shouldCreateKanban = false, selectedTasksList = []) => {
+    const currentTargetChat = activeChatRef.current || activeChat;
+    const activeUserId = currentUserRef.current?.id || currentUser?.id || 'u1';
+    const targetChatKey = getChatKey(currentTargetChat, activeUserId);
+    const timeStr = getSaoPauloTime();
+
+    // 1. Monta o texto executivo do Dossiê para registro no fluxo do chat
+    let dossierText = `📋 **DOSSIÊ EXECUTIVO WHATSAPP • NOTA INTERNA DA EQUIPE**\n\n`;
+    dossierText += `🏛️ **Cliente/Contato:** ${dossierData.clientName || 'Contato WhatsApp'}\n`;
+    if (dossierData.plan) dossierText += `👑 **Plano/Modalidade:** ${dossierData.plan}\n`;
+    if (dossierData.relationshipTone) dossierText += `🤝 **Tom do Relacionamento:** ${dossierData.relationshipTone}\n\n`;
+
+    dossierText += `📝 **Resumo Executivo 360º:**\n${dossierData.summary}\n\n`;
+
+    if (Array.isArray(dossierData.timeline) && dossierData.timeline.length > 0) {
+      dossierText += `📅 **Linha do Tempo & Acordos Firmados:**\n`;
+      dossierData.timeline.forEach((item) => {
+        dossierText += `• **${item.date}:** ${item.event}\n`;
+      });
+      dossierText += `\n`;
+    }
+
+    if (Array.isArray(dossierData.pendingTasks) && dossierData.pendingTasks.length > 0) {
+      dossierText += `📌 **Pendências Identificadas:**\n`;
+      dossierData.pendingTasks.forEach((task) => {
+        dossierText += `• ${task.title} (Resp: ${task.assignee} • Prazo: ${task.dueDate})\n`;
+      });
+      dossierText += `\n`;
+    }
+
+    if (shouldCreateKanban) {
+      dossierText += `✅ *Pendências operacionais cadastradas como cards no Kanban da equipe.*\n`;
+    } else {
+      dossierText += `ℹ️ *Registro salvo exclusivamente no histórico do chat (Kanban não acionado para evitar poluição).*\n`;
+    }
+
+    dossierText += `\n<!-- DOSSIER_RECORD:${JSON.stringify({
+      clientName: dossierData.clientName,
+      plan: dossierData.plan,
+      hasKanban: shouldCreateKanban,
+      createdAt: new Date().toISOString()
+    })} -->`;
+
+    const dossierMsgId = `dossier_msg_${Date.now()}`;
+    const newMsg = {
+      id: dossierMsgId,
+      chat_id: targetChatKey,
+      sender_id: 'system',
+      sender_name: 'IA Dossiê WhatsApp',
+      senderId: 'system',
+      senderName: 'IA Dossiê WhatsApp',
+      text: dossierText,
+      timestamp: timeStr,
+      created_at: new Date().toISOString(),
+      isDossier: true,
+      hasKanban: shouldCreateKanban
+    };
+
+    // 2. Persistência no Supabase e no estado local do chat
+    try {
+      await supabase.from('messages').insert([{
+        id: newMsg.id,
+        chat_id: targetChatKey,
+        sender_id: 'system',
+        sender_name: 'IA Dossiê WhatsApp',
+        text: newMsg.text,
+        timestamp: newMsg.timestamp
+      }]);
+    } catch (err) {
+      console.warn('Aviso ao persistir mensagem de dossiê no Supabase:', err);
+    }
+
+    setMessages((prev) => ({
+      ...prev,
+      [targetChatKey]: [...(prev[targetChatKey] || []), newMsg]
+    }));
+
+    // 3. Se a opção de Kanban foi selecionada, cria os cards no Kanban
+    if (shouldCreateKanban) {
+      const tasksToCreate = Array.isArray(selectedTasksList) && selectedTasksList.length > 0
+        ? selectedTasksList
+        : (dossierData.pendingTasks || []);
+      handleCreateTasksFromDossier(tasksToCreate);
+      toast.success(`Dossiê registrado no chat e ${tasksToCreate.length} cards criados no Kanban!`);
+    } else {
+      toast.success('Dossiê registrado no histórico da conversa (sem cards no Kanban).');
+    }
+  };
+
   const handleFeedAIMemory = (learnings) => {
     if (learnings.discoveredPop) {
       setPops((prev) => [
@@ -5969,6 +6059,14 @@ export default function App() {
       <WhatsAppDossierModal
         isOpen={isDossierOpen}
         onClose={() => setIsDossierOpen(false)}
+        activeChat={activeChat}
+        targetContact={
+          activeChat?.type === 'whatsapp'
+            ? whatsAppContacts.find((c) => c.id === activeChat.id)
+            : null
+        }
+        currentMessages={messages[currentChatKey] || []}
+        onSaveDossier={handleInjectDossierToChat}
         onCreateTasks={handleCreateTasksFromDossier}
         onFeedAIMemory={handleFeedAIMemory}
       />

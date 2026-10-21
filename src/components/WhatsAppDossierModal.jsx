@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   FileText,
@@ -13,7 +13,8 @@ import {
   Calendar,
   AlertTriangle,
   Lightbulb,
-  BookOpen
+  BookOpen,
+  MessageSquare
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -29,6 +30,10 @@ const MOCK_CAMPINAS_CHAT = `[12/06/2026, 09:15:20] Diretor Polo Campinas: Olá F
 export default function WhatsAppDossierModal({
   isOpen,
   onClose,
+  activeChat,
+  targetContact,
+  currentMessages = [],
+  onSaveDossier,
   onCreateTasks,
   onFeedAIMemory
 }) {
@@ -39,28 +44,58 @@ export default function WhatsAppDossierModal({
   const [fileName, setFileName] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  // Opção de Kanban: flexibilidade para não poluir o Kanban com cards desnecessários
+  const [createKanban, setCreateKanban] = useState(false);
+
   // Seleção de pendências para enviar ao Kanban
   const [selectedTasks, setSelectedTasks] = useState(['task_1', 'task_2', 'task_3']);
   const [tasksCreatedSuccess, setTasksCreatedSuccess] = useState(false);
+  const [dossierSavedSuccess, setDossierSavedSuccess] = useState(false);
   const [aiLearnedSuccess, setAiLearnedSuccess] = useState(false);
 
+  // Carrega automaticamente o histórico da conversa atual aberta se existir
+  useEffect(() => {
+    if (isOpen && !chatText && Array.isArray(currentMessages) && currentMessages.length > 0) {
+      const formatted = currentMessages
+        .filter((m) => m && m.text && m.senderId !== 'system')
+        .map((m) => {
+          const time = m.timestamp || '00:00';
+          const author = m.senderName || (m.fromMe ? 'Atendente' : 'Aluno');
+          const clean = String(m.text)
+            .replace(/<!--[\s\S]*?-->/g, '')
+            .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+            .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
+            .trim();
+          return `[${time}] ${author}: ${clean}`;
+        })
+        .join('\n');
+
+      if (formatted.trim()) {
+        setChatText(formatted);
+        const contactName = targetContact?.name || activeChat?.id || 'Conversa WhatsApp';
+        setFileName(`Histórico recente: ${contactName} (${currentMessages.length} msgs)`);
+      }
+    }
+  }, [isOpen, currentMessages, targetContact, activeChat]);
+
   // Dados estruturados analisados pela IA a partir do chat
+  const clientDisplayName = targetContact?.name || 'Polo Campinas (Educação Continuada)';
   const analysisData = {
-    clientName: 'Polo Campinas (Educação Continuada)',
-    plan: 'Plano Fixo Gold',
+    clientName: clientDisplayName,
+    plan: targetContact?.plan || 'Plano Fixo Gold',
     relationshipTone: 'Parceria Comercial Estratégica (Exigente, com alta pontualidade)',
     summary:
-      'Histórico de 3 meses de interações cobrindo conciliação de faturas no Asaas e emissão de certificados de Pós-Graduação. O polo possui volume expressivo de matrículas, exige rigor nos fechamentos às sextas-feiras e tem urgência na liberação de diplomas para alunos inscritos em concursos municipais.',
+      'Histórico consolidado cobrindo conciliação de faturas, solicitações acadêmicas e emissão de certificados. O contato possui volume expressivo de interações, exige atenção nos prazos acordados e acompanhamento próximo das etapas de documentação.',
     timeline: [
-      { date: '12/06/2026', event: 'Polo questionou divergência de R$ 350 no split da fatura.' },
-      { date: '14/06/2026', event: 'Financeiro confirmou estorno e acordou envio de 2ª via corrigida (R$ 4.250).' },
-      { date: '28/07/2026', event: 'Solicitação de urgência para 8 certificados de Pós em Gestão Escolar.' },
-      { date: '10/08/2026', event: 'Secretaria identificou RG ilegível do aluno Carlos Alberto pendente no eAula.' }
+      { date: '12/06/2026', event: 'Cliente questionou divergência no fechamento da fatura.' },
+      { date: '14/06/2026', event: 'Financeiro confirmou estorno e acordou envio de 2ª via retificada.' },
+      { date: '28/07/2026', event: 'Solicitação de urgência para liberação de certificados de conclusão.' },
+      { date: '10/08/2026', event: 'Secretaria identificou documento com pendência cadastral no portal.' }
     ],
     pendingTasks: [
       {
         id: 'task_1',
-        title: 'Enviar 2ª via de fatura retificada Asaas (R$ 4.250) - Polo Campinas',
+        title: `Enviar 2ª via de fatura retificada Asaas - ${clientDisplayName}`,
         desc: 'Fatura recalculada após cancelamento de matrícula de aluno.',
         assignee: 'Fernanda Silva',
         department: 'Financeiro',
@@ -70,7 +105,7 @@ export default function WhatsAppDossierModal({
       },
       {
         id: 'task_2',
-        title: 'Emitir e liberar 7 certificados de Pós-Graduação aprovados',
+        title: 'Emitir e liberar certificados de Pós-Graduação aprovados',
         desc: 'Alunos precisam para validação de títulos em concurso público.',
         assignee: 'Juliana Mendes',
         department: 'Secretaria',
@@ -80,8 +115,8 @@ export default function WhatsAppDossierModal({
       },
       {
         id: 'task_3',
-        title: 'Validar reenvio do RG do aluno Carlos Alberto no eAula',
-        desc: 'Documento pendente para liberação do 8º certificado.',
+        title: 'Validar reenvio do RG do aluno pendente no eAula',
+        desc: 'Documento pendente para liberação final do certificado.',
         assignee: 'Carlos Eduardo',
         department: 'Atendimento',
         dueDate: 'Hoje, até 18h',
@@ -91,7 +126,7 @@ export default function WhatsAppDossierModal({
     ],
     aiLearnings: {
       newFacts: [
-        'Regra Financeira: A mantenedora do Polo Campinas só processa pagamentos e faturas às sextas-feiras.',
+        `Regra Financeira: A mantenedora de ${clientDisplayName} só processa pagamentos e faturas às sextas-feiras.`,
         'Regra de Cadastro: Polo VIP com alta sensibilidade a prazos de certificação de concurso público.'
       ],
       discoveredPop: {
@@ -120,13 +155,14 @@ export default function WhatsAppDossierModal({
     setChatText(MOCK_CAMPINAS_CHAT);
   };
 
-  const handleStartAnalysis = () => {
+  const handleStartAnalysis = (shouldCreateKanban = false) => {
     if (!chatText.trim()) return;
+    setCreateKanban(shouldCreateKanban);
     setIsAnalyzing(true);
     setTimeout(() => {
       setIsAnalyzing(false);
       setActiveStep('analysis');
-    }, 1200);
+    }, 1100);
   };
 
   const toggleTaskSelection = (taskId) => {
@@ -135,7 +171,33 @@ export default function WhatsAppDossierModal({
     );
   };
 
-  const handleCreateKanbanCards = () => {
+  // Salva o Dossiê no Chat (com ou sem cards no Kanban)
+  const handleSaveDossierToChat = (withKanban) => {
+    const finalData = {
+      ...analysisData,
+      clientName: targetContact?.name || analysisData.clientName
+    };
+    const tasksToCreate = analysisData.pendingTasks.filter((t) =>
+      selectedTasks.includes(t.id)
+    );
+
+    if (onSaveDossier) {
+      onSaveDossier(finalData, withKanban, tasksToCreate);
+    } else if (withKanban && onCreateTasks) {
+      onCreateTasks(tasksToCreate);
+    }
+
+    if (withKanban) {
+      confetti({ particleCount: 60, spread: 70, origin: { y: 0.7 } });
+    }
+    setDossierSavedSuccess(true);
+    setTimeout(() => {
+      setDossierSavedSuccess(false);
+      onClose();
+    }, 1200);
+  };
+
+  const handleCreateKanbanCardsOnly = () => {
     const tasksToCreate = analysisData.pendingTasks.filter((t) =>
       selectedTasks.includes(t.id)
     );
@@ -241,22 +303,66 @@ export default function WhatsAppDossierModal({
                 />
               </div>
 
-              <div className="pt-2 flex justify-end">
+              {/* Opção de Criação no Kanban (Fluxo Opcional UI) */}
+              <div className="p-3.5 bg-slate-50 dark:bg-chatSidebar border border-slate-200 dark:border-chatBorder rounded-xl flex items-start sm:items-center justify-between gap-3">
+                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={createKanban}
+                    onChange={(e) => setCreateKanban(e.target.checked)}
+                    className="mt-0.5 rounded text-brand-600 focus:ring-brand-500 w-4 h-4 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-chatTextTitle flex items-center gap-1.5">
+                      <CheckSquare size={14} className="text-amber-500" />
+                      Criar cards de pendências no Quadro Kanban
+                    </span>
+                    <p className="text-[11px] text-chatTextMuted">
+                      {createKanban
+                        ? 'O Dossiê será registrado no chat E as pendências selecionadas serão abertas no Kanban.'
+                        : 'Modo Apenas Chat: O Dossiê será injetado estritamente no histórico da conversa (sem poluir o Kanban).'}
+                    </p>
+                  </div>
+                </label>
+                <span
+                  className={`text-[10px] font-bold px-2.5 py-1 rounded-full shrink-0 border transition ${
+                    createKanban
+                      ? 'bg-amber-100 dark:bg-yellow-950/40 text-amber-800 dark:text-yellow-300 border-amber-300 dark:border-yellow-500/30'
+                      : 'bg-slate-200 dark:bg-chatBorder text-slate-700 dark:text-chatTextMuted border-slate-300 dark:border-chatBorder'
+                  }`}
+                >
+                  {createKanban ? '✓ Resumo + Kanban' : '💬 Apenas Chat'}
+                </span>
+              </div>
+
+              {/* Botões de Ação do Passo 1 */}
+              <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
                 <button
+                  type="button"
                   disabled={!chatText.trim() || isAnalyzing}
-                  onClick={handleStartAnalysis}
-                  className="px-6 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-md flex items-center gap-2 transition"
+                  onClick={() => handleStartAnalysis(false)}
+                  className="px-4 py-2.5 bg-slate-100 dark:bg-chatSidebar hover:bg-slate-200 dark:hover:bg-chatBorder text-chatTextTitle disabled:opacity-50 font-semibold text-xs rounded-xl border border-slate-300 dark:border-chatBorder shadow-xs flex items-center justify-center gap-2 transition"
+                >
+                  <FileText size={15} className="text-brand-600 dark:text-brand-400" />
+                  <span>Gerar Resumo (Apenas Chat)</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!chatText.trim() || isAnalyzing}
+                  onClick={() => handleStartAnalysis(true)}
+                  className="px-5 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-md flex items-center justify-center gap-2 transition"
                 >
                   {isAnalyzing ? (
                     <>
                       <Sparkles size={16} className="animate-spin text-yellow-300" />
-                      <span>Analisando Conversa & Extraindo Dossiê...</span>
+                      <span>Analisando Conversa com IA...</span>
                     </>
                   ) : (
                     <>
-                      <Sparkles size={16} />
-                      <span>Analisar com IA & Gerar Dossiê</span>
-                      <ArrowRight size={15} />
+                      <Sparkles size={15} />
+                      <span>Gerar Resumo + Kanban</span>
+                      <ArrowRight size={14} />
                     </>
                   )}
                 </button>
@@ -325,15 +431,30 @@ export default function WhatsAppDossierModal({
 
               {/* 3. Pendências Não Resolvidas -> Transformar em Cards do Kanban */}
               <div className="space-y-3 p-4 bg-amber-50/50 dark:bg-yellow-950/10 border border-amber-200 dark:border-yellow-500/20 rounded-xl">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <h5 className="text-xs font-bold text-amber-900 dark:text-yellow-300 flex items-center gap-1.5">
                     <CheckSquare size={15} />
-                    3. Pendências Críticas Identificadas (Gerar no Kanban)
+                    3. Pendências Críticas Identificadas
                   </h5>
-                  <span className="text-[11px] text-amber-800 dark:text-yellow-400 font-medium">
-                    {selectedTasks.length} selecionadas para abertura
-                  </span>
+                  <label className="flex items-center gap-2 cursor-pointer bg-white dark:bg-chatCard px-2.5 py-1 rounded-lg border border-amber-300 dark:border-yellow-500/30 text-[11px] font-semibold text-chatTextTitle">
+                    <input
+                      type="checkbox"
+                      checked={createKanban}
+                      onChange={(e) => setCreateKanban(e.target.checked)}
+                      className="rounded text-amber-600 focus:ring-amber-500"
+                    />
+                    <span>Criar cards no Quadro Kanban</span>
+                    <span className="text-[10px] text-amber-800 dark:text-yellow-400 font-bold ml-1">
+                      ({selectedTasks.length} selecionadas)
+                    </span>
+                  </label>
                 </div>
+
+                <p className="text-[11px] text-chatTextMuted">
+                  {createKanban
+                    ? 'As pendências marcadas abaixo serão abertas como cards no Kanban e também registradas no Dossiê do chat.'
+                    : 'Modo Apenas Chat ativo: estas pendências serão descritas no resumo dentro do chat, sem abrir cards no Kanban.'}
+                </p>
 
                 <div className="space-y-2">
                   {analysisData.pendingTasks.map((task) => {
@@ -379,21 +500,32 @@ export default function WhatsAppDossierModal({
                   })}
                 </div>
 
-                <div className="pt-2 flex justify-end">
+                {/* Ações da Seção 3 */}
+                <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2.5">
                   <button
-                    onClick={handleCreateKanbanCards}
-                    disabled={selectedTasks.length === 0}
-                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-semibold text-xs rounded-lg shadow-sm flex items-center gap-1.5 transition"
+                    type="button"
+                    onClick={() => handleSaveDossierToChat(false)}
+                    className="px-3.5 py-2 bg-slate-100 dark:bg-chatSidebar hover:bg-slate-200 dark:hover:bg-chatBorder text-chatTextTitle text-xs font-semibold rounded-lg border border-slate-300 dark:border-chatBorder flex items-center justify-center gap-1.5 transition"
                   >
-                    {tasksCreatedSuccess ? (
+                    <FileText size={14} className="text-brand-600 dark:text-brand-400" />
+                    <span>Salvar no Chat (Apenas Resumo)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSaveDossierToChat(true)}
+                    disabled={selectedTasks.length === 0}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-sm flex items-center justify-center gap-1.5 transition"
+                  >
+                    {dossierSavedSuccess ? (
                       <>
                         <Check size={16} />
-                        <span>Demandas Criadas no Kanban!</span>
+                        <span>Dossiê & Kanban Salvos!</span>
                       </>
                     ) : (
                       <>
                         <CheckSquare size={16} />
-                        <span>Criar {selectedTasks.length} Cards no Kanban da Equipe</span>
+                        <span>Salvar no Chat + Kanban ({selectedTasks.length} Cards)</span>
                       </>
                     )}
                   </button>
@@ -464,16 +596,43 @@ export default function WhatsAppDossierModal({
         </div>
 
         {/* Rodapé do Modal */}
-        <div className="p-4 bg-slate-100 dark:bg-chatPanel border-t border-slate-200 dark:border-chatBorder flex justify-between items-center shrink-0">
-          <span className="text-[11px] text-chatTextMuted">
-            Protegido pela LGPD: conversas importadas permanecem restritas à inteligência interna.
-          </span>
-          <button
-            onClick={onClose}
-            className="px-5 py-2 bg-slate-200 dark:bg-chatSidebar hover:bg-slate-300 dark:hover:bg-chatBorder text-chatTextTitle font-semibold text-xs rounded-lg transition"
-          >
-            Fechar
-          </button>
+        <div className="p-4 bg-slate-100 dark:bg-chatPanel border-t border-slate-200 dark:border-chatBorder flex flex-col sm:flex-row justify-between items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 text-[11px] text-chatTextMuted">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>Protegido pela LGPD: conversas importadas permanecem restritas à inteligência interna.</span>
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            {activeStep === 'analysis' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleSaveDossierToChat(false)}
+                  className="px-3.5 py-1.5 bg-white dark:bg-chatSidebar hover:bg-slate-50 dark:hover:bg-chatBorder text-chatTextTitle text-xs font-semibold rounded-lg border border-slate-300 dark:border-chatBorder flex items-center gap-1.5 transition"
+                >
+                  <FileText size={14} className="text-brand-600 dark:text-brand-400" />
+                  <span>Salvar (Apenas Chat)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSaveDossierToChat(true)}
+                  disabled={selectedTasks.length === 0}
+                  className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-sm flex items-center gap-1.5 transition"
+                >
+                  <CheckSquare size={14} />
+                  <span>Salvar + Kanban ({selectedTasks.length})</span>
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 bg-slate-200 dark:bg-chatSidebar hover:bg-slate-300 dark:hover:bg-chatBorder text-chatTextTitle font-semibold text-xs rounded-lg transition"
+            >
+              Fechar
+            </button>
+          </div>
         </div>
       </div>
     </div>

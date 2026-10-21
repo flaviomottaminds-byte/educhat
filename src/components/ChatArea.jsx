@@ -1925,6 +1925,67 @@ export default function ChatArea({
             if (!m || typeof m !== 'object') return null;
             try {
               if (m.senderId === 'system' || m.sender_id === 'system') {
+                const isDossier =
+                  m.isDossier ||
+                  (typeof m.text === 'string' &&
+                    (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:')));
+
+                if (isDossier) {
+                  return (
+                    <div key={m.id || Math.random()} className="flex justify-center my-3 w-full px-2 animate-in fade-in">
+                      <div className="w-full max-w-2xl bg-gradient-to-br from-purple-50/95 via-white to-indigo-50/95 dark:from-purple-950/40 dark:via-chatPanel dark:to-indigo-950/40 border border-purple-200 dark:border-purple-500/30 rounded-2xl p-4 shadow-md text-xs space-y-3">
+                        <div className="flex items-center justify-between pb-2.5 border-b border-purple-200/60 dark:border-purple-500/20">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                              📋
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-purple-900 dark:text-purple-200 text-xs flex items-center gap-1.5">
+                                Dossiê do WhatsApp • Nota Interna
+                                <span className="text-[9.5px] bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full font-bold">
+                                  IA Operacional
+                                </span>
+                              </h4>
+                              <p className="text-[10px] text-purple-700/80 dark:text-purple-400">
+                                Contexto consolidado da negociação e atendimento
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {m.hasKanban || (typeof m.text === 'string' && m.text.includes('cards no Kanban')) ? (
+                              <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded border border-emerald-300 dark:border-emerald-600/30 flex items-center gap-1">
+                                ✓ Cards no Kanban
+                              </span>
+                            ) : (
+                              <span className="text-[10px] bg-slate-100 dark:bg-chatSidebar text-slate-600 dark:text-chatTextMuted font-medium px-2 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
+                                Apenas Chat (Sem Kanban)
+                              </span>
+                            )}
+                            <span className="text-[10px] text-chatTextMuted font-mono">
+                              {getSaoPauloTime(m.timestamp || m.created_at)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="text-chatTextBody leading-relaxed whitespace-pre-wrap font-sans text-xs">
+                          {typeof m.text === 'string'
+                            ? m.text
+                                .replace(/<!--[\s\S]*?-->/g, '')
+                                .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
+                                .trim()
+                            : ''}
+                        </div>
+
+                        <div className="pt-2 border-t border-purple-200/50 dark:border-purple-500/20 flex items-center justify-between text-[10.5px] text-purple-800/80 dark:text-purple-400">
+                          <span className="flex items-center gap-1 font-medium">
+                            🔒 Visível exclusivamente para a equipe interna (não enviado ao aluno)
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={m.id || Math.random()} className="flex justify-center my-2 animate-in fade-in">
                     <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
