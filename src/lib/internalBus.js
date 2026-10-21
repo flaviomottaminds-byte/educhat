@@ -19,9 +19,15 @@ try {
 
 /**
  * Publica uma mensagem interna para todos os colaboradores (canais e DMs).
- * Dispara simultaneamente no barramento local e na nuvem em tempo real.
+ * SEGURANÇA E PRIVACIDADE ESTRITA:
+ * Mensagens privadas (DMs 1 a 1) NUNCA são transmitidas para tópicos públicos de nuvem (ntfy.sh).
+ * Elas trafegam exclusivamente via Supabase com autenticação e políticas RLS.
  */
 export async function publishInternalMessage(chatKey, message) {
+  const isPrivateDm =
+    chatKey.startsWith('dm-') ||
+    Boolean(message?.recipientId || message?.recipient_id);
+
   const payload = {
     type: 'INTERNAL_MESSAGE',
     chatKey,
@@ -29,21 +35,23 @@ export async function publishInternalMessage(chatKey, message) {
     sentAt: Date.now()
   };
 
-  // 1. Barramento local instantâneo (0ms)
+  // 1. Barramento local entre abas do mesmo navegador
   if (localBus) {
     try {
       localBus.postMessage(payload);
     } catch {}
   }
 
-  // 2. Barramento em nuvem para outros computadores da equipe (HTTP POST ultra-rápido ~50ms)
-  try {
-    fetch(MSG_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).catch(() => {});
-  } catch {}
+  // 2. Barramento em nuvem: APENAS canais corporativos públicos da equipe (NUNCA mensagens privadas)
+  if (!isPrivateDm) {
+    try {
+      fetch(MSG_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).catch(() => {});
+    } catch {}
+  }
 }
 
 /**

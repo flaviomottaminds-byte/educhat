@@ -88,6 +88,11 @@ import {
   publishPresencePing,
   subscribeToInternalRelay
 } from './lib/internalBus';
+import {
+  setIsolatedUserSession,
+  validateAndEvictMismatchedAuth,
+  clearAllAuthCaches
+} from './lib/sessionManager';
 import { extractAttachmentFromText } from './lib/attachmentParser';
 
 const INITIAL_VIP_CLIENTS = [
@@ -709,10 +714,23 @@ export default function App() {
       if (!isMounted) return;
       if (session?.user) {
         const u = session.user;
+        const savedId = localStorage.getItem('educhat_user_id');
         const currentList = collaboratorsRef.current || [];
         const matched = currentList.find(
           (c) => c.id === u.id || (c.email && u.email && c.email.toLowerCase() === u.email.toLowerCase())
         );
+
+        // BLINDAGEM DE SESSÃO:
+        // Se a máquina/navegador já possui um usuário explicitamente selecionado e o token Supabase for de outro,
+        // NÃO sobrepõe a identidade. Desconecta o resíduo do Supabase para manter o isolamento estrito.
+        if (savedId && matched && matched.id !== savedId) {
+          console.warn(
+            `[Auth Isolation] Sessão Supabase residual (${u.email}) diferente do perfil ativo (${savedId}). Desconectando resíduo.`
+          );
+          supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+          return;
+        }
+
         const resolvedUser = {
           id: u.id,
           name: matched?.name || u.user_metadata?.name || u.user_metadata?.full_name || u.email?.split('@')[0] || 'Colaborador',
@@ -724,9 +742,7 @@ export default function App() {
         };
         setCurrentUser(resolvedUser);
         currentUserRef.current = resolvedUser;
-        try {
-          localStorage.setItem('educhat_user_id', resolvedUser.id);
-        } catch {}
+        setIsolatedUserSession(resolvedUser);
       }
     };
 
@@ -1791,13 +1807,44 @@ export default function App() {
         if (!incomingMsg || !incomingMsg.id) return;
 
         const activeUser = currentUserRef.current;
+        const currentUserId = activeUser?.id || 'u1';
+
+        // 1. BLINDAGEM DE PRIVACIDADE E SEGURANÇA EM DMs (1 a 1):
+        // Se a mensagem for privada, APENAS processa se o usuário ativo for participante!
+        const isDm = chatKey.startsWith('dm-') || Boolean(incomingMsg.recipientId || incomingMsg.recipient_id);
+        if (isDm) {
+          const isParticipant =
+            incomingMsg.senderId === currentUserId ||
+            incomingMsg.recipientId === currentUserId ||
+            incomingMsg.recipient_id === currentUserId ||
+            (chatKey.startsWith('dm-') && chatKey.replace('dm-', '').split('-').includes(currentUserId));
+          if (!isParticipant) {
+            // Descarta imediatamente sem emitir notificação nem salvar no estado
+            return;
+          }
+        }
+
+        // 2. BLINDAGEM DE ACESSO A CANAIS:
+        const isChannel = Boolean(
+          chatKey.startsWith('c-') ||
+          chatKey.startsWith('#') ||
+          ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao', 'diretoria'].includes(
+            chatKey.replace(/^[c#]-?/, '').toLowerCase()
+          )
+        );
+        if (isChannel) {
+          const chId = chatKey.startsWith('c-') ? chatKey : `c-${chatKey.replace(/^[c#]-?/, '')}`;
+          if (!canUserViewChannel(chId, activeUser, channelsRef.current)) {
+            return;
+          }
+        }
+
         // Se a mensagem partiu do próprio usuário local, ignora (o remetente adiciona SOMENTE após confirmação no Supabase)
         if (incomingMsg.senderId && activeUser?.id && incomingMsg.senderId === activeUser.id) {
           return;
         }
 
         const currentActiveChat = activeChatRef.current;
-        const currentUserId = activeUser?.id || 'u1';
         let belongsToActiveScreen = false;
 
         if (currentActiveChat && !document.hidden) {
@@ -1806,6 +1853,7 @@ export default function App() {
             belongsToActiveScreen =
               incomingMsg.senderId === selectedUserId ||
               incomingMsg.recipientId === selectedUserId ||
+              incomingMsg.recipient_id === selectedUserId ||
               (chatKey && chatKey.includes(selectedUserId));
           } else if (currentActiveChat.type === 'channel') {
             const activeChannelId = currentActiveChat.id;
@@ -2049,7 +2097,7 @@ export default function App() {
       try {
         let { data, error } = await supabase
           .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id, channel_id')
           .not('chat_id', 'like', 'sys_%')
           .order('created_at', { ascending: true })
           .limit(1000);
@@ -2058,7 +2106,7 @@ export default function App() {
           // Fallback caso a coluna read_by ainda não tenha sido criada no Supabase
           const fb = await supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
             .not('chat_id', 'like', 'sys_%')
             .order('created_at', { ascending: true })
             .limit(1000);
@@ -2072,7 +2120,7 @@ export default function App() {
           console.error('[Supabase] Erro na consulta com created_at, executando fallback:', error);
           const { data: fallbackData, error: fbErr } = await supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
             .not('chat_id', 'like', 'sys_%')
             .order('created_at', { ascending: true })
             .limit(500);
@@ -2114,7 +2162,39 @@ export default function App() {
           if (rawText === 'Mensagem recebida' || rawText === '💬 Mensagem recebida' || rawText === '') {
             return;
           }
+
+          // 1. BLINDAGEM DE PRIVACIDADE EM DMs (1 a 1):
+          // Apenas inclui a mensagem se o activeUser for remetente, destinatário ou participante do ID
+          const isDm = m.chat_id.startsWith('dm-') || Boolean(m.recipient_id);
+          if (isDm) {
+            let isUserInvolved = false;
+            if (m.chat_id.startsWith('dm-')) {
+              const parts = m.chat_id.replace('dm-', '').split('-').filter(Boolean);
+              isUserInvolved = parts.includes(activeUser.id);
+            } else if (m.recipient_id) {
+              isUserInvolved = m.recipient_id === activeUser.id || m.sender_id === activeUser.id;
+            }
+            if (!isUserInvolved) {
+              return; // Bloqueia e descarta DMs de terceiros da memória do usuário
+            }
+          }
+
+          // 2. BLINDAGEM DE CANAIS POR PERFIL/DEPARTAMENTO:
           const key = normalizeChatKey(m.chat_id, activeUser.id);
+          const isChannel = Boolean(
+            m.channel_id ||
+            m.chat_id.startsWith('c-') ||
+            m.chat_id.startsWith('#') ||
+            ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao', 'diretoria'].includes(
+              String(m.chat_id).replace(/^[c#]-?/, '').toLowerCase()
+            )
+          );
+          if (isChannel) {
+            const chId = key.startsWith('c-') ? key : `c-${key.replace(/^c-/, '')}`;
+            if (!canUserViewChannel(chId, activeUser, channelsRef.current)) {
+              return; // Bloqueia canais aos quais o colaborador não tem permissão
+            }
+          }
 
           if (!grouped[key]) grouped[key] = [];
 
@@ -2637,16 +2717,20 @@ export default function App() {
       setHeartbeats(initialHb);
     }
 
-    const existingChannels = supabase.getChannels();
-    const prevChannel = existingChannels.find((c) => c.topic === 'realtime:educhat_global_realtime');
-    if (prevChannel) {
-      supabase.removeChannel(prevChannel);
-    }
+    const activeUserId = initialUser?.id || 'u1';
+    const channelTopic = `educhat_user_realtime_${activeUserId}`;
 
-    const channel = supabase.channel('educhat_global_realtime', {
+    const existingChannels = supabase.getChannels();
+    existingChannels.forEach((c) => {
+      if (c.topic && (c.topic.includes('educhat_user_') || c.topic.includes('educhat_global_'))) {
+        supabase.removeChannel(c);
+      }
+    });
+
+    const channel = supabase.channel(channelTopic, {
       config: {
         presence: {
-          key: initialUser?.id || 'u1'
+          key: activeUserId
         }
       }
     });
@@ -2722,13 +2806,9 @@ export default function App() {
       } catch {}
     };
 
-    channel
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          const row = payload.new;
-          if (!row) return;
+    // Processador unificado com blindagem tripla de privacidade para novas mensagens
+    const handleIncomingMessageRow = (row) => {
+      if (!row) return;
 
           // Registros de sistema (Alunos EduControl)
           if (row.chat_id === 'sys_educontrol_students') {
@@ -3218,11 +3298,92 @@ export default function App() {
               return prevContacts;
             });
           }
-        }
-      )
-      .on(
+        };
+
+    // 1. FILTRO DE SUBSCRIPTION REALTIME PARA DMs RECEBIDAS (Filtro por recipient_id)
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `recipient_id=eq.${activeUserId}`
+      },
+      (payload) => handleIncomingMessageRow(payload.new)
+    );
+
+    // 2. FILTRO DE SUBSCRIPTION REALTIME PARA DMs ENVIADAS (Sincronização entre abas e dispositivos)
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `sender_id=eq.${activeUserId}`
+      },
+      (payload) => handleIncomingMessageRow(payload.new)
+    );
+
+    // 3. FILTRO DE SUBSCRIPTION PARA CANAIS EM QUE O USUÁRIO ESTÁ INSCRITO
+    const allowedChannels = (channelsRef.current || INITIAL_CHANNELS || []).filter((ch) =>
+      canUserViewChannel(ch.id, initialUser, channelsRef.current)
+    );
+    allowedChannels.forEach((ch) => {
+      channel.on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages' },
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `chat_id=eq.${ch.id}`
+        },
+        (payload) => handleIncomingMessageRow(payload.new)
+      );
+    });
+
+    // 4. REGISTROS DE SISTEMA (Alunos EduControl e Colaboradores)
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: 'chat_id=eq.sys_educontrol_students'
+      },
+      (payload) => handleIncomingMessageRow(payload.new)
+    );
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: 'chat_id=eq.sys_collaborators'
+      },
+      (payload) => handleIncomingMessageRow(payload.new)
+    );
+
+    // 5. ATENDIMENTOS DE WHATSAPP (Apenas para equipe autorizada: Diretor ou Comercial)
+    if (hasFullPortfolioAccess(initialUser) || initialUser?.department === 'Comercial') {
+      channel.on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages'
+        },
+        (payload) => {
+          const r = payload.new;
+          if (r?.chat_id?.startsWith('wa-')) {
+            handleIncomingMessageRow(r);
+          }
+        }
+      );
+    }
+
+    channel.on(
+      'postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: 'messages' },
         (payload) => {
           const row = payload.new;
           if (!row) return;
@@ -3498,7 +3659,7 @@ export default function App() {
         const { data: latestRows, error } = await withTimeout(
           supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
             .not('chat_id', 'like', 'sys_%')
             .gt('created_at', lastPolledTimestamp)
             .order('created_at', { ascending: true })
@@ -3589,7 +3750,7 @@ export default function App() {
         supabase.removeChannel(channel);
       } catch {}
     };
-  }, []);
+  }, [currentUser?.id]);
 
   // Enviar nova mensagem no chat ativo com suporte a anexo, resposta/citação e áudio (Item 1 e 2)
   // REGRA ESTRITA: A mensagem SÓ DEVE ser renderizada na lista do chat após a promessa do INSERT retornar sucesso no Supabase.
@@ -3625,27 +3786,18 @@ export default function App() {
     );
 
     // 0. BLINDAGEM DO SENDER_ID NA INSERÇÃO:
-    // Validação estrita da sessão diretamente no momento do envio com supabase.auth.getSession()
-    let verifiedSenderId = currentUserRef.current?.id || currentUser?.id || 'u1';
-    let verifiedSenderName = currentUserRef.current?.name || currentUser?.name || 'Colaborador';
+    // Validação estrita da sessão isolada por perfil ativo
+    const activeUser = currentUserRef.current || currentUser;
+    let verifiedSenderId = activeUser?.id || 'u1';
+    let verifiedSenderName = activeUser?.name || 'Colaborador';
 
     try {
-      const { data: authData } = await supabase.auth.getSession();
-      const sessionUser = authData?.session?.user;
-      if (sessionUser?.id) {
-        verifiedSenderId = sessionUser.id;
-        const matched = (collaborators || []).find(
-          (c) => c.id === sessionUser.id || (c.email && sessionUser.email && c.email.toLowerCase() === sessionUser.email.toLowerCase())
-        );
-        verifiedSenderName =
-          matched?.name ||
-          sessionUser.user_metadata?.name ||
-          sessionUser.user_metadata?.full_name ||
-          sessionUser.email?.split('@')[0] ||
-          verifiedSenderName;
+      const validSessionUser = await validateAndEvictMismatchedAuth(supabase, activeUser);
+      if (validSessionUser?.id) {
+        verifiedSenderId = validSessionUser.id;
       }
     } catch (authErr) {
-      console.warn('[handleSendMessage] Falha ao verificar supabase.auth.getSession():', authErr);
+      console.warn('[handleSendMessage] Falha ao verificar integridade da sessão:', authErr);
     }
 
     const messageId = 'm_' + Date.now();
@@ -3798,14 +3950,18 @@ export default function App() {
       // Fluxo: await supabase.from(...) -> Se erro: toast.error e interrompe -> Se sucesso: setMessages
       // -----------------------------------------------------------------------
       try {
-        const { error: insertError } = await supabase.from('messages').insert([{
+        const insertPayload = {
           id: newMsg.id,
           chat_id: currentChatKey,
           sender_id: verifiedSenderId,
           sender_name: verifiedSenderName,
           text: payloadText,
-          timestamp: newMsg.timestamp
-        }]).select();
+          timestamp: newMsg.timestamp,
+          recipient_id: activeChat.type === 'dm' ? activeChat.id : null,
+          channel_id: activeChat.type === 'channel' ? currentChatKey : null
+        };
+
+        const { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
 
         if (insertError) {
           console.error("Erro no Insert:", insertError);
@@ -4198,27 +4354,18 @@ export default function App() {
     payloadText = `${payloadText}\n<!-- FORWARDED:true -->\n<!-- FORWARDED_FROM:${JSON.stringify(originalSender)} -->`;
 
     // BLINDAGEM DO SENDER_ID NO ENCAMINHAMENTO:
-    // Validação estrita da sessão diretamente no momento do envio com supabase.auth.getSession()
-    let verifiedSenderId = currentUserRef.current?.id || currentUser?.id || 'u1';
-    let verifiedSenderName = currentUserRef.current?.name || currentUser?.name || 'Colaborador';
+    // Validação estrita da sessão isolada por perfil ativo
+    const activeUser = currentUserRef.current || currentUser;
+    let verifiedSenderId = activeUser?.id || 'u1';
+    let verifiedSenderName = activeUser?.name || 'Colaborador';
 
     try {
-      const { data: authData } = await supabase.auth.getSession();
-      const sessionUser = authData?.session?.user;
-      if (sessionUser?.id) {
-        verifiedSenderId = sessionUser.id;
-        const matched = (collaborators || []).find(
-          (c) => c.id === sessionUser.id || (c.email && sessionUser.email && c.email.toLowerCase() === sessionUser.email.toLowerCase())
-        );
-        verifiedSenderName =
-          matched?.name ||
-          sessionUser.user_metadata?.name ||
-          sessionUser.user_metadata?.full_name ||
-          sessionUser.email?.split('@')[0] ||
-          verifiedSenderName;
+      const validSessionUser = await validateAndEvictMismatchedAuth(supabase, activeUser);
+      if (validSessionUser?.id) {
+        verifiedSenderId = validSessionUser.id;
       }
     } catch (authErr) {
-      console.warn('[handleForwardMessage] Falha ao verificar supabase.auth.getSession():', authErr);
+      console.warn('[handleForwardMessage] Falha ao verificar integridade da sessão:', authErr);
     }
 
     const targetType = target.type; // 'channel' | 'dm'
@@ -4241,6 +4388,7 @@ export default function App() {
       sender_id: verifiedSenderId,
       sender_name: verifiedSenderName,
       recipient_id: recipientId,
+      channel_id: targetType === 'channel' ? targetChatKey : null,
       text: payloadText,
       timestamp: timeStr
     };
@@ -5080,62 +5228,36 @@ export default function App() {
     }
   };
 
-  const handleSwitchUser = (newUser) => {
+  const handleSwitchUser = async (newUser) => {
     setCurrentUser(newUser);
     currentUserRef.current = newUser;
+    setIsolatedUserSession(newUser);
     try {
-      localStorage.setItem('educhat_user_id', newUser.id);
       const hb = saveLocalHeartbeat(newUser.id);
       setHeartbeats({ ...hb });
     } catch {}
+
+    // Valida e expurga qualquer sessão residual do Supabase que pertença a outro perfil
+    await validateAndEvictMismatchedAuth(supabase, newUser);
 
     if (activeChat.type === 'dm' && activeChat.id === newUser.id) {
       setActiveChat({ type: 'dm', id: newUser.id === 'u1' ? 'u2' : 'u1' });
     }
 
-    // Recarrega dados com as regras do novo usuário ativo
+    // Recarrega dados com as regras do novo usuário ativo de forma isolada
     fetchSupabaseData();
   };
 
   // Limpeza Completa de Cache e Estado no Logout (Prevenção de Cruzamento de Identidades)
   const handleLogout = async (triggerSignOut = true) => {
-    try {
-      if (triggerSignOut) {
-        await supabase.auth.signOut();
-      }
-    } catch (err) {
-      console.warn('Erro ao deslogar do Supabase Auth:', err);
-    }
-
-    try {
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (
-          key &&
-          (key.startsWith('sb-') ||
-            key.startsWith('supabase.') ||
-            key.startsWith('educhat_user') ||
-            key.startsWith('educhat_active_') ||
-            key === 'user' ||
-            key === 'session')
-        ) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach((k) => {
-        try {
-          localStorage.removeItem(k);
-        } catch {}
-      });
-      localStorage.removeItem('educhat_user_id');
-    } catch (storageErr) {
-      console.warn('Erro ao limpar localStorage:', storageErr);
-    }
+    await clearAllAuthCaches(supabase);
 
     const fallbackUser = (collaborators || INITIAL_COLLABORATORS)[0] || null;
     setCurrentUser(fallbackUser);
     currentUserRef.current = fallbackUser;
+    if (fallbackUser) {
+      setIsolatedUserSession(fallbackUser);
+    }
     toast.success('Sessão desconectada e cache de usuário limpo.');
     setIsUserSelectOpen(true);
   };
