@@ -157,7 +157,9 @@ serve(async (req: Request) => {
               enabled: true,
               url: webhookUrl,
               byEvents: false,
-              base64: false,
+              base64: true,
+              webhook_by_events: false,
+              webhook_base64: true,
               events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "SEND_MESSAGE"],
             },
           }),
@@ -185,7 +187,7 @@ serve(async (req: Request) => {
         payload.webhookUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook";
       const webhookEndpoint = `${apiUrl}/webhook/set/${instanceName}`;
 
-      console.log(`Configurando webhook em ${webhookEndpoint} -> ${webhookUrl}...`);
+      console.log(`Configurando webhook em ${webhookEndpoint} -> ${webhookUrl} com base64: true...`);
       const setRes = await fetch(webhookEndpoint, {
         method: "POST",
         headers: evoHeaders,
@@ -194,7 +196,9 @@ serve(async (req: Request) => {
             enabled: true,
             url: webhookUrl,
             byEvents: false,
-            base64: false,
+            base64: true,
+            webhook_by_events: false,
+            webhook_base64: true,
             events: [
               "MESSAGES_UPSERT",
               "MESSAGES_UPDATE",

@@ -84,19 +84,22 @@ export async function ensureEvolutionWebhook({ force = false } = {}) {
         }
       }
     }
-    // Suporte universal a Evolution API v1.x e v2.x (Railway)
+    // Suporte universal a Evolution API v1.x e v2.x (Railway) com desencriptação de mídia ativa (base64: true)
     const webhookPayload = {
       enabled: true,
       url: EVOLUTION_WEBHOOK_URL,
       webhook_by_events: false,
       byEvents: false,
-      base64: false,
+      base64: true,
+      webhook_base64: true,
       events: WEBHOOK_EVENTS,
       webhook: {
         enabled: true,
         url: EVOLUTION_WEBHOOK_URL,
         byEvents: false,
-        base64: false,
+        base64: true,
+        webhook_by_events: false,
+        webhook_base64: true,
         events: WEBHOOK_EVENTS
       }
     };
@@ -264,18 +267,22 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
         const doc = unwrapped.documentMessage;
         const fileName = doc.fileName || doc.title || 'documento.pdf';
         const mimetype = doc.mimetype || 'application/pdf';
-        const docUrl = doc.mediaUrl || doc.url || (doc.base64 ? (doc.base64.startsWith('data:') ? doc.base64 : `data:${mimetype};base64,${doc.base64}`) : '');
+        const rawDocUrl = doc.mediaUrl || doc.url || '';
+        const isEncrypted = rawDocUrl && (rawDocUrl.includes('.enc') || rawDocUrl.includes('mmg.whatsapp.net'));
+        const docUrl = doc.base64 ? (doc.base64.startsWith('data:') ? doc.base64 : `data:${mimetype};base64,${doc.base64}`) : (isEncrypted ? '' : rawDocUrl);
         attachmentObj = {
-          name: fileName,
+          name: fileName.replace(/\.enc$/i, ''),
           type: mimetype,
           url: docUrl,
           dataUrl: docUrl
         };
-        if (!text) text = `📄 Documento: ${fileName}`;
+        if (!text) text = `📄 Documento: ${fileName.replace(/\.enc$/i, '')}`;
       } else if (unwrapped?.imageMessage) {
         const img = unwrapped.imageMessage;
         const mimetype = img.mimetype || 'image/jpeg';
-        const imgUrl = img.mediaUrl || img.url || (img.base64 ? (img.base64.startsWith('data:') ? img.base64 : `data:${mimetype};base64,${img.base64}`) : '');
+        const rawImgUrl = img.mediaUrl || img.url || '';
+        const isEncrypted = rawImgUrl && (rawImgUrl.includes('.enc') || rawImgUrl.includes('mmg.whatsapp.net'));
+        const imgUrl = img.base64 ? (img.base64.startsWith('data:') ? img.base64 : `data:${mimetype};base64,${img.base64}`) : (isEncrypted ? '' : rawImgUrl);
         attachmentObj = {
           name: 'imagem.jpg',
           type: mimetype,
@@ -287,7 +294,9 @@ export async function fetchEvolutionRecentMessages({ limit = 50 } = {}) {
       } else if (unwrapped?.audioMessage) {
         const aud = unwrapped.audioMessage;
         const mimetype = aud.mimetype || 'audio/ogg';
-        const audUrl = aud.mediaUrl || aud.url || (aud.base64 ? (aud.base64.startsWith('data:') ? aud.base64 : `data:${mimetype};base64,${aud.base64}`) : '');
+        const rawAudUrl = aud.mediaUrl || aud.url || '';
+        const isEncrypted = rawAudUrl && (rawAudUrl.includes('.enc') || rawAudUrl.includes('mmg.whatsapp.net'));
+        const audUrl = aud.base64 ? (aud.base64.startsWith('data:') ? aud.base64 : `data:${mimetype};base64,${aud.base64}`) : (isEncrypted ? '' : rawAudUrl);
         attachmentObj = {
           name: 'audio.ogg',
           type: mimetype,

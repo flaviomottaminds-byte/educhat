@@ -332,6 +332,12 @@ export function openDocument(attachment) {
     return;
   }
 
+  // Previne abertura de arquivos brutos cifrados (.enc do WhatsApp)
+  if (fileUrl.includes('.enc') || (fileUrl.includes('whatsapp.net') && fileUrl.includes('.enc'))) {
+    alert(`O arquivo "${filename}" é uma mídia cifrada bruta do WhatsApp (.enc) e não pôde ser aberta diretamente. As novas mensagens recebidas são agora desencriptadas automaticamente.`);
+    return;
+  }
+
   // Se for Base64 (dataUrl)
   if (fileUrl.startsWith('data:')) {
     const blob = dataUrlToBlob(fileUrl);
@@ -369,6 +375,12 @@ export function downloadDocument(attachment) {
 
   if (!fileUrl) {
     alert(`O arquivo "${filename}" não pôde ser baixado.`);
+    return;
+  }
+
+  // Previne download inútil de arquivos brutos cifrados (.enc do WhatsApp)
+  if (fileUrl.includes('.enc') || (fileUrl.includes('whatsapp.net') && fileUrl.includes('.enc'))) {
+    alert(`O arquivo "${filename}" é uma mídia cifrada bruta do WhatsApp (.enc) e não pôde ser baixado diretamente. As novas mídias recebidas são agora desencriptadas automaticamente.`);
     return;
   }
 

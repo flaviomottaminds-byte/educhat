@@ -175,12 +175,13 @@ export default function WhatsAppConnectionModal({
         const currentUrl = findData?.url || findData?.webhook?.url;
         const isEnabled = Boolean(findData?.enabled ?? findData?.webhook?.enabled);
         const events = findData?.events || findData?.webhook?.events || [];
-        if (isEnabled && currentUrl === targetWebhookUrl && events.includes('MESSAGES_UPSERT')) {
+        const base64Active = Boolean(findData?.base64 ?? findData?.webhook?.base64);
+        if (isEnabled && base64Active && currentUrl === targetWebhookUrl && events.includes('MESSAGES_UPSERT')) {
           return { enabled: true, url: currentUrl, autoUpdated: false };
         }
       }
 
-      // Religamento automático do Webhook se estiver desativado ou apontando para outra URL
+      // Religamento automático do Webhook com suporte obrigatório a Base64 desencriptado
       const setRes = await fetchWithTimeout(`${cleanUrl}/webhook/set/${instName}`, {
         method: 'POST',
         headers,
@@ -189,7 +190,9 @@ export default function WhatsAppConnectionModal({
             enabled: true,
             url: targetWebhookUrl,
             byEvents: false,
-            base64: false,
+            base64: true,
+            webhook_by_events: false,
+            webhook_base64: true,
             events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE']
           }
         })

@@ -284,12 +284,301 @@ function unwrapBaileysMessage(rawMsg: any): any {
   return msg;
 }
 
+// =========================================================================
+// MÉTODOS ROBUSTOS DE DESENCRIPTAÇÃO DE MÍDIA WHATSAPP & STORAGE UPLOAD
+// =========================================================================
+
+function getExtensionFromMime(mime: string, defaultExt: string = "bin"): string {
+  const m = (mime || "").toLowerCase();
+  if (m.includes("ogg") || m.includes("opus")) return "ogg";
+  if (m.includes("mpeg") || m.includes("mp3")) return "mp3";
+  if (m.includes("wav")) return "wav";
+  if (m.includes("aac") || m.includes("m4a")) return "m4a";
+  if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+  if (m.includes("png")) return "png";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("gif")) return "gif";
+  if (m.includes("pdf")) return "pdf";
+  if (m.includes("wordprocessingml") || m.includes("docx")) return "docx";
+  if (m.includes("msword") || m.includes("doc")) return "doc";
+  if (m.includes("spreadsheetml") || m.includes("xlsx")) return "xlsx";
+  if (m.includes("ms-excel") || m.includes("xls")) return "xls";
+  if (m.includes("mp4")) return "mp4";
+  if (m.includes("zip")) return "zip";
+  if (m.includes("text/plain")) return "txt";
+  return defaultExt;
+}
+
+function detectMimeAndExtFromBytes(
+  bytes: Uint8Array,
+  fallbackMime: string,
+  typeCategory: "audio" | "image" | "document" | "video" | "sticker"
+): { mimetype: string; ext: string } {
+  const len = bytes.length;
+  // OGG (OggS): 0x4F 0x67 0x67 0x53
+  if (len >= 4 && bytes[0] === 0x4F && bytes[1] === 0x67 && bytes[2] === 0x67 && bytes[3] === 0x53) {
+    return { mimetype: "audio/ogg; codecs=opus", ext: "ogg" };
+  }
+  // MP3: ID3 (0x49 0x44 0x33) or 0xFF 0xFB / 0xFF 0xF3
+  if (len >= 3 && bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) {
+    return { mimetype: "audio/mpeg", ext: "mp3" };
+  }
+  if (len >= 2 && bytes[0] === 0xFF && (bytes[1] === 0xFB || bytes[1] === 0xF3 || bytes[1] === 0xF2)) {
+    return { mimetype: "audio/mpeg", ext: "mp3" };
+  }
+  // WAV: RIFF ... WAVE
+  if (
+    len >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x41 && bytes[10] === 0x56 && bytes[11] === 0x45
+  ) {
+    return { mimetype: "audio/wav", ext: "wav" };
+  }
+  // JPEG: 0xFF 0xD8 0xFF
+  if (len >= 3 && bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+    return { mimetype: "image/jpeg", ext: "jpg" };
+  }
+  // PNG: 0x89 0x50 0x4E 0x47
+  if (len >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+    return { mimetype: "image/png", ext: "png" };
+  }
+  // WEBP: RIFF ... WEBP
+  if (
+    len >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    return { mimetype: "image/webp", ext: "webp" };
+  }
+  // GIF: GIF87a or GIF89a
+  if (len >= 3 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    return { mimetype: "image/gif", ext: "gif" };
+  }
+  // PDF: %PDF (0x25 0x50 0x44 0x46)
+  if (len >= 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+    return { mimetype: "application/pdf", ext: "pdf" };
+  }
+  // ZIP / DOCX / XLSX: PK.. (0x50 0x4B 0x03 0x04)
+  if (len >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) {
+    if (fallbackMime.includes("wordprocessingml") || fallbackMime.includes("docx")) {
+      return { mimetype: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ext: "docx" };
+    }
+    if (fallbackMime.includes("spreadsheetml") || fallbackMime.includes("xlsx")) {
+      return { mimetype: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" };
+    }
+    return { mimetype: "application/zip", ext: "zip" };
+  }
+  // MP4: ....ftyp
+  if (len >= 8 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70) {
+    return { mimetype: "video/mp4", ext: "mp4" };
+  }
+
+  // Fallback baseado no fallbackMime
+  const cleanMime = fallbackMime || (typeCategory === "audio" ? "audio/ogg; codecs=opus" : typeCategory === "image" ? "image/jpeg" : "application/pdf");
+  const ext = getExtensionFromMime(cleanMime, typeCategory === "audio" ? "ogg" : typeCategory === "image" ? "jpg" : "pdf");
+  return { mimetype: cleanMime, ext };
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const cleanBase64 = base64.replace(/^data:[^;]+;base64,/, "").replace(/[\r\n\s]/g, "");
+  const binaryString = atob(cleanBase64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// Desencripta mensagem de mídia utilizando endpoint oficial da Evolution API (/chat/getBase64FromMediaMessage)
+async function fetchDecryptedMediaFromEvolution(
+  keyObj: any,
+  rawMsg: any,
+  rawItem: any,
+  evoUrl: string,
+  evoKey: string,
+  evoInstance: string
+): Promise<{ base64?: string; mimetype?: string } | null> {
+  try {
+    const endpoint = `${evoUrl.replace(/\/+$/, "")}/chat/getBase64FromMediaMessage/${evoInstance}`;
+    const fullMessage = {
+      key: keyObj,
+      message: rawMsg
+    };
+
+    console.log(`📡 [Evolution Decrypt] Solicitando base64 desencriptado em: ${endpoint}`);
+
+    let res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: evoKey,
+      },
+      body: JSON.stringify({
+        message: fullMessage,
+        convertToMp4: false
+      }),
+    });
+
+    if (!res.ok && rawItem?.key) {
+      res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          apikey: evoKey,
+        },
+        body: JSON.stringify({
+          message: rawItem,
+          convertToMp4: false
+        }),
+      });
+    }
+
+    if (res.ok) {
+      const data = await res.json();
+      const b64 = data?.base64 || data?.data?.base64 || data?.media?.base64 || (typeof data === "string" ? data : null);
+      const mime = data?.mimetype || data?.data?.mimetype || data?.mimeType;
+      if (b64 && typeof b64 === "string" && b64.length > 50) {
+        console.log(`✅ [Evolution Decrypt] Base64 desencriptado obtido com sucesso! (${b64.length} chars, MIME: ${mime || 'não especificado'})`);
+        return { base64: b64, mimetype: mime };
+      }
+    } else {
+      console.warn(`⚠️ [Evolution Decrypt] Resposta não-OK da API (${res.status}):`, await res.text());
+    }
+  } catch (err) {
+    console.warn("⚠️ [Evolution Decrypt] Exceção ao chamar /chat/getBase64FromMediaMessage:", err);
+  }
+  return null;
+}
+
+// Resolução unificada de mídia desencriptada (payload pronto ou busca sob demanda)
+async function resolveDecryptedMedia(
+  mediaObj: any,
+  itemObj: any,
+  bodyContext: any,
+  rawMsg: any,
+  evoConfig?: { url: string; key: string; instance: string }
+): Promise<{ base64?: string; mimetype?: string } | null> {
+  // 1. Prioridade A: Base64 já entregue no webhook (quando base64: true está configurado na Evolution API)
+  const candidateB64 =
+    (typeof mediaObj?.base64 === "string" && mediaObj.base64.trim()) ||
+    (typeof itemObj?.base64 === "string" && itemObj.base64.trim()) ||
+    (typeof rawMsg?.base64 === "string" && rawMsg.base64.trim()) ||
+    (typeof bodyContext?.data?.message?.base64 === "string" && bodyContext.data.message.base64.trim()) ||
+    (typeof bodyContext?.data?.base64 === "string" && bodyContext.data.base64.trim()) ||
+    (typeof bodyContext?.base64 === "string" && bodyContext.base64.trim());
+
+  let mime = mediaObj?.mimetype || itemObj?.mimetype || itemObj?.mediaType;
+
+  if (candidateB64 && candidateB64.length > 50) {
+    console.log(`✅ [Media Resolver] Mídia desencriptada detectada diretamente no payload do webhook! (${candidateB64.length} chars)`);
+    return { base64: candidateB64, mimetype: mime };
+  }
+
+  // 2. Prioridade B: Desencriptação obrigatória sob demanda via Evolution API
+  if (evoConfig && evoConfig.url && evoConfig.key && evoConfig.instance) {
+    const keyObj = itemObj?.key || bodyContext?.data?.key || {};
+    if (keyObj && (keyObj.id || keyObj.remoteJid)) {
+      console.log(`🔄 [Media Resolver] Mídia recebida sem base64 direto. Chamando Evolution API para desencriptar...`);
+      const fetched = await fetchDecryptedMediaFromEvolution(
+        keyObj,
+        rawMsg,
+        itemObj,
+        evoConfig.url,
+        evoConfig.key,
+        evoConfig.instance
+      );
+      if (fetched && fetched.base64) {
+        return fetched;
+      }
+    }
+  }
+
+  return null;
+}
+
+// Upload estrito da mídia desencriptada para o Supabase Storage com nomeação e MIME-TYPE reais
+async function uploadDecryptedMediaToStorage(
+  supabase: any,
+  supabaseUrl: string,
+  base64Data: string,
+  declaredMime: string,
+  chatId: string,
+  typeCategory: "audio" | "image" | "document" | "video" | "sticker",
+  originalFileName?: string
+): Promise<{ publicUrl: string; fileName: string; mimetype: string; size: number } | null> {
+  try {
+    if (!supabase || !base64Data) return null;
+    const bytes = base64ToUint8Array(base64Data);
+    if (bytes.length === 0) return null;
+
+    // Detecta o MIME-TYPE real e a extensão examinando os magic bytes do buffer desencriptado
+    const { mimetype: realMime, ext } = detectMimeAndExtFromBytes(bytes, declaredMime, typeCategory);
+    const bucket = typeCategory === "audio" ? "chat-audios" : "chat-attachments";
+
+    // Nomeação segura do arquivo: remove terminação .enc se existir
+    let safeName = originalFileName || `${typeCategory}_${Date.now()}.${ext}`;
+    if (safeName.toLowerCase().endsWith(".enc")) {
+      safeName = safeName.slice(0, -4);
+    }
+    // Garante extensão correta
+    if (!safeName.toLowerCase().endsWith(`.${ext}`)) {
+      const dotIdx = safeName.lastIndexOf(".");
+      if (dotIdx !== -1) {
+        const oldExt = safeName.substring(dotIdx + 1).toLowerCase();
+        if (oldExt === "enc" || oldExt === "bin" || (typeCategory === "audio" && !["ogg", "mp3", "m4a", "wav"].includes(oldExt))) {
+          safeName = `${safeName.substring(0, dotIdx)}.${ext}`;
+        }
+      } else {
+        safeName = `${safeName}.${ext}`;
+      }
+    }
+
+    const uniquePrefix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const storagePath = `whatsapp/${chatId}/${uniquePrefix}_${safeName}`;
+
+    console.log(`📤 [Storage Upload] Gravando arquivo desencriptado no Supabase Storage: ${bucket}/${storagePath} (${bytes.length} bytes, MIME: ${realMime})`);
+
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(storagePath, bytes, {
+        contentType: realMime,
+        upsert: true
+      });
+
+    if (uploadError) {
+      console.error(`❌ [Storage Upload] Erro ao gravar mídia no bucket ${bucket}:`, uploadError);
+      return null;
+    }
+
+    const { data: pubData } = supabase.storage
+      .from(bucket)
+      .getPublicUrl(storagePath);
+
+    const publicUrl = pubData?.publicUrl || `${supabaseUrl.replace(/\/+$/, "")}/storage/v1/object/public/${bucket}/${storagePath}`;
+    console.log(`✅ [Storage Upload] Mídia desencriptada gravada com sucesso! URL pública: ${publicUrl}`);
+
+    return {
+      publicUrl,
+      fileName: safeName,
+      mimetype: realMime,
+      size: bytes.length
+    };
+  } catch (err) {
+    console.error("❌ [Storage Upload] Falha no processamento/upload da mídia desencriptada:", err);
+    return null;
+  }
+}
+
 // Extrator universal de conteúdo textual e mídia do WhatsApp
-function extractMessageContent(
+async function extractMessageContent(
   rawMsg: any,
   rawItem?: any,
-  bodyContext?: any
-): { text: string; isAudio: boolean; isMedia: boolean; audioUrl?: string; duration?: string } {
+  bodyContext?: any,
+  supabase?: any,
+  supabaseUrl?: string,
+  chatId?: string,
+  evoConfig?: { url: string; key: string; instance: string }
+): Promise<{ text: string; isAudio: boolean; isMedia: boolean; audioUrl?: string; duration?: string }> {
   // Desembrulha mensagem e camadas
   const msg = unwrapBaileysMessage(rawMsg);
   const item = rawItem || {};
@@ -365,9 +654,8 @@ function extractMessageContent(
   }
 
   // =========================================================================
-  // 2. TRATAMENTO DE MÍDIAS (Item 2)
-  // Se for estritamente áudio, figurinha, imagem ou documento sem texto,
-  // grava algo descritivo como "🎵 Áudio recebido", "🖼️ Imagem recebida" ou "📄 Documento recebido"
+  // 2. TRATAMENTO DE MÍDIAS COM DESENCRIPTAÇÃO OBRIGATÓRIA & UPLOAD NO STORAGE
+  // NUNCA grava arquivos encriptados (.enc) diretamente no Supabase Storage!
   // =========================================================================
 
   // 1. ÁUDIO (Push-to-Talk / gravação de voz ou arquivo de áudio)
@@ -380,36 +668,47 @@ function extractMessageContent(
 
   if (isAudioType) {
     const audio = msg?.audioMessage || item?.audioMessage || {};
-    const rawAudioUrl = audio.url || audio.mediaUrl || item?.mediaUrl || item?.url || "";
-    const rawBase64 = audio.base64 || item?.base64 || "";
-    const mimetype = audio.mimetype || "audio/ogg; codecs=opus";
     const seconds = Number(audio.seconds || item?.seconds || 14);
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     const duration = `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    const transcription = audio.transcription || audio.transcript || item?.transcription || "";
 
-    let dataUrl = "";
-    if (rawBase64) {
-      dataUrl = rawBase64.startsWith("data:") ? rawBase64 : `data:${mimetype};base64,${rawBase64}`;
-    } else if (rawAudioUrl) {
-      dataUrl = rawAudioUrl;
+    // 1. Desencripta a mídia obrigatoriamente
+    const decrypted = await resolveDecryptedMedia(audio, item, bodyContext, rawMsg, evoConfig);
+    let finalAudioUrl = "";
+
+    if (decrypted && decrypted.base64) {
+      // 2. Upload para o bucket 'chat-audios' com MIME real
+      const uploaded = await uploadDecryptedMediaToStorage(
+        supabase,
+        supabaseUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co",
+        decrypted.base64,
+        decrypted.mimetype || audio.mimetype || "audio/ogg; codecs=opus",
+        chatId || "geral",
+        "audio",
+        "audio.ogg"
+      );
+      if (uploaded) {
+        finalAudioUrl = uploaded.publicUrl;
+      }
     }
 
     let messageText = "🎵 Áudio recebido";
-    if (dataUrl) {
+    if (finalAudioUrl) {
       const attachmentPayload = JSON.stringify({
         name: `audio_${Date.now()}.ogg`,
-        type: mimetype,
-        dataUrl: dataUrl,
+        type: decrypted?.mimetype || "audio/ogg; codecs=opus",
+        url: finalAudioUrl,
+        dataUrl: finalAudioUrl,
         duration: duration,
         isAudio: true
       });
       messageText += `\n[ARQUIVO_ANEXO:${attachmentPayload}]`;
-      messageText += `\n<!-- AUDIO_URL:${dataUrl} -->`;
+      messageText += `\n<!-- AUDIO_URL:${finalAudioUrl} -->`;
     }
     messageText += `\n<!-- IS_AUDIO:true -->`;
 
-    const transcription = audio.transcription || audio.transcript || item?.transcription || "";
     if (transcription) {
       messageText += `\n[ÁUDIO_TRANSCRIÇÃO: "${transcription}"]`;
     }
@@ -418,7 +717,7 @@ function extractMessageContent(
       text: messageText,
       isAudio: true,
       isMedia: true,
-      audioUrl: dataUrl,
+      audioUrl: finalAudioUrl,
       duration: duration
     };
   }
@@ -432,16 +731,32 @@ function extractMessageContent(
 
   if (isSticker) {
     const stk = msg?.stickerMessage || item?.stickerMessage || {};
-    const stkUrl = stk.url || stk.mediaUrl || item?.mediaUrl || item?.url || "";
-    const stkBase64 = stk.base64 || item?.base64 || "";
-    const mimetype = stk.mimetype || "image/webp";
-    let dataUrl = stkUrl;
-    if (stkBase64) {
-      dataUrl = stkBase64.startsWith("data:") ? stkBase64 : `data:${mimetype};base64,${stkBase64}`;
+    const decrypted = await resolveDecryptedMedia(stk, item, bodyContext, rawMsg, evoConfig);
+    let finalStkUrl = "";
+
+    if (decrypted && decrypted.base64) {
+      const uploaded = await uploadDecryptedMediaToStorage(
+        supabase,
+        supabaseUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co",
+        decrypted.base64,
+        decrypted.mimetype || stk.mimetype || "image/webp",
+        chatId || "geral",
+        "sticker",
+        "sticker.webp"
+      );
+      if (uploaded) {
+        finalStkUrl = uploaded.publicUrl;
+      }
     }
+
     let messageText = "💟 Figurinha recebida";
-    if (dataUrl) {
-      messageText += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "sticker.webp", type: mimetype, dataUrl })}]`;
+    if (finalStkUrl) {
+      messageText += `\n[ARQUIVO_ANEXO:${JSON.stringify({
+        name: "sticker.webp",
+        type: decrypted?.mimetype || "image/webp",
+        url: finalStkUrl,
+        dataUrl: finalStkUrl
+      })}]`;
     }
     return { text: messageText, isAudio: false, isMedia: true };
   }
@@ -455,18 +770,33 @@ function extractMessageContent(
 
   if (isImageType) {
     const img = msg?.imageMessage || item?.imageMessage || {};
-    const imgUrl = img.url || img.mediaUrl || item?.mediaUrl || item?.url || "";
-    const base64 = img.base64 || item?.base64 || "";
-    const mimetype = img.mimetype || "image/jpeg";
-    let dataUrl = imgUrl;
-    if (base64) {
-      dataUrl = base64.startsWith("data:") ? base64 : `data:${mimetype};base64,${base64}`;
+    const decrypted = await resolveDecryptedMedia(img, item, bodyContext, rawMsg, evoConfig);
+    let finalImageUrl = "";
+
+    if (decrypted && decrypted.base64) {
+      const uploaded = await uploadDecryptedMediaToStorage(
+        supabase,
+        supabaseUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co",
+        decrypted.base64,
+        decrypted.mimetype || img.mimetype || "image/jpeg",
+        chatId || "geral",
+        "image",
+        "imagem.jpg"
+      );
+      if (uploaded) {
+        finalImageUrl = uploaded.publicUrl;
+      }
     }
 
-    // Se tem legenda, usa a legenda; caso contrário usa "🖼️ Imagem recebida"
     let text = imageCaption ? imageCaption : "🖼️ Imagem recebida";
-    if (dataUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "imagem.jpg", type: mimetype, dataUrl })}]`;
+    if (finalImageUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({
+        name: "imagem.jpg",
+        type: decrypted?.mimetype || "image/jpeg",
+        url: finalImageUrl,
+        dataUrl: finalImageUrl,
+        isImage: true
+      })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
@@ -480,12 +810,33 @@ function extractMessageContent(
 
   if (isVideoType) {
     const vid = msg?.videoMessage || item?.videoMessage || {};
-    const vidUrl = vid.url || vid.mediaUrl || item?.mediaUrl || item?.url || "";
-    const mimetype = vid.mimetype || "video/mp4";
+    const decrypted = await resolveDecryptedMedia(vid, item, bodyContext, rawMsg, evoConfig);
+    let finalVidUrl = "";
+
+    if (decrypted && decrypted.base64) {
+      const uploaded = await uploadDecryptedMediaToStorage(
+        supabase,
+        supabaseUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co",
+        decrypted.base64,
+        decrypted.mimetype || vid.mimetype || "video/mp4",
+        chatId || "geral",
+        "video",
+        "video.mp4"
+      );
+      if (uploaded) {
+        finalVidUrl = uploaded.publicUrl;
+      }
+    }
 
     let text = videoCaption ? videoCaption : "🎥 Vídeo recebido";
-    if (vidUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: "video.mp4", type: mimetype, dataUrl: vidUrl })}]`;
+    if (finalVidUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({
+        name: "video.mp4",
+        type: decrypted?.mimetype || vid.mimetype || "video/mp4",
+        url: finalVidUrl,
+        dataUrl: finalVidUrl,
+        isVideo: true
+      })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
@@ -500,21 +851,39 @@ function extractMessageContent(
 
   if (isDocType) {
     const doc = msg?.documentMessage || msg?.documentWithCaptionMessage?.message?.documentMessage || item?.documentMessage || {};
-    const fileName = doc.fileName || doc.title || item?.fileName || "";
-    const docUrl = doc.mediaUrl || item?.mediaUrl || doc.url || item?.url || "";
-    const base64 = doc.base64 || item?.base64 || "";
-    const mimetype = doc.mimetype || "application/pdf";
-    let dataUrl = docUrl;
-    if (base64) {
-      dataUrl = base64.startsWith("data:") ? base64 : `data:${mimetype};base64,${base64}`;
+    const rawFileName = doc.fileName || doc.title || item?.fileName || "documento.pdf";
+    const decrypted = await resolveDecryptedMedia(doc, item, bodyContext, rawMsg, evoConfig);
+    let finalDocUrl = "";
+    let finalDocName = rawFileName;
+
+    if (decrypted && decrypted.base64) {
+      const uploaded = await uploadDecryptedMediaToStorage(
+        supabase,
+        supabaseUrl || "https://yuhtzkhoxnabrsrhqdni.supabase.co",
+        decrypted.base64,
+        decrypted.mimetype || doc.mimetype || "application/pdf",
+        chatId || "geral",
+        "document",
+        rawFileName
+      );
+      if (uploaded) {
+        finalDocUrl = uploaded.publicUrl;
+        finalDocName = uploaded.fileName;
+      }
     }
 
     let text = docCaption
       ? docCaption
-      : (fileName ? `📄 Documento recebido: ${fileName}` : "📄 Documento recebido");
+      : (finalDocName ? `📄 Documento recebido: ${finalDocName}` : "📄 Documento recebido");
 
-    if (dataUrl) {
-      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({ name: fileName || "documento.pdf", type: mimetype, dataUrl: dataUrl, url: dataUrl })}]`;
+    if (finalDocUrl) {
+      text += `\n[ARQUIVO_ANEXO:${JSON.stringify({
+        name: finalDocName,
+        type: decrypted?.mimetype || doc.mimetype || "application/pdf",
+        url: finalDocUrl,
+        dataUrl: finalDocUrl,
+        isFile: true
+      })}]`;
     }
     return { text, isAudio: false, isMedia: true };
   }
@@ -601,6 +970,12 @@ Deno.serve(async (req: Request) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
+    // Configurações da Evolution API para desencriptação sob demanda e auto-sincronização
+    const evoUrl = (Deno.env.get("EVOLUTION_API_URL") || Deno.env.get("VITE_EVOLUTION_API_URL") || "https://evolution-api-production-3fb2.up.railway.app").replace(/\/+$/, "");
+    const evoKey = (Deno.env.get("EVOLUTION_API_KEY") || Deno.env.get("VITE_EVOLUTION_API_KEY") || "e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f").trim();
+    const evoInstance = String(body?.instance || Deno.env.get("EVOLUTION_INSTANCE") || Deno.env.get("VITE_EVOLUTION_INSTANCE") || "EduChat-Matriz-01").trim();
+    const evoConfig = { url: evoUrl, key: evoKey, instance: evoInstance };
+
     // 1. Extração robusta da lista de mensagens
     const rawMessages = extractRawMessages(body);
     console.log("📋 [Etapa 1] Mensagens extraídas do payload: " + rawMessages.length + " item(ns)");
@@ -670,8 +1045,16 @@ Deno.serve(async (req: Request) => {
       const senderId = chatId;
       const senderName = pushName || (known ? known.name : (cleanPhone ? "Lead " + formatPhone(cleanPhone) : "Lead WhatsApp"));
 
-      // Conteúdo da mensagem com unwrap completo e prioridades
-      const content = extractMessageContent(m?.message || m, m, body);
+      // Conteúdo da mensagem com unwrap completo, prioridades e desencriptação obrigatória de mídias
+      const content = await extractMessageContent(
+        m?.message || m,
+        m,
+        body,
+        supabase,
+        supabaseUrl,
+        chatId,
+        evoConfig
+      );
       const messageText = (content.text || "").trim();
 
       // Descarte estrito de mensagens sem conteúdo real (evita gravar "Mensagem recebida" fantasma)
