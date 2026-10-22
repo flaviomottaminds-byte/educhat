@@ -1930,12 +1930,32 @@ export default function ChatArea({
           (uniqueMessages || []).map((m) => {
             if (!m || typeof m !== 'object') return null;
             try {
-              if (m.senderId === 'system' || m.sender_id === 'system') {
-                const isDossier =
-                  m.isDossier ||
-                  (typeof m.text === 'string' &&
-                    (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:')));
+              const isChannelTarget = target?.type === 'channel' || String(target?.id || '').startsWith('c-') || String(target?.id || '').startsWith('#');
+              const isDossier =
+                m.isDossier ||
+                (typeof m.text === 'string' &&
+                  (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:')));
 
+              // 1. BLOQUEIO ESTRITO: Dossiê NUNCA pode ser renderizado em canais públicos da equipe
+              if (isChannelTarget && isDossier) {
+                return null;
+              }
+
+              // 2. ISOLAMENTO DE DESTINATÁRIO: Se a mensagem tiver recipient_id específico e for de outro usuário
+              if (m.recipientId && m.recipientId !== currentUser?.id && m.senderId !== currentUser?.id) {
+                return null;
+              }
+              if (m.recipient_id && m.recipient_id !== currentUser?.id && m.sender_id !== currentUser?.id) {
+                return null;
+              }
+
+              const isSystemOrCopilot =
+                m.senderId === 'system' ||
+                m.sender_id === 'system' ||
+                m.senderId === 'u_ia_copilot' ||
+                m.sender_id === 'u_ia_copilot';
+
+              if (isSystemOrCopilot) {
                 if (isDossier) {
                   return (
                     <div key={m.id || Math.random()} className="flex justify-center my-3 w-full px-2 animate-in fade-in">

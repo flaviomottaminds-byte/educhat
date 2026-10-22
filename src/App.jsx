@@ -2093,6 +2093,16 @@ export default function App() {
       }
 
       // 1B. Busca as mensagens reais de conversas mais recentes em ordem cronológica (excluindo registros sys_*)
+      // Purga em background qualquer mensagem de dossiê residual acidentalmente gravada em canais públicos da equipe
+      try {
+        supabase
+          .from('messages')
+          .delete()
+          .or('chat_id.like.c-%,chat_id.in.(c-geral,c-comercial,c-tutoria,c-secretaria,c-marketing,c-pedagogico,c-expansao,c-diretoria)')
+          .like('text', '%DOSSIÊ EXECUTIVO%')
+          .then(() => {}, () => {});
+      } catch {}
+
       let recentDbMessages = null;
       try {
         let { data, error } = await supabase
@@ -2190,6 +2200,11 @@ export default function App() {
             }
           }
 
+          // Blindagem de Destinatário Estrito: se a mensagem tem recipient_id e não envolve o usuário ativo, descarta
+          if (m.recipient_id && m.recipient_id !== activeUser.id && m.sender_id !== activeUser.id) {
+            return;
+          }
+
           // 2. BLINDAGEM DE CANAIS POR PERFIL/DEPARTAMENTO:
           const key = normalizeChatKey(m.chat_id, activeUser.id);
           const isChannel = Boolean(
@@ -2201,6 +2216,10 @@ export default function App() {
             )
           );
           if (isChannel) {
+            // BLOQUEIO TOTAL: Dossiê Executivo NUNCA deve ser renderizado em canais públicos de equipe
+            if (typeof m.text === 'string' && (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:'))) {
+              return;
+            }
             const chId = key.startsWith('c-') ? key : `c-${key.replace(/^c-/, '')}`;
             if (!canUserViewChannel(chId, activeUser, channelsRef.current)) {
               return; // Bloqueia canais aos quais o colaborador não tem permissão
@@ -2904,10 +2923,19 @@ export default function App() {
 
           // Trava de Visibilidade de Canais: se o usuário não tem permissão para o canal (ex: Gislaine em #comercial), descarta
           if (isChannelRow) {
+            // Bloqueia qualquer vazamento de Dossiê Executivo em canais públicos de equipe
+            if (typeof row.text === 'string' && (row.text.includes('DOSSIÊ EXECUTIVO') || row.text.includes('<!-- DOSSIER_RECORD:'))) {
+              return;
+            }
             const channelId = cKey.startsWith('c-') ? cKey : `c-${String(row.chat_id || cKey).replace(/^[c#]-?/, '')}`;
             if (!canUserViewChannel(channelId, activeUser, channelsRef.current)) {
               return;
             }
+          }
+
+          // Blindagem de Destinatário Estrito: se a mensagem possui recipient_id e não envolve o usuário logado, descarta
+          if (row.recipient_id && row.recipient_id !== currentUserId && row.sender_id !== currentUserId) {
+            return;
           }
 
           // Trava de Privacidade e Destinatário em DMs 1-a-1: se o usuário logado não for participante, descarta
@@ -3715,10 +3743,19 @@ export default function App() {
               )
             );
             if (isChannel) {
+              // BLOQUEIO TOTAL: Dossiê Executivo NUNCA deve ser renderizado em canais públicos de equipe
+              if (typeof row.text === 'string' && (row.text.includes('DOSSIÊ EXECUTIVO') || row.text.includes('<!-- DOSSIER_RECORD:'))) {
+                return;
+              }
               const chId = cKey.startsWith('c-') ? cKey : `c-${String(row.chat_id || cKey).replace(/^[c#]-?/, '')}`;
               if (!canUserViewChannel(chId, activeUser, channelsRef.current)) {
                 return;
               }
+            }
+
+            // Blindagem de Destinatário Estrito: se a mensagem tem recipient_id e não envolve o usuário ativo, descarta
+            if (row.recipient_id && row.recipient_id !== currentUserId && row.sender_id !== currentUserId) {
+              return;
             }
 
             // 2. Se for DM (1 a 1): valida se o usuário ativo é participante
@@ -5374,13 +5411,40 @@ export default function App() {
   };
 
   // Injeção de Dossiê do WhatsApp com Suporte a Modo "Apenas Chat" ou "Chat + Kanban"
+  // BLINDAGEM DE PRIVACIDADE E TARGETING ESTRITO:
+  // - Se estiver no WhatsApp ou contato especificado: injeta exclusivamente no histórico daquele WhatsApp
+  // - Se estiver em um canal público (c-*): NUNCA injeta no canal da equipe! Redireciona para o chat privado do Copilot com o solicitante
+  // - Remetente é explicitamente 'u_ia_copilot' e recipient_id é 'activeUserId' para blindar contra broadcast no Realtime/RLS
   const handleInjectDossierToChat = async (dossierData, shouldCreateKanban = false, selectedTasksList = []) => {
     const currentTargetChat = activeChatRef.current || activeChat;
     const activeUserId = currentUserRef.current?.id || currentUser?.id || 'u1';
-    const targetChatKey = getChatKey(currentTargetChat, activeUserId);
     const timeStr = getSaoPauloTime();
 
-    // 1. Monta o texto executivo do Dossiê para registro no fluxo do chat
+    // 1. DIRECIONAMENTO ESTRITO (TARGETING):
+    const isChannel = currentTargetChat?.type === 'channel' || 
+      String(currentTargetChat?.id || '').startsWith('c-') || 
+      String(currentTargetChat?.id || '').startsWith('#') ||
+      ['geral', 'comercial', 'tutoria', 'secretaria', 'marketing', 'pedagogico', 'expansao', 'diretoria'].includes(
+        String(currentTargetChat?.id || '').replace(/^[c#]-?/, '').toLowerCase()
+      );
+
+    let targetChatKey;
+    if (currentTargetChat?.type === 'whatsapp' || String(currentTargetChat?.id || '').startsWith('wa-')) {
+      targetChatKey = currentTargetChat.id;
+    } else if (dossierData?.contactId && String(dossierData.contactId).startsWith('wa-')) {
+      targetChatKey = dossierData.contactId;
+    } else if (!isChannel && currentTargetChat?.type === 'dm') {
+      targetChatKey = getChatKey(currentTargetChat, activeUserId);
+    } else {
+      // Bloqueio de broadcast em canais públicos da equipe (ex: c-geral, c-comercial).
+      // Redireciona para o atendimento privado da IA Copilot com o solicitante.
+      targetChatKey = getChatKey({ type: 'dm', id: 'u_ia_copilot' }, activeUserId);
+      try {
+        setActiveChat({ type: 'dm', id: 'u_ia_copilot' });
+      } catch {}
+    }
+
+    // 2. Monta o texto executivo do Dossiê para registro no fluxo do chat
     let dossierText = `📋 **DOSSIÊ EXECUTIVO WHATSAPP • NOTA INTERNA DA EQUIPE**\n\n`;
     dossierText += `🏛️ **Cliente/Contato:** ${dossierData.clientName || 'Contato WhatsApp'}\n`;
     if (dossierData.plan) dossierText += `👑 **Plano/Modalidade:** ${dossierData.plan}\n`;
@@ -5421,10 +5485,12 @@ export default function App() {
     const newMsg = {
       id: dossierMsgId,
       chat_id: targetChatKey,
-      sender_id: 'system',
+      sender_id: 'u_ia_copilot',
       sender_name: 'IA Dossiê WhatsApp',
-      senderId: 'system',
+      senderId: 'u_ia_copilot',
       senderName: 'IA Dossiê WhatsApp',
+      recipient_id: activeUserId,
+      recipientId: activeUserId,
       text: dossierText,
       timestamp: timeStr,
       created_at: new Date().toISOString(),
@@ -5432,18 +5498,36 @@ export default function App() {
       hasKanban: shouldCreateKanban
     };
 
-    // 2. Persistência no Supabase e no estado local do chat
+    // 3. Persistência no Supabase com isolamento de sessão e RLS (sender_id: 'u_ia_copilot', recipient_id: activeUserId)
+    const dbPayload = {
+      id: newMsg.id,
+      chat_id: targetChatKey,
+      sender_id: 'u_ia_copilot',
+      sender_name: 'IA Dossiê WhatsApp',
+      recipient_id: activeUserId,
+      text: newMsg.text,
+      timestamp: newMsg.timestamp
+    };
+    // Garante ausência de channel_id para não ativar broadcast em canais
+    delete dbPayload.channel_id;
+
     try {
-      await supabase.from('messages').insert([{
-        id: newMsg.id,
-        chat_id: targetChatKey,
-        sender_id: 'system',
-        sender_name: 'IA Dossiê WhatsApp',
-        text: newMsg.text,
-        timestamp: newMsg.timestamp
-      }]);
+      const { error: insError } = await supabase.from('messages').insert([dbPayload]);
+      if (insError) {
+        if (
+          insError.code === 'PGRST204' ||
+          insError.message?.includes('recipient_id') ||
+          insError.message?.includes('schema cache')
+        ) {
+          const fallbackPayload = { ...dbPayload };
+          delete fallbackPayload.recipient_id;
+          await supabase.from('messages').insert([fallbackPayload]);
+        } else {
+          console.warn('[handleInjectDossierToChat] Erro ao persistir dossiê no Supabase:', insError);
+        }
+      }
     } catch (err) {
-      console.warn('Aviso ao persistir mensagem de dossiê no Supabase:', err);
+      console.warn('[handleInjectDossierToChat] Exceção ao persistir mensagem de dossiê:', err);
     }
 
     setMessages((prev) => ({
@@ -5451,7 +5535,7 @@ export default function App() {
       [targetChatKey]: [...(prev[targetChatKey] || []), newMsg]
     }));
 
-    // 3. Se a opção de Kanban foi selecionada, cria os cards no Kanban
+    // 4. Se a opção de Kanban foi selecionada, cria os cards no Kanban
     if (shouldCreateKanban) {
       const tasksToCreate = Array.isArray(selectedTasksList) && selectedTasksList.length > 0
         ? selectedTasksList
