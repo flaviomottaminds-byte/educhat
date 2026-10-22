@@ -100,13 +100,16 @@ Sua função primária com usuários administradores (role = admin ou diretoria)
 
 REGRAS OBRIGATÓRIAS DE COMPORTAMENTO:
 1. GATILHO & PERMISSÃO:
-   - Se o remetente possuir 'role = admin' E a mensagem relatar um erro, bug, exceção, falha de interface, inconsistência de dados ou melhoria técnica: ATIVE IMEDIATAMENTE O MODO BUG TRACKER.
-2. BYPASS DE SUPORTE:
+   - Se o remetente possuir 'role = admin' E a mensagem relatar um erro, bug, exceção, falha de interface, inconsistência de dados ou melhoria técnica: ATIVE O MODO BUG TRACKER, EXCETO se o usuário solicitar expressamente a inclusão de cartões ou tarefas no Kanban.
+2. PRECEDÊNCIA CRÍTICA - KANBAN VS CHAMADO TÉCNICO:
+   - Se o usuário disser "abra um card no meu Kanban", "crie cards no Kanban", "adicione ao Kanban", "coloque no quadro" ou pedir para registrar/organizar itens em tarefas no quadro operacional, NUNCA acione o modo Chamado Técnico/Bug Tracker!
+   - A ferramenta a ser acionada DEVE ser a inserção de cartões na tabela 'kanban_cards' (ou 'tasks'), independentemente de o texto conter palavras ligadas a bugs, erros ou tecnologia. O vocabulário "erro" ou "bug" representa apenas o conteúdo da tarefa a ser executada pela equipe, e NÃO um desvio para a tabela 'bug_reports'.
+3. BYPASS DE SUPORTE:
    - NÃO tente dar suporte ao administrador.
    - NÃO dê instruções de 'como usar o sistema', 'recarregue a página' ou tutoriais.
    - NÃO faça perguntas adicionais desnecessárias.
-   - Você é um coletor silencioso que traduz linguagem natural em chamado de engenharia de software.
-3. EXTRAÇÃO DE DADOS (PARSING):
+   - Você é um coletor silencioso que traduz linguagem natural em chamado de engenharia de software quando não houver pedido de Kanban.
+4. EXTRAÇÃO DE DADOS (PARSING):
    - Extraia as informações do relato e estruture no seguinte formato JSON:
      {
        "titulo_do_bug": "Resumo técnico objetivo do problema em até 60 caracteres",
@@ -118,9 +121,9 @@ REGRAS OBRIGATÓRIAS DE COMPORTAMENTO:
      * "alta": Travamento geral, perda de dados, quebra de QR Code, autenticação, áudio, webhooks essenciais ou erro bloqueante.
      * "media": Falhas de UI, modais, contadores de notificação, formatação, botões secundários.
      * "baixa": Pequenos ajustes visuais, textos, cosméticos ou sugestões incrementais.
-4. INSERÇÃO NO BANCO DE DADOS:
+5. INSERÇÃO NO BANCO DE DADOS:
    - Salve o JSON gerado diretamente na tabela 'bug_reports' do Supabase.
-5. RESPOSTA VISUAL OBRIGATÓRIA NO CHAT:
+6. RESPOSTA VISUAL OBRIGATÓRIA NO CHAT:
    - Responda EXATAMENTE E APENAS:
      "🛠️ Chamado técnico registrado com sucesso no banco de dados."
    - NADA MAIS. Sem saudações prévias, sem desculpas, sem acréscimos.`;
@@ -147,9 +150,71 @@ export function isUserAdmin(user) {
   );
 }
 
+// Identifica se a mensagem é uma ordem explícita de criação ou gestão de cartões no Kanban operacional
+export function isKanbanIntent(text) {
+  if (!text || typeof text !== 'string') return false;
+  const lower = text.toLowerCase();
+
+  // Padrões inequívocos de intenção de Kanban e criação de cards
+  const kanbanPatterns = [
+    'kanban',
+    'quadro operacional',
+    'no quadro',
+    'abra um card',
+    'abrir um card',
+    'abra card',
+    'abrir card',
+    'abra cards',
+    'abrir cards',
+    'abra o card',
+    'abrir o card',
+    'crie um card',
+    'criar um card',
+    'crie card',
+    'criar card',
+    'crie cards',
+    'criar cards',
+    'coloque no card',
+    'coloque no kanban',
+    'adicione no kanban',
+    'adicione ao kanban',
+    'adicionar ao kanban',
+    'adicionar no kanban',
+    'inserir no kanban',
+    'insira no kanban',
+    'novo card',
+    'novos cards',
+    'gerar card',
+    'gerar cards',
+    'criar tarefa',
+    'crie tarefa',
+    'criar tarefas',
+    'crie tarefas',
+    'abrir tarefa',
+    'abra tarefa',
+    'abrir tarefas',
+    'abra tarefas',
+    'gerar tarefas',
+    'gere tarefas',
+    'cartao no kanban',
+    'cartão no kanban',
+    'cartoes no kanban',
+    'cartões no kanban',
+    'meu kanban'
+  ];
+
+  return kanbanPatterns.some((pattern) => lower.includes(pattern));
+}
+
 // Identifica se a mensagem é um relato de bug / chamado técnico
 export function isBugReportIntent(text) {
   if (!text || text.trim().length < 3) return false;
+
+  // PRECEDÊNCIA ABSOLUTA: Se o usuário pediu explicitamente para abrir no Kanban, NUNCA é chamado técnico!
+  if (isKanbanIntent(text)) {
+    return false;
+  }
+
   const lower = text.toLowerCase();
 
   // 1. Padrão estruturado explícito (ex: Problema:... Ação esperada:...)

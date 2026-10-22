@@ -28,6 +28,7 @@ import {
   answerCopilotQuery,
   analyzeTaskPriorityAI,
   isBugReportIntent,
+  isKanbanIntent,
   isUserAdmin,
   parseBugReport
 } from './lib/aiKnowledge';
@@ -53,7 +54,9 @@ import {
 } from './lib/whatsappRouting';
 import {
   generateGeminiChatReply,
-  syncGeminiApiKeyFromCloud
+  syncGeminiApiKeyFromCloud,
+  matchCollaboratorToTask,
+  parseKanbanCardsFromText
 } from './lib/gemini';
 import {
   hasFullPortfolioAccess,
@@ -4134,9 +4137,10 @@ export default function App() {
         const cleanQuery = text.replace(/@(ia|copilot)\b/gi, '').trim();
         const queryText = cleanQuery || text;
         const isAdmin = isUserAdmin(currentUser);
-        const isBug = isBugReportIntent(queryText);
+        const isKanban = isKanbanIntent(queryText);
+        const isBug = !isKanban && isBugReportIntent(queryText);
 
-        // LOGS DE DEPURAÇÃO NO CONSOLE (F12) - Item 3
+        // LOGS DE DEPURAÇÃO NO CONSOLE (F12)
         console.group('🤖 [EduChat AI Message Interceptor]');
         console.log('📝 Mensagem original:', text);
         console.log('🧹 Query limpa:', queryText);
@@ -4148,15 +4152,17 @@ export default function App() {
           isAdmin
         });
         console.log('🔍 Análise de Intenção:', {
+          isKanbanIntent: isKanban,
           isBugReportIntent: isBug,
           isAdminUser: isAdmin,
-          deveAcionarBugTracker: isAdmin && isBug
+          deveAcionarBugTracker: isAdmin && isBug,
+          deveAcionarKanbanTool: isKanban
         });
 
         let replyText = '';
 
         // =========================================================================
-        // 1. DESVIO CONDICIONAL: AI BUG TRACKER (Bypass de suporte para Admin)
+        // 1. DESVIO CONDICIONAL: AI BUG TRACKER (Bypass de suporte apenas se NÃO for Kanban)
         // =========================================================================
         if (isAdmin && isBug) {
           console.log('🚨 [AI Bug Tracker] INTERCEPTAÇÃO ATIVADA: Desviando para Edge Function "ai-bug-tracker"...');
@@ -4226,11 +4232,12 @@ export default function App() {
           }
         } else {
           // =========================================================================
-          // 2. FLUXO REGULAR: Resposta do Copiloto via Google Gemini (RAG Inteligente, MEC e POPs)
+          // 2. FLUXO REGULAR E TOOL CALLING: Google Gemini com Ferramenta 'create_kanban_cards'
           // =========================================================================
-          console.log('💬 [AI Chat] Acionando API Oficial do Google Gemini (gemini-2.5-flash) com RAG otimizado...');
+          console.log('💬 [AI Chat] Acionando API Oficial do Google Gemini com Function Calling (create_kanban_cards)...');
+          let geminiResult = null;
           try {
-            replyText = await generateGeminiChatReply({
+            geminiResult = await generateGeminiChatReply({
               message: queryText,
               attachment,
               history: (messages[currentChatKey] || []).slice(-6),
@@ -4245,10 +4252,167 @@ export default function App() {
             });
           } catch (geminiErr) {
             console.warn('Aviso na chamada do Gemini:', geminiErr);
-            replyText = '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
+            geminiResult = '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
           }
 
-          // 3. TRATAMENTO VISUAL DE ERROS GLOBAIS (Impedir log amarelo cru na tela do usuário)
+          let createdCount = 0;
+
+          // A. Processamento Direto de Chamada de Função (Tool Calling)
+          if (geminiResult && typeof geminiResult === 'object' && geminiResult.isFunctionCall) {
+            const fnName = geminiResult.functionCall?.name;
+            const fnArgs = geminiResult.functionCall?.args || {};
+
+            if (fnName === 'create_kanban_cards' && Array.isArray(fnArgs.cards) && fnArgs.cards.length > 0) {
+              const liveCollabs = collaboratorsRef.current || collaborators || [];
+              const rawCards = fnArgs.cards;
+              const newCards = rawCards.map((c, idx) => {
+                const matched = matchCollaboratorToTask(c.assignee || '', c.department || '', liveCollabs);
+                const fullSource = `Solicitado via IA (${currentUser?.name || 'Gestão'}): "${queryText.slice(0, 100)}"`;
+                const cDate = new Date().toISOString();
+                return {
+                  id: `t_ia_${Date.now()}_${idx}`,
+                  title: (c.title || 'Demanda Kanban').slice(0, 70),
+                  desc: c.description || c.title || '',
+                  status: 'backlog',
+                  priority: ['alta', 'media', 'baixa', 'vip'].includes(String(c.priority || '').toLowerCase())
+                    ? String(c.priority).toLowerCase()
+                    : 'media',
+                  isVip: Boolean(c.isVip || c.priority === 'vip'),
+                  assignee: matched.assignee,
+                  assigneeId: matched.assigneeId,
+                  assigneeEmail: matched.assigneeEmail,
+                  assigneeAvatar: matched.assigneeAvatar || '👤',
+                  department: matched.department || 'Geral',
+                  dueDate: c.dueDate || 'Em até 48h',
+                  channel: '📌 Assistente IA',
+                  sourceMessage: fullSource,
+                  requester: currentUser?.name || 'Diretoria',
+                  requesterDept: currentUser?.department || 'Diretoria',
+                  created_at: cDate,
+                  createdAt: cDate,
+                  comments: [],
+                  attachments: []
+                };
+              });
+
+              // Atualiza o estado do Kanban e persiste no Supabase (tabela tasks / view kanban_cards)
+              setTasks((prev) => [...newCards, ...prev]);
+              createdCount = newCards.length;
+
+              const dbRows = newCards.map((c) => {
+                const metaPayload = JSON.stringify({
+                  comments: [],
+                  attachments: [],
+                  assigneeId: c.assigneeId || null,
+                  assigneeEmail: c.assigneeEmail || ''
+                });
+                return {
+                  id: c.id,
+                  title: c.title,
+                  description: `${c.desc || ''}\n<!-- TASK_META:${metaPayload} -->`,
+                  status: c.status,
+                  priority: c.priority,
+                  is_vip: c.isVip,
+                  assignee: c.assignee,
+                  assignee_avatar: c.assigneeAvatar,
+                  department: c.department,
+                  due_date: c.dueDate,
+                  channel: c.channel,
+                  source_message: c.sourceMessage,
+                  created_at: c.created_at
+                };
+              });
+
+              supabase.from('tasks').insert(dbRows).then(({ error }) => {
+                if (error) console.warn('Erro ao inserir cards do Kanban gerados pela IA no Supabase:', error);
+              });
+
+              replyText = `✨ [Kanban] ${newCards.length} cartão(ões) criado(s) com sucesso no seu quadro Kanban:\n\n` +
+                newCards.map((t) => `• 📌 **${t.title}** (Setor: ${t.department} | Responsável: ${t.assignee} | Prazo: ${t.dueDate})`).join('\n') +
+                `\n\nTodos os cards foram inseridos na tabela **kanban_cards** e já aparecem na coluna **Pendente / A Fazer**!`;
+            } else if (fnName === 'create_technical_ticket') {
+              replyText = '🛠️ Chamado técnico registrado com sucesso no banco de dados.';
+              const fallbackRecord = {
+                titulo: (fnArgs.title || queryText).slice(0, 60),
+                problema: fnArgs.problem || queryText,
+                solucao_esperada: fnArgs.expectedSolution || 'Investigar e corrigir falha técnica.',
+                prioridade: fnArgs.priority || 'media',
+                status: 'aberto',
+                reporter_name: currentUser?.name || 'Administrador',
+                reporter_id: currentUser?.id || 'u1'
+              };
+              supabase.from('bug_reports').insert([fallbackRecord]).select();
+            }
+          }
+
+          // B. Fallback Inteligente: Se o usuário expressou intenção de Kanban mas a resposta foi texto
+          if (!createdCount) {
+            const rawTextResult = typeof geminiResult === 'string' ? geminiResult : (geminiResult?.text || '');
+            if (isKanban) {
+              const fallbackCards = parseKanbanCardsFromText(`${queryText}\n${rawTextResult}`, collaboratorsRef.current || collaborators);
+              if (fallbackCards.length > 0) {
+                const liveCollabs = collaboratorsRef.current || collaborators || [];
+                const newCards = fallbackCards.map((c, idx) => {
+                  const matched = matchCollaboratorToTask(c.assignee || '', c.department || '', liveCollabs);
+                  const fullSource = `Solicitado via IA (${currentUser?.name || 'Gestão'}): "${queryText.slice(0, 100)}"`;
+                  const cDate = new Date().toISOString();
+                  return {
+                    id: `t_ia_${Date.now()}_${idx}`,
+                    title: (c.title || 'Demanda Kanban').slice(0, 70),
+                    desc: c.description || c.title || '',
+                    status: 'backlog',
+                    priority: c.priority || 'media',
+                    isVip: Boolean(c.isVip || c.priority === 'vip'),
+                    assignee: matched.assignee,
+                    assigneeId: matched.assigneeId,
+                    assigneeEmail: matched.assigneeEmail,
+                    assigneeAvatar: matched.assigneeAvatar || '👤',
+                    department: matched.department || 'Geral',
+                    dueDate: c.dueDate || 'Em até 48h',
+                    channel: '📌 Assistente IA',
+                    sourceMessage: fullSource,
+                    requester: currentUser?.name || 'Diretoria',
+                    requesterDept: currentUser?.department || 'Diretoria',
+                    created_at: cDate,
+                    createdAt: cDate,
+                    comments: [],
+                    attachments: []
+                  };
+                });
+
+                setTasks((prev) => [...newCards, ...prev]);
+
+                const dbRows = newCards.map((c) => ({
+                  id: c.id,
+                  title: c.title,
+                  description: c.desc,
+                  status: c.status,
+                  priority: c.priority,
+                  is_vip: c.isVip,
+                  assignee: c.assignee,
+                  assignee_avatar: c.assigneeAvatar,
+                  department: c.department,
+                  due_date: c.dueDate,
+                  channel: c.channel,
+                  source_message: c.sourceMessage,
+                  created_at: c.created_at
+                }));
+                supabase.from('tasks').insert(dbRows).then(({ error }) => {
+                  if (error) console.warn('Erro ao inserir cards no Supabase:', error);
+                });
+
+                replyText = `✨ [Kanban] ${newCards.length} cartão(ões) criado(s) com sucesso no seu quadro Kanban:\n\n` +
+                  newCards.map((t) => `• 📌 **${t.title}** (Setor: ${t.department} | Responsável: ${t.assignee} | Prazo: ${t.dueDate})`).join('\n') +
+                  `\n\nTodos os cards foram adicionados à tabela **kanban_cards** no quadro operacional!`;
+              } else {
+                replyText = rawTextResult;
+              }
+            } else {
+              replyText = rawTextResult;
+            }
+          }
+
+          // C. Tratamento Visual de Erros Globais
           if (
             !replyText ||
             replyText.includes('models/') ||
@@ -4263,7 +4427,7 @@ export default function App() {
           ) {
             replyText = '⚠️ Desculpe, os meus sistemas estão sobrecarregados no momento. Tente novamente em instantes.';
           }
-          console.log('🤖 [AI Chat] Resposta gerada pelo Gemini:', replyText.slice(0, 100) + '...');
+          console.log('🤖 [AI Chat] Resposta final da IA:', replyText.slice(0, 100) + '...');
         }
         console.groupEnd();
 

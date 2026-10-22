@@ -911,6 +911,89 @@ export function extractRelevantContextFromText(
 }
 
 /**
+ * Declaração Oficial de Ferramentas (Function Calling / Tools) do Assistente IA:
+ * Separação estrita entre inserção no Kanban operacional (kanban_cards / tasks)
+ * e abertura de chamados técnicos de software (bug_reports).
+ */
+export const GEMINI_CHAT_TOOLS = [
+  {
+    functionDeclarations: [
+      {
+        name: 'create_kanban_cards',
+        description: 'Insere um ou mais cartões de demanda diretamente no Kanban operacional (tabela kanban_cards / tasks). DEVE ser chamada SEMPRE que o usuário pedir para abrir, criar, gerar ou adicionar card(s) ou tarefas no Kanban, mesmo que o texto cite palavras como "bug", "erro", "falha" ou termos de tecnologia. O vocabulário técnico descreve apenas o conteúdo da tarefa a ser executada no Kanban.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            cards: {
+              type: 'ARRAY',
+              description: 'Lista de tarefas ou demandas a serem inseridas no quadro Kanban',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  title: {
+                    type: 'STRING',
+                    description: 'Título curto e objetivo do card (máx 70 caracteres)'
+                  },
+                  description: {
+                    type: 'STRING',
+                    description: 'Descrição detalhada da demanda ou do problema a ser resolvido'
+                  },
+                  department: {
+                    type: 'STRING',
+                    description: 'Departamento/Setor responsável (ex: Comercial, Secretaria, Tutoria, Pedagógico, Financeiro, Marketing, Expansão, Geral)'
+                  },
+                  assignee: {
+                    type: 'STRING',
+                    description: 'Nome do colaborador responsável pelo card (ou null para gestor padrão)'
+                  },
+                  priority: {
+                    type: 'STRING',
+                    enum: ['baixa', 'media', 'alta', 'vip'],
+                    description: 'Nível de prioridade da demanda'
+                  },
+                  dueDate: {
+                    type: 'STRING',
+                    description: 'Prazo estimado de entrega ou SLA (ex: "Em até 24h", "Em até 48h", "Próxima Reunião")'
+                  }
+                },
+                required: ['title']
+              }
+            }
+          },
+          required: ['cards']
+        }
+      },
+      {
+        name: 'create_technical_ticket',
+        description: 'Registra um chamado técnico de TI / engenharia de software na tabela bug_reports. Use SOMENTE quando o administrador relatar um defeito no próprio sistema EduChat para a equipe de tecnologia E NÃO tiver pedido para abrir card no Kanban operacional.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            title: {
+              type: 'STRING',
+              description: 'Resumo do erro técnico em até 60 caracteres'
+            },
+            problem: {
+              type: 'STRING',
+              description: 'Descrição da falha de software'
+            },
+            expectedSolution: {
+              type: 'STRING',
+              description: 'Comportamento esperado ou correção técnica'
+            },
+            priority: {
+              type: 'STRING',
+              enum: ['baixa', 'media', 'alta']
+            }
+          },
+          required: ['title', 'problem']
+        }
+      }
+    ]
+  }
+];
+
+/**
  * Constrói o System Instruction com RAG Inteligente e Controle Estrito de Tokens:
  * Em vez de despejar todas as planilhas/documentos/VIPs/POPs/SLAs brutos em cada mensagem,
  * filtra e injeta apenas os registros e trechos relevantes para a pergunta atual (`query`).
@@ -1093,6 +1176,15 @@ export function buildSystemInstruction({
     prompt += `=== DIRETRIZES ESPECÍFICAS DA DIRETORIA ===\n${filteredCustomPrompt}\n\n`;
   }
 
+  prompt += `=== FERRAMENTAS E REGRAS DE TOOL CALLING (CRÍTICO: KANBAN VS CHAMADO TÉCNICO) ===\n`;
+  prompt += `Você tem acesso a ferramentas de automação (Function Calling) com ações diretas no banco de dados:\n`;
+  prompt += `1. 'create_kanban_cards' -> Cria cartões diretamente no quadro Kanban operacional (tabela kanban_cards / tasks).\n`;
+  prompt += `   • REGRA DE PRECEDÊNCIA ABSOLUTA: Sempre que o usuário disser "abra um card no meu Kanban", "crie cards no Kanban", "adicione ao Kanban", "coloque no quadro" ou pedir para criar tarefas a partir de uma lista ou texto, você DEVE OBRIGATORIAMENTE acionar a ferramenta 'create_kanban_cards'!\n`;
+  prompt += `   • INDEPENDÊNCIA DE VOCABULÁRIO: Se a lista ou pedido do usuário contiver palavras como "erro", "bug", "falha", "defeito" ou "problema", a ferramenta correta CONTINUA SENDO 'create_kanban_cards'. As palavras "erro" e "bug" são apenas o assunto do card a ser trabalhado pela equipe no Kanban (ex: 'Corrigir bug no envio de comprovante'), e NUNCA devem ser transformadas em chamado técnico de TI quando o usuário pedir Kanban.\n`;
+  prompt += `2. 'create_technical_ticket' -> Registra chamado técnico de software na tabela bug_reports.\n`;
+  prompt += `   • Use ESTA ferramenta APENAS quando o administrador relatar uma falha no próprio software EduChat para a equipe de tecnologia E NÃO tiver solicitado abertura de card no Kanban operacional.\n`;
+  prompt += `   • Se o usuário mencionar qualquer intenção de Kanban, NUNCA acione 'create_technical_ticket'.\n\n`;
+
   prompt += `=== INSTRUÇÕES DE RESPOSTA ===\n`;
   prompt += `1. Responda sempre em português claro, objetivo, estruturado e profissional.\n`;
   prompt += `2. Utilize prioritariamente os POPs, Prazos MEC, Clientes VIP e trechos de Documentos/Planilhas recuperados acima.\n`;
@@ -1107,14 +1199,14 @@ export function buildSystemInstruction({
 
 /**
  * Chamada direta e oficial ao endpoint REST do Google Gemini (gemini-2.5-flash)
- * com fallback automático de modelo e tratamento elegante de Rate Limit (Erro 429).
+ * com suporte a Function Calling (Tools), fallback automático de modelo e tratamento de Rate Limit.
  */
-async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generationConfig = {} }) {
+async function callGeminiEndpoint({ apiKey, contents, systemInstruction, tools = null, generationConfig = {} }) {
   const safeSystemInstruction = systemInstruction
     ? String(systemInstruction).slice(0, MAX_SYSTEM_INSTRUCTION_CHARS)
     : '';
 
-  const buildRequestBody = (sysText, contentsList) => ({
+  const buildRequestBody = (sysText, contentsList, toolsList) => ({
     contents: contentsList,
     ...(sysText
       ? {
@@ -1123,14 +1215,19 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
           }
         }
       : {}),
+    ...(toolsList && toolsList.length > 0
+      ? {
+          tools: toolsList
+        }
+      : {}),
     generationConfig: {
-      temperature: 0.4,
+      temperature: 0.35,
       maxOutputTokens: 2048,
       ...generationConfig
     }
   });
 
-  const primaryBody = buildRequestBody(safeSystemInstruction, contents);
+  const primaryBody = buildRequestBody(safeSystemInstruction, contents, tools);
 
   let response = await fetch(
     `${GEMINI_ENDPOINT_BASE}/${PRIMARY_GEMINI_MODEL}:generateContent?key=${apiKey}`,
@@ -1161,7 +1258,7 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildRequestBody(compactSys, compactContents))
+        body: JSON.stringify(buildRequestBody(compactSys, compactContents, tools))
       }
     );
   }
@@ -1180,7 +1277,21 @@ async function callGeminiEndpoint({ apiKey, contents, systemInstruction, generat
   }
 
   const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const candidate = data?.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
+
+  // Verificação de Chamada de Função (Tool Calling)
+  const fnCallPart = parts.find((p) => p.functionCall);
+  if (fnCallPart?.functionCall) {
+    const textPart = parts.find((p) => p.text)?.text || '';
+    return {
+      isFunctionCall: true,
+      functionCall: fnCallPart.functionCall,
+      text: textPart.trim()
+    };
+  }
+
+  const text = parts.find((p) => p.text)?.text;
   if (!text) {
     throw new Error(FRIENDLY_RATE_LIMIT_MESSAGE);
   }
@@ -1308,6 +1419,7 @@ export async function generateGeminiChatReply({
       apiKey,
       contents,
       systemInstruction,
+      tools: GEMINI_CHAT_TOOLS,
       generationConfig: {
         temperature: 0.35,
         maxOutputTokens: 1500
@@ -1317,6 +1429,59 @@ export async function generateGeminiChatReply({
     console.warn('[Gemini AI] Erro interceptado:', err);
     return FRIENDLY_RATE_LIMIT_MESSAGE;
   }
+}
+
+/**
+ * Parser de contingência para extrair cartões de demandas listadas pelo usuário
+ * caso o modelo responda em texto estruturado sem acionar o Tool Calling diretamente.
+ */
+export function parseKanbanCardsFromText(text, collaborators = []) {
+  if (!text || typeof text !== 'string') return [];
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const cards = [];
+
+  for (const line of lines) {
+    const itemMatch = line.match(/^(?:(?:\d+[\.\)\-:]|\*|\-|\•|📌|\+)\s*)(.+)$/);
+    if (itemMatch) {
+      const itemContent = itemMatch[1].trim();
+      if (itemContent.length > 3) {
+        const lower = itemContent.toLowerCase();
+        let prio = 'media';
+        if (
+          lower.includes('urgente') ||
+          lower.includes('crítico') ||
+          lower.includes('critico') ||
+          lower.includes('erro') ||
+          lower.includes('bug') ||
+          lower.includes('falha')
+        ) {
+          prio = 'alta';
+        }
+        let dept = 'Geral';
+        if (lower.includes('financeiro') || lower.includes('pagamento') || lower.includes('asaas') || lower.includes('boleto')) {
+          dept = 'Financeiro';
+        } else if (lower.includes('comercial') || lower.includes('venda') || lower.includes('lead')) {
+          dept = 'Comercial';
+        } else if (lower.includes('secretaria') || lower.includes('diploma') || lower.includes('aluno') || lower.includes('matrícula')) {
+          dept = 'Secretaria';
+        } else if (lower.includes('tutoria') || lower.includes('pedagógico') || lower.includes('pedagogico') || lower.includes('aula')) {
+          dept = 'Tutoria';
+        } else if (lower.includes('marketing') || lower.includes('campanha') || lower.includes('anúncio')) {
+          dept = 'Marketing';
+        }
+
+        cards.push({
+          title: itemContent.length > 70 ? itemContent.slice(0, 67) + '...' : itemContent,
+          description: itemContent,
+          department: dept,
+          priority: prio,
+          dueDate: 'Em até 48h'
+        });
+      }
+    }
+  }
+
+  return cards;
 }
 
 /**

@@ -118,7 +118,27 @@ serve(async (req) => {
       );
     }
 
-    // 2. Extração e Parsing das Informações (JSON Estruturado)
+    // 2. Precedência Crítica: Se o usuário pediu Kanban (ex: "abra um card no meu Kanban"), NUNCA é chamado técnico!
+    const lowerMsg = (message || "").toLowerCase();
+    const isKanban =
+      lowerMsg.includes("kanban") ||
+      lowerMsg.includes("quadro operacional") ||
+      lowerMsg.includes("card") ||
+      lowerMsg.includes("cartão") ||
+      lowerMsg.includes("cartao") ||
+      lowerMsg.includes("meu kanban");
+
+    if (isKanban) {
+      return new Response(
+        JSON.stringify({
+          triggered: false,
+          error: "A mensagem é uma solicitação operacional para o Kanban (tabela kanban_cards/tasks), não um chamado técnico.",
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+      );
+    }
+
+    // 3. Extração e Parsing das Informações (JSON Estruturado)
     const bugData = parseBugReport(message || "");
 
     // 3. Ação no Banco de Dados (Supabase)
