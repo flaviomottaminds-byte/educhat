@@ -2634,7 +2634,9 @@ export default function App() {
               requester: reqName || 'Gestão',
               requesterDept: reqDept || 'Diretoria',
               comments,
-              attachments
+              attachments,
+              created_at: t.created_at || t.createdAt || new Date().toISOString(),
+              createdAt: t.created_at || t.createdAt || new Date().toISOString()
             };
           });
 
@@ -3610,49 +3612,85 @@ export default function App() {
                 reqDept = match[2]?.trim() || '';
               }
             }
+            let cleanDesc = row.description || '';
+            let comments = [];
+            let attachments = [];
+            const metaMatch = cleanDesc.match(/<!-- TASK_META:([\s\S]*?) -->/);
+            if (metaMatch) {
+              try {
+                const meta = JSON.parse(metaMatch[1]);
+                if (Array.isArray(meta.comments)) comments = meta.comments;
+                if (Array.isArray(meta.attachments)) attachments = meta.attachments;
+              } catch (e) {}
+              cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]*? -->/, '').trim();
+            }
             const newTask = {
-              id: row.id,
+              id: String(row.id),
               title: row.title,
-              desc: row.description || '',
-              status: row.status,
-              priority: row.priority,
-              isVip: row.is_vip,
+              desc: cleanDesc,
+              status: row.status || 'backlog',
+              priority: row.priority || 'media',
+              isVip: Boolean(row.is_vip),
               assignee: row.assignee,
               assigneeAvatar: row.assignee_avatar || '👤',
               department: row.department || 'Geral',
-              dueDate: row.due_date,
-              channel: row.channel,
+              dueDate: row.due_date || 'A definir',
+              channel: row.channel || '#geral',
               sourceMessage: row.source_message,
-              requester: reqName,
-              requesterDept: reqDept,
-              comments: [],
-              attachments: []
+              requester: reqName || 'Gestão',
+              requesterDept: reqDept || 'Diretoria',
+              comments,
+              attachments,
+              created_at: row.created_at || new Date().toISOString(),
+              createdAt: row.created_at || new Date().toISOString()
             };
             setTasks((prev) => {
-              if (prev.some((t) => t.id === newTask.id)) return prev;
+              if (prev.some((t) => String(t.id) === String(newTask.id))) return prev;
               return [newTask, ...prev];
             });
           } else if (payload.eventType === 'UPDATE') {
             const row = payload.new;
             if (!row) return;
+            let cleanDesc = row.description;
+            let comments = null;
+            let attachments = null;
+            if (cleanDesc && cleanDesc.includes('<!-- TASK_META:')) {
+              const metaMatch = cleanDesc.match(/<!-- TASK_META:([\s\S]*?) -->/);
+              if (metaMatch) {
+                try {
+                  const meta = JSON.parse(metaMatch[1]);
+                  if (Array.isArray(meta.comments)) comments = meta.comments;
+                  if (Array.isArray(meta.attachments)) attachments = meta.attachments;
+                } catch (e) {}
+                cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]*? -->/, '').trim();
+              }
+            }
             setTasks((prev) =>
-              prev.map((t) =>
-                t.id === row.id
-                  ? {
-                      ...t,
-                      status: row.status,
-                      title: row.title,
-                      priority: row.priority,
-                      assignee: row.assignee,
-                      dueDate: row.due_date
-                    }
-                  : t
-              )
+              prev.map((t) => {
+                if (String(t.id) !== String(row.id)) return t;
+                return {
+                  ...t,
+                  status: row.status !== undefined && row.status !== null ? row.status : t.status,
+                  title: row.title !== undefined && row.title !== null ? row.title : t.title,
+                  desc: cleanDesc !== undefined && cleanDesc !== null ? cleanDesc : t.desc,
+                  priority: row.priority !== undefined && row.priority !== null ? row.priority : t.priority,
+                  isVip: row.is_vip !== undefined && row.is_vip !== null ? Boolean(row.is_vip) : t.isVip,
+                  assignee: row.assignee !== undefined && row.assignee !== null ? row.assignee : t.assignee,
+                  assigneeAvatar: row.assignee_avatar || t.assigneeAvatar,
+                  department: row.department !== undefined && row.department !== null ? row.department : t.department,
+                  dueDate: row.due_date !== undefined && row.due_date !== null ? row.due_date : t.dueDate,
+                  channel: row.channel !== undefined && row.channel !== null ? row.channel : t.channel,
+                  created_at: row.created_at || t.created_at,
+                  createdAt: row.created_at || t.createdAt,
+                  comments: comments !== null ? comments : t.comments,
+                  attachments: attachments !== null ? attachments : t.attachments
+                };
+              })
             );
           } else if (payload.eventType === 'DELETE') {
             const oldId = payload.old?.id;
             if (oldId) {
-              setTasks((prev) => prev.filter((t) => t.id !== oldId));
+              setTasks((prev) => prev.filter((t) => String(t.id) !== String(oldId)));
             }
           }
         }
@@ -5143,13 +5181,15 @@ export default function App() {
   };
 
   const handleUpdateTaskStatus = (taskId, newStatus) => {
+    const normId = String(taskId);
     setTasks((prev) =>
-      prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
+      prev.map((t) => (String(t.id) === normId ? { ...t, status: newStatus } : t))
     );
     supabase
       .from('tasks')
       .update({ status: newStatus })
-      .eq('id', taskId)
+      .eq('id', normId)
+      .select()
       .then(({ error }) => {
         if (error) console.warn('Erro ao atualizar status da tarefa no Supabase:', error);
       });
@@ -5194,11 +5234,14 @@ export default function App() {
     const taskRequesterDept = newTask.requesterDept || currentUser.department;
     const fullSourceMessage = `Solicitado por: ${taskRequester} (${taskRequesterDept})${newTask.sourceMessage ? ' • ' + newTask.sourceMessage : ''}`;
 
+    const createdAtIso = newTask.created_at || newTask.createdAt || new Date().toISOString();
     const completeTask = {
       ...newTask,
       requester: taskRequester,
       requesterDept: taskRequesterDept,
       sourceMessage: fullSourceMessage,
+      created_at: createdAtIso,
+      createdAt: createdAtIso,
       comments: [],
       attachments: []
     };
@@ -5225,7 +5268,8 @@ export default function App() {
       department: completeTask.department || 'Geral',
       due_date: completeTask.dueDate,
       channel: completeTask.channel,
-      source_message: fullSourceMessage
+      source_message: fullSourceMessage,
+      created_at: createdAtIso
     }]).then(({ error }) => {
       if (error) console.warn('Erro ao salvar nova tarefa no Supabase:', error);
     });
@@ -5239,12 +5283,15 @@ export default function App() {
 
     const completeCards = cardsToCreate.map((card) => {
       const fullSourceMessage = `Solicitado por: ${taskRequester} (${taskRequesterDept}) • ${card.sourceMessage || 'Ata Google Meet'}`;
+      const cDate = card.created_at || card.createdAt || new Date().toISOString();
       return {
         ...card,
         status: 'backlog',
         requester: taskRequester,
         requesterDept: taskRequesterDept,
         sourceMessage: fullSourceMessage,
+        created_at: cDate,
+        createdAt: cDate,
         comments: [],
         attachments: []
       };
@@ -5271,7 +5318,8 @@ export default function App() {
         department: c.department || 'Geral',
         due_date: c.dueDate || 'Próxima Reunião',
         channel: c.channel || '📅 Ata Google Meet',
-        source_message: c.sourceMessage
+        source_message: c.sourceMessage,
+        created_at: c.created_at || new Date().toISOString()
       };
     });
 

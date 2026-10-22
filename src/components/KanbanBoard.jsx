@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   Plus,
   Clock,
+  Calendar,
   ArrowRight,
   ArrowLeft,
   Shield,
@@ -9,6 +10,7 @@ import {
   Paperclip
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import { supabase } from '../lib/supabase';
 import { normalizeText, fetchActiveCollaboratorsFromDB } from '../lib/gemini';
 import {
   hasFullPortfolioAccess,
@@ -35,6 +37,21 @@ const BASE_DEPARTMENTS = [
   'Financeiro',
 ];
 
+export function formatCardDateTime(dateVal) {
+  if (!dateVal) return 'Recente';
+  try {
+    const d = new Date(dateVal);
+    if (isNaN(d.getTime())) return String(dateVal);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}/${month} ${hours}:${minutes}`;
+  } catch {
+    return 'Recente';
+  }
+}
+
 export function normalizeTaskStatus(rawStatus) {
   if (!rawStatus) return 'backlog';
   const s = String(rawStatus).toLowerCase().trim();
@@ -56,6 +73,120 @@ export default function KanbanBoard({
   slas = [],
   onOpenAIMemory
 }) {
+  // Estado local sincronizado com Realtime para movimentação instantânea entre abas e usuários
+  const [boardTasks, setBoardTasks] = useState(tasks || []);
+
+  useEffect(() => {
+    setBoardTasks(tasks || []);
+  }, [tasks]);
+
+  // Subscrição em Tempo Real (Realtime Subscription) na tabela 'tasks'
+  // Escuta UPDATE, INSERT e DELETE em tempo real sem exigir F5
+  useEffect(() => {
+    const channel = supabase
+      .channel('kanban_board_realtime_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'tasks' },
+        (payload) => {
+          if (payload.eventType === 'UPDATE' && payload.new) {
+            const updated = payload.new;
+            let cleanDesc = updated.description;
+            let comments = null;
+            let attachments = null;
+            if (cleanDesc && cleanDesc.includes('<!-- TASK_META:')) {
+              const metaMatch = cleanDesc.match(/<!-- TASK_META:([\s\S]*?) -->/);
+              if (metaMatch) {
+                try {
+                  const meta = JSON.parse(metaMatch[1]);
+                  if (Array.isArray(meta.comments)) comments = meta.comments;
+                  if (Array.isArray(meta.attachments)) attachments = meta.attachments;
+                } catch (e) {}
+                cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]*? -->/, '').trim();
+              }
+            }
+            setBoardTasks((prev) =>
+              prev.map((t) =>
+                String(t.id) === String(updated.id)
+                  ? {
+                      ...t,
+                      status: updated.status || t.status,
+                      title: updated.title || t.title,
+                      desc: cleanDesc !== undefined && cleanDesc !== null ? cleanDesc : t.desc,
+                      priority: updated.priority || t.priority,
+                      isVip: updated.is_vip !== undefined ? Boolean(updated.is_vip) : t.isVip,
+                      assignee: updated.assignee || t.assignee,
+                      assigneeAvatar: updated.assignee_avatar || t.assigneeAvatar,
+                      department: updated.department || t.department,
+                      dueDate: updated.due_date || t.dueDate,
+                      channel: updated.channel || t.channel,
+                      created_at: updated.created_at || t.created_at,
+                      createdAt: updated.created_at || t.createdAt,
+                      comments: comments !== null ? comments : t.comments,
+                      attachments: attachments !== null ? attachments : t.attachments
+                    }
+                  : t
+              )
+            );
+          } else if (payload.eventType === 'INSERT' && payload.new) {
+            const row = payload.new;
+            let reqName = row.requester || '';
+            let reqDept = row.requester_dept || '';
+            if (!reqName && row.source_message && row.source_message.includes('Solicitado por:')) {
+              const match = row.source_message.match(/Solicitado por:\s*([^(•]+)\s*(?:\(([^)]+)\))?/);
+              if (match) {
+                reqName = match[1].trim();
+                reqDept = match[2]?.trim() || '';
+              }
+            }
+            let cleanDesc = row.description || '';
+            let comments = [];
+            let attachments = [];
+            const metaMatch = cleanDesc.match(/<!-- TASK_META:([\s\S]*?) -->/);
+            if (metaMatch) {
+              try {
+                const meta = JSON.parse(metaMatch[1]);
+                if (Array.isArray(meta.comments)) comments = meta.comments;
+                if (Array.isArray(meta.attachments)) attachments = meta.attachments;
+              } catch (e) {}
+              cleanDesc = cleanDesc.replace(/<!-- TASK_META:[\s\S]*? -->/, '').trim();
+            }
+            const newTask = {
+              id: String(row.id),
+              title: row.title,
+              desc: cleanDesc,
+              status: row.status || 'backlog',
+              priority: row.priority || 'media',
+              isVip: Boolean(row.is_vip),
+              assignee: row.assignee,
+              assigneeAvatar: row.assignee_avatar || '👤',
+              department: row.department || 'Geral',
+              dueDate: row.due_date || 'A definir',
+              channel: row.channel || '#geral',
+              sourceMessage: row.source_message,
+              requester: reqName || 'Gestão',
+              requesterDept: reqDept || 'Diretoria',
+              comments,
+              attachments,
+              created_at: row.created_at || new Date().toISOString(),
+              createdAt: row.created_at || new Date().toISOString()
+            };
+            setBoardTasks((prev) => {
+              if (prev.some((t) => String(t.id) === String(newTask.id))) return prev;
+              return [newTask, ...prev];
+            });
+          } else if (payload.eventType === 'DELETE' && payload.old) {
+            setBoardTasks((prev) => prev.filter((t) => String(t.id) !== String(payload.old.id)));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // Sincronização em tempo real dos colaboradores cadastrados no banco (profiles / users / sys_collaborators)
   const [dbCollaborators, setDbCollaborators] = useState([]);
 
@@ -129,9 +260,9 @@ export default function KanbanBoard({
     let myDemands = 0;
     let myRequests = 0;
     let myAll = 0;
-    let totalGlobal = (tasks || []).length;
+    let totalGlobal = (boardTasks || []).length;
 
-    (tasks || []).forEach((t) => {
+    (boardTasks || []).forEach((t) => {
       if (!t) return;
       const isAssigned = isTaskAssignedToUser(t, liveCurrentUser);
       const isRequested = isTaskRequestedByUser(t, liveCurrentUser);
@@ -141,11 +272,11 @@ export default function KanbanBoard({
     });
 
     return { myDemands, myRequests, myAll, totalGlobal };
-  }, [tasks, liveCurrentUser]);
+  }, [boardTasks, liveCurrentUser]);
 
   // Lista filtrada com blindagem de dados e controle de abas
   const filteredTasks = useMemo(() => {
-    return (tasks || []).filter((t) => {
+    return (boardTasks || []).filter((t) => {
       if (!t) return false;
 
       // 1. BLINDAGEM DE DADOS: Se não for Gestor/Admin, o usuário comum JAMAIS vê cartões de terceiros
@@ -202,7 +333,7 @@ export default function KanbanBoard({
 
       return true;
     });
-  }, [tasks, effectiveScope, isManager, filterDepartment, filterAssignee, liveCollaborators, liveCurrentUser]);
+  }, [boardTasks, effectiveScope, isManager, filterDepartment, filterAssignee, liveCollaborators, liveCurrentUser]);
 
   const handleMove = (e, taskId, currentStatus, direction) => {
     e.stopPropagation();
@@ -213,7 +344,13 @@ export default function KanbanBoard({
 
     if (newIndex >= 0 && newIndex < statusOrder.length) {
       const nextStatus = statusOrder[newIndex];
-      onUpdateTaskStatus(taskId, nextStatus);
+      // Atualização otimista imediata na visualização local
+      setBoardTasks((prev) =>
+        prev.map((t) => (String(t.id) === String(taskId) ? { ...t, status: nextStatus } : t))
+      );
+      if (onUpdateTaskStatus) {
+        onUpdateTaskStatus(taskId, nextStatus);
+      }
 
       if (nextStatus === 'done') {
         confetti({
@@ -511,18 +648,35 @@ export default function KanbanBoard({
                         </div>
                       )}
 
-                      {/* Rodapé: Responsável, Prazo e Ações */}
-                      <div className="pt-2 border-t border-slate-100 dark:border-chatBorder flex items-center justify-between text-xs">
-                        <div className="flex items-center gap-1.5" title={`Responsável: ${t.assignee}`}>
+                      {/* Rodapé: Responsável, Abertura, Prazo e Ações */}
+                      <div className="pt-2 border-t border-slate-100 dark:border-chatBorder flex items-center justify-between text-xs flex-wrap gap-1.5">
+                        <div className="flex items-center gap-1.5 min-w-0" title={`Responsável: ${t.assignee}`}>
                           <span className="text-sm">{t.assigneeAvatar || '👤'}</span>
-                          <span className="text-[11px] font-medium text-chatTextBody truncate w-28">
+                          <span className="text-[11px] font-medium text-chatTextBody truncate max-w-[90px]">
                             {isTaskAssignedToUser(t, liveCurrentUser) ? '👉 Você' : t.assignee}
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-1 text-[11px] text-chatTextMuted">
-                          <Clock size={12} />
-                          <span>{t.dueDate}</span>
+                        <div className="flex items-center gap-1.5 text-[11px] flex-wrap">
+                          {/* Data de Abertura */}
+                          <div
+                            className="flex items-center gap-1 text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-chatSidebar px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder"
+                            title={`Aberto em: ${formatCardDateTime(t.created_at || t.createdAt)}`}
+                          >
+                            <Calendar size={11} className="text-brand-600 dark:text-brand-400 shrink-0" />
+                            <span className="font-semibold text-[10px]">
+                              {formatCardDateTime(t.created_at || t.createdAt)}
+                            </span>
+                          </div>
+
+                          {/* Prazo SLA */}
+                          <div
+                            className="flex items-center gap-1 text-chatTextMuted bg-slate-50 dark:bg-chatSidebar/60 px-1.5 py-0.5 rounded border border-slate-100 dark:border-chatBorder/50"
+                            title={`Prazo SLA: ${t.dueDate || 'A definir'}`}
+                          >
+                            <Clock size={11} className="shrink-0" />
+                            <span className="font-medium text-[10px]">{t.dueDate || 'A definir'}</span>
+                          </div>
                         </div>
                       </div>
 
