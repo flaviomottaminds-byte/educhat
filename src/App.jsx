@@ -2102,33 +2102,44 @@ export default function App() {
           .order('created_at', { ascending: true })
           .limit(1000);
 
+        // Fallback defensivo se a coluna channel_id ou read_by ainda não existir no schema cache do PostgREST
         if (error) {
-          // Fallback caso a coluna read_by ainda não tenha sido criada no Supabase
-          const fb = await supabase
+          const fbWithoutChannel = await supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id')
             .not('chat_id', 'like', 'sys_%')
             .order('created_at', { ascending: true })
             .limit(1000);
-          data = fb.data;
-          error = fb.error;
+
+          if (!fbWithoutChannel.error && Array.isArray(fbWithoutChannel.data)) {
+            data = fbWithoutChannel.data;
+            error = null;
+          } else {
+            // Fallback básico mais conservador
+            const fbBasic = await supabase
+              .from('messages')
+              .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+              .not('chat_id', 'like', 'sys_%')
+              .order('created_at', { ascending: true })
+              .limit(1000);
+            data = fbBasic.data;
+            error = fbBasic.error;
+          }
         }
 
         if (!error && Array.isArray(data)) {
           recentDbMessages = data;
         } else if (error) {
-          console.error('[Supabase] Erro na consulta com created_at, executando fallback:', error);
-          const { data: fallbackData, error: fbErr } = await supabase
+          console.error('[Supabase] Erro na consulta de mensagens, tentando fallback de segurança:', error);
+          const { data: fallbackData } = await supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
             .not('chat_id', 'like', 'sys_%')
             .order('created_at', { ascending: true })
             .limit(500);
 
-          if (!fbErr && Array.isArray(fallbackData)) {
+          if (Array.isArray(fallbackData)) {
             recentDbMessages = fallbackData;
-          } else if (fbErr) {
-            console.error('[Supabase] Erro no fallback de mensagens:', fbErr);
           }
         }
       } catch (err) {
@@ -3656,7 +3667,7 @@ export default function App() {
     let lastPolledTimestamp = new Date(Date.now() - 60000).toISOString();
     const pollLatestMessages = async () => {
       try {
-        const { data: latestRows, error } = await withTimeout(
+        let { data: latestRows, error } = await withTimeout(
           supabase
             .from('messages')
             .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
@@ -3666,6 +3677,22 @@ export default function App() {
             .limit(40),
           2500
         );
+
+        if (error) {
+          // Fallback caso a coluna channel_id ainda não exista no schema cache
+          const retryRes = await withTimeout(
+            supabase
+              .from('messages')
+              .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+              .not('chat_id', 'like', 'sys_%')
+              .gt('created_at', lastPolledTimestamp)
+              .order('created_at', { ascending: true })
+              .limit(40),
+            2500
+          );
+          latestRows = retryRes.data;
+          error = retryRes.error;
+        }
 
         if (!error && Array.isArray(latestRows) && latestRows.length > 0) {
           lastPolledTimestamp = latestRows[latestRows.length - 1].created_at || new Date().toISOString();
@@ -3956,12 +3983,51 @@ export default function App() {
           sender_id: verifiedSenderId,
           sender_name: verifiedSenderName,
           text: payloadText,
-          timestamp: newMsg.timestamp,
-          recipient_id: activeChat.type === 'dm' ? activeChat.id : null,
-          channel_id: activeChat.type === 'channel' ? currentChatKey : null
+          timestamp: newMsg.timestamp
         };
 
-        const { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
+        // Regra Estrita: Em Direct Messages (1 a 1), NUNCA envia channel_id
+        const isDmChat = activeChat.type === 'dm' || options.isDM;
+        if (isDmChat) {
+          const recId = activeChat.id || options.recipientId;
+          if (recId) {
+            insertPayload.recipient_id = recId;
+          }
+        } else if (activeChat.type === 'channel') {
+          // Apenas envia channel_id se for um canal
+          const chId = options.channelId || currentChatKey;
+          if (chId) {
+            insertPayload.channel_id = chId;
+          }
+        }
+
+        let { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
+
+        // FALLBACK IMEDIATO: Se o PostgREST acusar falta de 'channel_id' no schema cache (PGRST204)
+        if (
+          insertError &&
+          (insertError.message?.includes('channel_id') ||
+            insertError.code === 'PGRST204' ||
+            insertError.message?.includes('schema cache'))
+        ) {
+          console.warn('[handleSendMessage] Retentando insert sem channel_id devido ao schema cache:', insertError.message);
+          delete insertPayload.channel_id;
+          const retryRes = await supabase.from('messages').insert([insertPayload]).select();
+          insertError = retryRes.error;
+        }
+
+        // FALLBACK IMEDIATO: Se o PostgREST acusar falta de 'recipient_id' no schema cache
+        if (
+          insertError &&
+          (insertError.message?.includes('recipient_id') ||
+            insertError.code === 'PGRST204' ||
+            insertError.message?.includes('schema cache'))
+        ) {
+          console.warn('[handleSendMessage] Retentando insert sem recipient_id devido ao schema cache:', insertError.message);
+          delete insertPayload.recipient_id;
+          const retryRes = await supabase.from('messages').insert([insertPayload]).select();
+          insertError = retryRes.error;
+        }
 
         if (insertError) {
           console.error("Erro no Insert:", insertError);
@@ -4387,18 +4453,48 @@ export default function App() {
       chat_id: targetChatKey,
       sender_id: verifiedSenderId,
       sender_name: verifiedSenderName,
-      recipient_id: recipientId,
-      channel_id: targetType === 'channel' ? targetChatKey : null,
       text: payloadText,
       timestamp: timeStr
     };
 
+    if (targetType === 'channel') {
+      dbRecord.channel_id = targetChatKey;
+    } else if (recipientId) {
+      dbRecord.recipient_id = recipientId;
+      // Para DMs, omite channel_id
+    }
+
     // SÓ ADICIONA NO ESTADO APÓS CONFIRMAÇÃO DE SUCESSO NO BANCO (Fim da inserção otimista)
     try {
-      const { error: insertError } = await supabase
+      let { error: insertError } = await supabase
         .from('messages')
         .insert([dbRecord])
         .select();
+
+      // Fallback se channel_id ou recipient_id não existirem no schema cache
+      if (
+        insertError &&
+        (insertError.message?.includes('channel_id') ||
+          insertError.code === 'PGRST204' ||
+          insertError.message?.includes('schema cache'))
+      ) {
+        console.warn('[handleForwardMessage] Retentando sem channel_id devido ao schema cache:', insertError.message);
+        delete dbRecord.channel_id;
+        const retryRes = await supabase.from('messages').insert([dbRecord]).select();
+        insertError = retryRes.error;
+      }
+
+      if (
+        insertError &&
+        (insertError.message?.includes('recipient_id') ||
+          insertError.code === 'PGRST204' ||
+          insertError.message?.includes('schema cache'))
+      ) {
+        console.warn('[handleForwardMessage] Retentando sem recipient_id devido ao schema cache:', insertError.message);
+        delete dbRecord.recipient_id;
+        const retryRes = await supabase.from('messages').insert([dbRecord]).select();
+        insertError = retryRes.error;
+      }
 
       if (insertError) {
         console.error('[Encaminhar] Erro no Supabase:', insertError);

@@ -1229,7 +1229,10 @@ export default function ChatArea({
       const result = await onSendMessage(textToSend, attachmentToSend, {
         replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null,
         isAudio: false,
-        audioUrl: null
+        audioUrl: null,
+        isDM,
+        channelId: isDM ? null : (activeChat?.id || null),
+        recipientId: isDM ? (target?.id || activeChat?.id || null) : null
       });
 
       if (result && result.success === false) {
@@ -1415,7 +1418,10 @@ export default function ChatArea({
             replyTo: replyingTo ? { id: replyingTo.id, senderName: replyingTo.senderName, text: replyingTo.text } : null,
             isAudio: true,
             audioUrl: publicAudioUrl,
-            duration: formattedTime
+            duration: formattedTime,
+            isDM,
+            channelId: isDM ? null : (activeChat?.id || null),
+            recipientId: isDM ? (target?.id || activeChat?.id || null) : null
           }
         );
 
