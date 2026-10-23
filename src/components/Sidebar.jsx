@@ -28,7 +28,7 @@ import {
   Edit2,
   LogOut
 } from 'lucide-react';
-import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat } from '../lib/portfolioAccess';
+import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, isStrictlyAssignedToUser } from '../lib/portfolioAccess';
 import { getCanonicalPhoneKey, getChatKey } from '../data/initialData';
 import { matchStudentByPhone } from '../lib/eduControl';
 import { formatLastSeen } from '../lib/presence';
@@ -144,6 +144,8 @@ export default function Sidebar({
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarTab, setSidebarTab] = useState('whatsapp'); // 'whatsapp' | 'internal'
+  // 1. VISÃO PADRÃO ESTRITA (DEFAULT): Inicia obrigatoriamente em 'mine' ("Meus Atendimentos") ao abrir ou F5
+  const [whatsappFilterScope, setWhatsappFilterScope] = useState('mine'); // 'mine' | 'all'
   const isDirector = currentUser?.roleType === 'diretor';
 
   const safeChannels = Array.isArray(channels) ? channels : [];
@@ -263,7 +265,20 @@ export default function Sidebar({
     });
   }, [safeWhatsAppContacts, currentUser, messages]);
 
-  const filteredWhatsAppContacts = accessibleWhatsAppContacts.filter((c) => {
+  // 1. VISÃO ESTRITA DOS "MEUS ATENDIMENTOS":
+  // Filtra conversas atribuídas diretamente ao currentUser (assigned_to === currentUser.id ou assignee com seu nome)
+  const myWhatsAppContacts = useMemo(() => {
+    return (accessibleWhatsAppContacts || []).filter((contact) =>
+      isStrictlyAssignedToUser(contact, currentUser, collaborators)
+    );
+  }, [accessibleWhatsAppContacts, currentUser, collaborators]);
+
+  // Escopo ativo da lista: 'mine' (Meus Atendimentos - padrão) vs 'all' (Ver Todos - opt-in)
+  const activeWhatsAppScopeList = whatsappFilterScope === 'mine'
+    ? myWhatsAppContacts
+    : accessibleWhatsAppContacts;
+
+  const filteredWhatsAppContacts = activeWhatsAppScopeList.filter((c) => {
     if (!c) return false;
     const student = matchStudentByPhone(c.id || c.phone, eduControlStudents);
     const studentName = (student?.name || '').toLowerCase();
@@ -299,10 +314,17 @@ export default function Sidebar({
     );
   });
 
+  const myWhatsAppUnread = myWhatsAppContacts.reduce((sum, c) => {
+    const count = (c?.id && safeUnread[c.id]) || c?.unread_count || c?.unread || 0;
+    return sum + Number(count || 0);
+  }, 0);
+
   const totalWhatsAppUnread = accessibleWhatsAppContacts.reduce((sum, c) => {
     const count = (c?.id && safeUnread[c.id]) || c?.unread_count || c?.unread || 0;
     return sum + Number(count || 0);
   }, 0);
+
+  const currentScopeUnread = whatsappFilterScope === 'mine' ? myWhatsAppUnread : totalWhatsAppUnread;
 
   const currentUserId = currentUser?.id || 'u1';
 
@@ -464,12 +486,12 @@ export default function Sidebar({
           }`}
         >
           <Smartphone size={13} />
-          {isManager
-            ? `WhatsApp Alunos (${accessibleWhatsAppContacts.length})`
-            : `Minha Carteira (${accessibleWhatsAppContacts.length})`}
-          {totalWhatsAppUnread > 0 && (
+          {whatsappFilterScope === 'mine'
+            ? `Meus (${myWhatsAppContacts.length})`
+            : `WhatsApp Alunos (${accessibleWhatsAppContacts.length})`}
+          {currentScopeUnread > 0 && (
             <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 rounded-full">
-              {totalWhatsAppUnread}
+              {currentScopeUnread}
             </span>
           )}
         </button>
@@ -522,11 +544,58 @@ export default function Sidebar({
               <span>+ Novo Atendimento WhatsApp</span>
             </button>
 
+            {/* Seletor de Escopo de Atendimento: "Meus Atendimentos" (Padrão) vs "Ver Todos" (Opt-in) */}
+            <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-chatPanel rounded-xl mb-2.5 border border-slate-200/80 dark:border-chatBorder/80 select-none">
+              <button
+                type="button"
+                onClick={() => setWhatsappFilterScope('mine')}
+                className={`flex-1 py-1 px-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  whatsappFilterScope === 'mine'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle hover:bg-white/60 dark:hover:bg-chatSidebar/60'
+                }`}
+              >
+                <span>Meus</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  whatsappFilterScope === 'mine'
+                    ? 'bg-emerald-700/80 text-white'
+                    : 'bg-slate-200 dark:bg-chatSidebar text-chatTextTitle'
+                }`}>
+                  {myWhatsAppContacts.length}
+                </span>
+                {myWhatsAppUnread > 0 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setWhatsappFilterScope('all')}
+                className={`flex-1 py-1 px-2.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                  whatsappFilterScope === 'all'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-chatTextMuted hover:text-chatTextTitle hover:bg-white/60 dark:hover:bg-chatSidebar/60'
+                }`}
+              >
+                <span>Ver Todos</span>
+                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                  whatsappFilterScope === 'all'
+                    ? 'bg-emerald-700/80 text-white'
+                    : 'bg-slate-200 dark:bg-chatSidebar text-chatTextTitle'
+                }`}>
+                  {accessibleWhatsAppContacts.length}
+                </span>
+                {totalWhatsAppUnread > 0 && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </button>
+            </div>
+
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>
-                {isManager
-                  ? `Atendimento WhatsApp (${filteredWhatsAppContacts.length})`
-                  : `Minha Carteira (${filteredWhatsAppContacts.length})`}
+                {whatsappFilterScope === 'mine'
+                  ? `Meus Atendimentos (${filteredWhatsAppContacts.length})`
+                  : `Todos os Atendimentos (${filteredWhatsAppContacts.length})`}
               </span>
               <button
                 type="button"
@@ -538,31 +607,42 @@ export default function Sidebar({
               </button>
             </div>
 
-            {/* Identificador de Carteira Exclusiva para Consultores */}
-            {!isManager && (
+            {/* Identificador de Carteira Pessoal */}
+            {whatsappFilterScope === 'mine' && (
               <div className="mx-1 mb-2 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/40 flex items-center justify-between">
                 <div className="flex items-center gap-1.5 truncate">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
                   <span className="text-[10.5px] font-bold text-emerald-800 dark:text-emerald-300 truncate">
-                    Consultor: {currentUser?.name || 'Consultor'}
+                    Carteira: {currentUser?.name || 'Consultor'}
                   </span>
                 </div>
                 <span className="text-[9px] font-bold text-emerald-700 dark:text-emerald-400 bg-white dark:bg-chatPanel px-1.5 py-0.5 rounded shadow-2xs shrink-0">
-                  Carteira Exclusiva
+                  Visão Pessoal
                 </span>
               </div>
             )}
 
             {filteredWhatsAppContacts.length === 0 ? (
-              <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-chatPanel/40 border border-slate-200/80 dark:border-chatBorder/80 mx-1 my-2">
+              <div className="p-4 text-center rounded-xl bg-slate-50 dark:bg-chatPanel/40 border border-slate-200/80 dark:border-chatBorder/80 mx-1 my-2 space-y-2.5">
                 <p className="text-xs font-semibold text-chatTextTitle mb-1">
-                  {isManager ? 'Nenhum atendimento encontrado' : 'Nenhum atendimento na sua carteira'}
+                  {whatsappFilterScope === 'mine'
+                    ? 'Nenhum atendimento na sua carteira'
+                    : 'Nenhum atendimento encontrado'}
                 </p>
                 <p className="text-[10.5px] text-chatTextMuted leading-relaxed">
-                  {isManager
-                    ? 'Nenhuma conversa coincide com os filtros da busca.'
-                    : 'Você não possui conversas atribuídas à sua carteira no momento. Novos atendimentos distribuídos pela gestão aparecerão aqui automaticamente.'}
+                  {whatsappFilterScope === 'mine'
+                    ? 'Você não possui conversas atribuídas diretamente a você no momento. Novos clientes direcionados à sua carteira aparecerão aqui.'
+                    : 'Nenhuma conversa coincide com os filtros da busca.'}
                 </p>
+                {whatsappFilterScope === 'mine' && accessibleWhatsAppContacts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setWhatsappFilterScope('all')}
+                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shadow-xs transition cursor-pointer"
+                  >
+                    Ver Todos os Atendimentos ({accessibleWhatsAppContacts.length})
+                  </button>
+                )}
               </div>
             ) : (
               filteredWhatsAppContacts.map((contact) => {

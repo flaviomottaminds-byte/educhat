@@ -143,6 +143,72 @@ export function isChatAssignedToUser(contactOrAssignee, user, collaborators = []
 }
 
 /**
+ * Retorna true EXCLUSIVAMENTE se o chat/contato do WhatsApp estiver atribuído
+ * diretamente ao usuário logado ou se ele for co-responsável.
+ * NÃO aplica bypass de gestor/diretor (utilizado para a visão padrão estrita "Meus Atendimentos").
+ */
+export function isStrictlyAssignedToUser(contactOrAssignee, user, collaborators = []) {
+  if (!user || !contactOrAssignee) return false;
+
+  const myUserId = String(user.id || '').trim().toLowerCase();
+  const myNameNorm = normalizeName(user.name);
+
+  if (typeof contactOrAssignee === 'object') {
+    // 1. Verificação direta nos campos de ID assigned_to / assignedTo
+    const rawAssignedTo = String(contactOrAssignee.assigned_to || contactOrAssignee.assignedTo || '').trim().toLowerCase();
+    if (rawAssignedTo && (rawAssignedTo === myUserId || (myNameNorm && rawAssignedTo === myNameNorm))) {
+      return true;
+    }
+
+    // 2. Verificação via getChatAssignedToId (resolve nomes e IDs de colaboradores)
+    const assignedId = getChatAssignedToId(contactOrAssignee, collaborators);
+    if (assignedId && (assignedId === myUserId || (myNameNorm && assignedId === myNameNorm))) {
+      return true;
+    }
+
+    // 3. Verificação no texto do assignee direto
+    const rawAssignee = normalizeName(contactOrAssignee.assignee);
+    if (rawAssignee && myNameNorm) {
+      if (rawAssignee === myNameNorm) return true;
+      const myFirst = myNameNorm.split(' ')[0];
+      const rawFirst = rawAssignee.split(' ')[0];
+      if (myFirst && rawFirst && myFirst.length >= 3 && myFirst === rawFirst) {
+        return true;
+      }
+    }
+
+    // 4. Co-atribuídos
+    if (Array.isArray(contactOrAssignee.assignees)) {
+      const isCoAssigned = contactOrAssignee.assignees.some((a) => {
+        if (!a) return false;
+        if (typeof a === 'string') {
+          const aNorm = normalizeName(a);
+          if (aNorm === myNameNorm || aNorm === myUserId) return true;
+          const myFirst = myNameNorm.split(' ')[0];
+          const aFirst = aNorm.split(' ')[0];
+          if (myFirst && aFirst && myFirst.length >= 3 && myFirst === aFirst) return true;
+        }
+        if (a?.id && String(a.id).trim().toLowerCase() === myUserId) return true;
+        if (a?.name) {
+          const aNameNorm = normalizeName(a.name);
+          if (aNameNorm === myNameNorm) return true;
+          const myFirst = myNameNorm.split(' ')[0];
+          const aFirst = aNameNorm.split(' ')[0];
+          if (myFirst && aFirst && myFirst.length >= 3 && myFirst === aFirst) return true;
+        }
+        return false;
+      });
+      if (isCoAssigned) return true;
+    }
+  } else if (typeof contactOrAssignee === 'string') {
+    const rawNorm = normalizeName(contactOrAssignee);
+    if (rawNorm === myUserId || rawNorm === myNameNorm) return true;
+  }
+
+  return false;
+}
+
+/**
  * Retorna true se o departamento/fila do colaborador for compatível com o departamento alvo.
  */
 export function matchesDepartment(collabDept, targetDept) {

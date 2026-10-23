@@ -482,38 +482,16 @@ export default function App() {
   const [whatsAppModal, setWhatsAppModal] = useState({ isOpen: false, tab: 'qrcode' });
   const [isInstagramImportOpen, setIsInstagramImportOpen] = useState(false);
 
+  // ASSEPSIA DEFINITIVA: Desativação total de cache local (LocalStorage) e mensagens estáticas
+  // O estado inicia sempre vazio ({}) e as mensagens são hidratadas exclusivamente pelo Supabase
   const [messages, setMessages] = useState(() => {
-    const baseMessages = {
-      ...INITIAL_MESSAGES,
-      ...INITIAL_WHATSAPP_MESSAGES
-    };
     try {
-      const saved = localStorage.getItem('educhat_messages_cache');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          const merged = { ...baseMessages };
-          Object.keys(parsed).forEach((chatKey) => {
-            const savedList = Array.isArray(parsed[chatKey]) ? parsed[chatKey] : [];
-            const baseList = Array.isArray(merged[chatKey]) ? merged[chatKey] : [];
-            const seenIds = new Set(baseList.map((m) => m.id));
-            const combined = [...baseList];
-            savedList.forEach((m) => {
-              if (m && m.id && !seenIds.has(m.id)) {
-                seenIds.add(m.id);
-                combined.push(m);
-              }
-            });
-            merged[chatKey] = combined;
-          });
-          return merged;
-        }
-      }
+      localStorage.removeItem('educhat_messages_cache');
     } catch {}
-    return baseMessages;
+    return {};
   });
 
-  // Persistência contínua e segura de canais, conversas WhatsApp e histórico de mensagens
+  // Persistência contínua e segura de canais e conversas WhatsApp (apenas metadados, NUNCA mensagens)
   useEffect(() => {
     try {
       if (Array.isArray(channels) && channels.length > 0) {
@@ -529,28 +507,6 @@ export default function App() {
       }
     } catch {}
   }, [whatsAppContacts]);
-
-  useEffect(() => {
-    try {
-      if (messages && typeof messages === 'object') {
-        const lightCache = {};
-        Object.keys(messages).forEach((k) => {
-          const list = messages[k];
-          if (Array.isArray(list) && list.length > 0) {
-            lightCache[k] = list.slice(-60).map((m) => ({
-              ...m,
-              audioUrl: m.audioUrl && m.audioUrl.startsWith('data:') && m.audioUrl.length > 2048 ? null : m.audioUrl,
-              attachment:
-                m.attachment && m.attachment.dataUrl && m.attachment.dataUrl.length > 2048
-                  ? { ...m.attachment, dataUrl: null, hasLazyPayload: true }
-                  : m.attachment
-            }));
-          }
-        });
-        localStorage.setItem('educhat_messages_cache', JSON.stringify(lightCache));
-      }
-    } catch {}
-  }, [messages]);
 
   const [tasks, setTasks] = useState(() => {
     try {
@@ -1516,8 +1472,12 @@ export default function App() {
   };
 
   // Ao trocar de conversa ativa: limpa não lidas e hidrata anexos pesados apenas da conversa aberta (Regra 4)
-  // IMPORTANTE: Depende apenas de [activeChat?.id, activeChat?.type] para jamais gerar loop de renderização!
+  // 1. ASSEPSIA DEFINITIVA & CICLO DE VIDA DO CHAT ATIVO:
+  // - Esvazia o estado imediatamente antes do fetch (setMessages([]))
+  // - Filtra estritamente pelo chat_id / channel_id ativo no Supabase
+  // - Canal Realtime dedicado com remoção obrigatória (supabase.removeChannel) no cleanup
   useEffect(() => {
+    // Se após o F5 nenhum chat estiver em foco, o estado deve permanecer vazio
     if (!activeChat?.id) return;
 
     clearUnread(activeChat.id);
@@ -1527,69 +1487,165 @@ export default function App() {
     const targetChatKey = getChatKey(activeChat, activeUserId);
     const rawId = activeChat.id;
 
+    // 1. LIMPEZA OBRIGATÓRIA DE ESTADO (CLEANUP):
+    // Esvazia imediatamente a tela antes de iniciar o novo SELECT
+    setMessages((prev) => ({
+      ...prev,
+      [targetChatKey]: []
+    }));
+
+    let isCancelled = false;
+
+    // 2. QUERY DE ISOLAMENTO:
+    // Garante que a requisição inicial filtra ESTRITAMENTE pelo chat_id / channel_id ativo
     const queryActiveChatMessages = async () => {
       try {
-        let { data: fetchedDbMessages, error } = await supabase
-          .from('messages')
-          .select('*')
-          .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
-          .order('created_at', { ascending: true });
+        let query = supabase.from('messages').select('*');
 
-        if (error) {
-          const fallbackRes = await supabase
-            .from('messages')
-            .select('*')
-            .or(`chat_id.eq.${targetChatKey},chat_id.eq.${rawId}`)
-            .order('created_at', { ascending: true })
-            .limit(100);
-          fetchedDbMessages = fallbackRes.data;
+        if (activeChat.type === 'channel') {
+          const stripped = rawId.replace(/^c-/, '');
+          const prefixed = `c-${stripped}`;
+          query = query
+            .or(`chat_id.eq.${rawId},chat_id.eq.${stripped},chat_id.eq.${prefixed},channel_id.eq.${rawId},channel_id.eq.${stripped}`)
+            .not('chat_id', 'like', 'sys_%');
+        } else if (activeChat.type === 'dm') {
+          const partnerId = rawId;
+          const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
+          query = query
+            .or(`chat_id.eq.${targetChatKey},chat_id.eq.${reverseDmKey},and(sender_id.eq.${activeUserId},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${activeUserId})`)
+            .not('chat_id', 'like', 'sys_%');
+        } else if (activeChat.type === 'whatsapp') {
+          const cleanPhone = rawId.replace(/^wa-/, '');
+          query = query
+            .or(`chat_id.eq.${rawId},chat_id.eq.wa-${cleanPhone},chat_id.eq.${cleanPhone}`)
+            .not('chat_id', 'like', 'sys_%');
+        } else {
+          query = query.eq('chat_id', rawId).not('chat_id', 'like', 'sys_%');
         }
 
-        if (fetchedDbMessages && fetchedDbMessages.length > 0) {
-          const parsedList = fetchedDbMessages.map((m) =>
-            parseDatabaseMessage(m, { stripHeavyAttachments: false })
-          );
+        const { data: fetchedDbMessages, error } = await query
+          .order('created_at', { ascending: true })
+          .limit(300);
 
-          setMessages((prevMessages) => {
-            const existing = prevMessages[targetChatKey] || [];
-            const parsedById = new Map(parsedList.map((m) => [m.id, m]));
-            const seenIds = new Set();
-            const mergedList = [];
+        if (isCancelled) return;
 
-            // 1. Mantém todas as mensagens iniciais/existentes na ordem, atualizando com o payload completo do banco se existir
-            existing.forEach((msg) => {
-              if (!msg || !msg.id) return;
-              seenIds.add(msg.id);
-              mergedList.push(parsedById.get(msg.id) || msg);
-            });
+        if (error) {
+          console.warn('[Chat] Erro na consulta de mensagens isoladas:', error);
+          return;
+        }
 
-            // 2. Acrescenta quaisquer mensagens vindas do banco que ainda não estavam em memória
-            parsedList.forEach((msg) => {
-              if (msg && msg.id && !seenIds.has(msg.id)) {
-                seenIds.add(msg.id);
-                mergedList.push(msg);
-              }
-            });
+        const parsedList = (fetchedDbMessages || []).map((m) =>
+          parseDatabaseMessage(m, { stripHeavyAttachments: false })
+        );
 
-            // ORDENAÇÃO DE SEGURANÇA NO ESTADO: Garante estrita ordem cronológica
-            mergedList.sort((a, b) => {
-              const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
-              const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
-              return timeA - timeB;
-            });
+        parsedList.sort((a, b) => {
+          const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
+          const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
+          return timeA - timeB;
+        });
 
+        // Hidratação estrita: substitui pelo conteúdo limpo do banco (sem resíduos de outras conversas)
+        setMessages((prev) => ({
+          ...prev,
+          [targetChatKey]: parsedList
+        }));
+      } catch (err) {
+        if (!isCancelled) {
+          console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
+        }
+      }
+    };
+
+    queryActiveChatMessages();
+
+    // 4. GHOST LISTENERS DO REALTIME:
+    // Cria um canal de escuta exclusivo para a conversa ativa
+    const activeChatChannelName = `chat_active_${targetChatKey.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`;
+    const activeChatChannel = supabase.channel(activeChatChannelName);
+
+    const isMessageBelongsToActive = (row) => {
+      if (!row || !row.chat_id || String(row.chat_id).startsWith('sys_')) return false;
+      if (activeChat.type === 'channel') {
+        const stripped = rawId.replace(/^c-/, '');
+        return (
+          row.chat_id === rawId ||
+          row.chat_id === stripped ||
+          row.chat_id === `c-${stripped}` ||
+          row.channel_id === rawId ||
+          row.channel_id === stripped
+        );
+      }
+      if (activeChat.type === 'dm') {
+        const partnerId = rawId;
+        const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
+        return (
+          row.chat_id === targetChatKey ||
+          row.chat_id === reverseDmKey ||
+          (row.sender_id === activeUserId && row.recipient_id === partnerId) ||
+          (row.sender_id === partnerId && row.recipient_id === activeUserId)
+        );
+      }
+      if (activeChat.type === 'whatsapp') {
+        const cleanPhone = rawId.replace(/^wa-/, '');
+        return (
+          row.chat_id === rawId ||
+          row.chat_id === `wa-${cleanPhone}` ||
+          row.chat_id === cleanPhone
+        );
+      }
+      return row.chat_id === rawId;
+    };
+
+    activeChatChannel
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          if (isCancelled) return;
+          const row = payload.new;
+          if (!isMessageBelongsToActive(row)) return;
+
+          const parsed = parseDatabaseMessage(row, { stripHeavyAttachments: false });
+          setMessages((prev) => {
+            const currentList = prev[targetChatKey] || [];
+            if (currentList.some((m) => m.id === parsed.id)) return prev;
+            const next = [...currentList, parsed];
+            next.sort((a, b) => new Date(a.created_at || a.timestamp || 0) - new Date(b.created_at || b.timestamp || 0));
             return {
-              ...prevMessages,
-              [targetChatKey]: mergedList
+              ...prev,
+              [targetChatKey]: next
             };
           });
         }
-      } catch (err) {
-        console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
-      }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'messages' },
+        (payload) => {
+          if (isCancelled) return;
+          const row = payload.new;
+          if (!isMessageBelongsToActive(row)) return;
+
+          const parsed = parseDatabaseMessage(row, { stripHeavyAttachments: false });
+          setMessages((prev) => {
+            const currentList = prev[targetChatKey] || [];
+            return {
+              ...prev,
+              [targetChatKey]: currentList.map((m) => (m.id === parsed.id ? { ...m, ...parsed } : m))
+            };
+          });
+        }
+      )
+      .subscribe();
+
+    // Cleanup function: removeChannel obrigatório ao desmontar ou trocar de chat para eliminar ghost listeners!
+    return () => {
+      isCancelled = true;
+      try {
+        supabase.removeChannel(activeChatChannel);
+      } catch {}
     };
-    queryActiveChatMessages();
-  }, [activeChat?.id, activeChat?.type]);
+  }, [activeChat?.id, activeChat?.type, currentUser?.id]);
 
   // Limpa notificações quando a janela/aba do navegador ganha foco
   useEffect(() => {
@@ -2310,41 +2366,8 @@ export default function App() {
           }
         });
 
-        // Mescla de forma NÃO-DESTRUTIVA com as mensagens já existentes (nunca apaga o histórico anterior!)
-        setMessages((prevMessages) => {
-          const next = { ...prevMessages };
-          Object.keys(grouped).forEach((key) => {
-            const existingList = Array.isArray(next[key]) ? next[key] : [];
-            const incomingList = grouped[key] || [];
-            const incomingById = new Map(incomingList.map((m) => [m.id, m]));
-            const seenIds = new Set();
-            const mergedList = [];
-
-            existingList.forEach((msg) => {
-              if (!msg || !msg.id) return;
-              seenIds.add(msg.id);
-              mergedList.push(incomingById.get(msg.id) || msg);
-            });
-
-            incomingList.forEach((msg) => {
-              if (msg && msg.id && !seenIds.has(msg.id)) {
-                seenIds.add(msg.id);
-                mergedList.push(msg);
-              }
-            });
-
-            // 2. ORDENAÇÃO DE SEGURANÇA NO ESTADO (FRONTEND):
-            // Garante ordenação cronológica estrita por created_at
-            mergedList.sort((a, b) => {
-              const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
-              const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
-              return timeA - timeB;
-            });
-
-            next[key] = mergedList;
-          });
-          return next;
-        });
+        // ASSEPSIA DEFINITIVA: fetchSupabaseData atualiza apenas metadados e contadores de não lidas.
+        // O histórico de mensagens nunca é injetado globalmente para evitar State Leakage entre chats.
 
         setUnreadCounts(() => {
           const freshCounts = { ...unreadMap };

@@ -393,6 +393,26 @@ export default function ChatArea({
           }
         }
 
+        // Blindagem estrita de isolamento para Canais Internos
+        if (isChannel && target?.id) {
+          const targetChId = String(target.id).replace(/^c-/, '').toLowerCase();
+          const mCh = m.channel_id || m.channelId || m.chat_id || m.chatId;
+          if (mCh) {
+            const cleanMCh = String(mCh).replace(/^c-/, '').toLowerCase();
+            if (cleanMCh !== targetChId && mCh !== target.id) {
+              continue;
+            }
+          }
+        }
+
+        // Blindagem estrita de isolamento para WhatsApp
+        if (isWhatsApp && target?.id) {
+          const mCh = m.chat_id || m.chatId;
+          if (mCh && String(mCh).startsWith('c-')) {
+            continue;
+          }
+        }
+
         const isMe =
           m.senderId === currentUser?.id ||
           m.sender_id === currentUser?.id ||
