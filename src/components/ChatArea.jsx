@@ -394,22 +394,46 @@ export default function ChatArea({
         }
 
         // Blindagem estrita de isolamento para Canais Internos
-        if (isChannel && target?.id) {
-          const targetChId = String(target.id).replace(/^c-/, '').toLowerCase();
+        if (isChannel && (target?.id || activeChat?.id)) {
+          // Bloqueia qualquer vazamento de Dossiê Executivo em canais públicos de equipe
+          if (typeof m.text === 'string' && (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:'))) {
+            continue;
+          }
+          const targetChId = String(target?.id || activeChat?.id || '').replace(/^c-/, '').toLowerCase();
           const mCh = m.channel_id || m.channelId || m.chat_id || m.chatId;
           if (mCh) {
             const cleanMCh = String(mCh).replace(/^c-/, '').toLowerCase();
-            if (cleanMCh !== targetChId && mCh !== target.id) {
+            if (cleanMCh !== targetChId && mCh !== (target?.id || activeChat?.id)) {
               continue;
             }
           }
         }
 
         // Blindagem estrita de isolamento para WhatsApp
-        if (isWhatsApp && target?.id) {
+        if (isWhatsApp && (target?.id || activeChat?.id)) {
           const mCh = m.chat_id || m.chatId;
-          if (mCh && String(mCh).startsWith('c-')) {
+          // Se for mensagem de canal interno, descarta imediatamente
+          if ((mCh && String(mCh).startsWith('c-')) || m.channel_id || m.channelId) {
             continue;
+          }
+          // Se não for mensagem otimista local recém enviada pelo usuário
+          if (!String(m.id || '').startsWith('m_') && !String(m.id || '').startsWith('opt_')) {
+            const rawTargetPhone = String(target?.phone || target?.id || activeChat?.id || '');
+            const targetDigits = rawTargetPhone.replace(/\D/g, '');
+            const last8Target = targetDigits.length >= 8 ? targetDigits.slice(-8) : null;
+
+            if (last8Target) {
+              const mPhoneSource = mCh || (!m.fromMe && m.senderId !== currentUser?.id ? m.senderId : null);
+              if (mPhoneSource) {
+                const mDigits = String(mPhoneSource).replace(/\D/g, '');
+                if (mDigits.length >= 8) {
+                  const last8Msg = mDigits.slice(-8);
+                  if (last8Target !== last8Msg) {
+                    continue;
+                  }
+                }
+              }
+            }
           }
         }
 

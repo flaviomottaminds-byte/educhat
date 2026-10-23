@@ -369,37 +369,18 @@ export default function App() {
         }
 
         if (liveMessages && Object.keys(liveMessages).length > 0) {
-          setMessages((prev) => {
-            const next = { ...prev };
-            let shouldPlayAlert = false;
-            const activeUser = currentUserRef.current || currentUser;
-
-            Object.keys(liveMessages).forEach((chatKey) => {
-              const existingList = next[chatKey] || [];
-              const seenIds = new Set(existingList.map((m) => m.id));
-              const toAdd = (liveMessages[chatKey] || []).filter((m) => !seenIds.has(m.id));
-
-              if (toAdd.length > 0) {
-                next[chatKey] = [...existingList, ...toAdd];
-                const studentMessages = toAdd.filter((m) => m.fromStudent);
-                if (studentMessages.length > 0) {
-                  const timeInfo = getBrasiliaTime();
-                  if (!timeInfo.isAfterHours) {
-                    console.log(`⏸️ [Decisão Webhook] Horário Comercial: IA pausada (Hora Brasília: ${timeInfo.timeStr})`);
-                  } else {
-                    console.log(`🤖 [Decisão Webhook] Fora de Expediente: IA assumindo (Hora Brasília: ${timeInfo.timeStr})`);
-
-                    // Ativa visualmente o indicador de IA no contato (o atendimento é processado no servidor/webhook)
-                    setWhatsAppContacts((prevContacts) =>
-                      prevContacts.map((c) => (c.id === chatKey ? { ...c, aiActive: true } : c))
-                    );
-                  }
-                }
-              }
-            });
-
-            // Notificação sonora desativada totalmente no frontend (apenas visual)
-            return next;
+          // ASSEPSIA DEFINITIVA: Desativação total da injeção cega de mensagens de contatos em `setMessages`.
+          // O histórico de mensagens é gerenciado exclusivamente pelo Supabase / Realtime para o chat ativo.
+          // Aqui mantemos apenas a atualização de status de IA/metadados de contatos se necessário.
+          const timeInfo = getBrasiliaTime();
+          Object.keys(liveMessages).forEach((chatKey) => {
+            const msgs = liveMessages[chatKey] || [];
+            const studentMessages = msgs.filter((m) => m.fromStudent);
+            if (studentMessages.length > 0 && timeInfo.isAfterHours) {
+              setWhatsAppContacts((prevContacts) =>
+                prevContacts.map((c) => (c.id === chatKey ? { ...c, aiActive: true } : c))
+              );
+            }
           });
         }
       } catch (err) {
@@ -919,8 +900,8 @@ export default function App() {
         data: (resolvedCollaborators || []).find((u) => u?.id === activeChat?.id) || (resolvedCollaborators || [])[1] || INITIAL_COLLABORATORS[1],
       };
 
-  const currentChatKey = getChatKey(activeChat, currentUser?.id || 'u1');
-  const currentMessages = messages[currentChatKey] || [];
+  const currentChatKey = activeChat?.id ? getChatKey(activeChat, currentUser?.id || 'u1') : null;
+  const currentMessages = currentChatKey ? (messages[currentChatKey] || []) : [];
 
   const customAIPromptRef = useRef(customAIPrompt);
   customAIPromptRef.current = customAIPrompt;
@@ -3839,14 +3820,18 @@ export default function App() {
 
             const incoming = parseDatabaseMessage(row, { stripHeavyAttachments: false });
 
-            setMessages((prev) => {
-              const prevList = prev[cKey] || [];
-              if (prevList.some((m) => m.id === incoming.id)) return prev;
-              return {
-                ...prev,
-                [cKey]: [...prevList, incoming]
-              };
-            });
+            // ASSEPSIA DEFINITIVA: Apenas a conversa ativa na tela recebe novas mensagens no estado `messages`.
+            // Conversas inativas recebem apenas notificação/atualização de badge na sidebar.
+            if (cKey === currentActiveKey) {
+              setMessages((prev) => {
+                const prevList = prev[cKey] || [];
+                if (prevList.some((m) => m.id === incoming.id)) return prev;
+                return {
+                  ...prev,
+                  [cKey]: [...prevList, incoming]
+                };
+              });
+            }
 
             if (row.sender_id !== currentUserId && row.sender_id !== 'system') {
               if (cKey !== currentActiveKey || document.hidden) {
