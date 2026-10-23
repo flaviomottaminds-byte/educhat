@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   Send,
   Paperclip,
@@ -34,7 +34,8 @@ import {
   AlertCircle,
   RotateCcw,
   Info,
-  Forward
+  Forward,
+  CheckCheck
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { hasFullPortfolioAccess, isChatAssignedToUser, canUserViewChat, matchesDepartment, getChatAssignedToId, normalizeName } from '../lib/portfolioAccess';
@@ -44,758 +45,11 @@ import { formatLastSeen } from '../lib/presence';
 import StudentDossierModal from './StudentDossierModal';
 import FileAttachmentCard from './FileAttachmentCard';
 import ForwardMessageModal from './ForwardMessageModal';
+import MessageReadInfoModal from './MessageReadInfoModal';
+import MessageItem from './MessageItem';
 import { extractAttachmentFromText, openDocument, downloadDocument, resolvePublicMediaUrl } from '../lib/attachmentParser';
 import { processAudioSource, playDecodedAudioBuffer, getSupportedAudioMimeType, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
 import { toast } from '../lib/toast';
-
-// Helper para renderizar texto com links clicáveis (Item 6)
-function FormattedMessageText({ text }) {
-  if (!text) return null;
-  // Remove comentários de controle interno e tags de anexo/áudio que não devem ser expostas como texto bruto
-  const cleanText = text
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
-    .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
-    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
-    .trim();
-
-  if (!cleanText) return null;
-
-  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
-  const parts = cleanText.split(urlRegex);
-
-  return (
-    <p className="leading-relaxed whitespace-pre-wrap text-[13.5px]">
-      {parts.map((part, i) => {
-        if (part && part.match(urlRegex)) {
-          const href = part.startsWith('http://') || part.startsWith('https://') ? part : `https://${part}`;
-          return (
-            <a
-              key={i}
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-blue-600 dark:text-blue-400 underline hover:text-blue-700 dark:hover:text-blue-300 break-all font-semibold transition"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {part}
-            </a>
-          );
-        }
-        return part;
-      })}
-    </p>
-  );
-}
-
-// Helper para interceptar tags [ARQUIVO_ANEXO], metadados de áudio e sanitizar o texto da mensagem
-function parseMessageContent(m) {
-  if (!m) return { cleanText: '', isAudio: false, isOnlyAudioPlaceholder: false, isImage: false, isFile: false, attachment: null };
-
-  const rawText = m.text || '';
-  let extractedAttachment = m.attachment || null;
-
-  // 1. Extração robusta de [ARQUIVO_ANEXO:{...}]
-  const { attachment: parsedFromText, cleanText: sanitizedText } = extractAttachmentFromText(rawText);
-  if (!extractedAttachment && parsedFromText) {
-    extractedAttachment = parsedFromText;
-  }
-
-  // Normalização do anexo (se existir)
-  let attachment = null;
-  if (extractedAttachment && typeof extractedAttachment === 'object') {
-    const rawName = extractedAttachment.name || extractedAttachment.fileName || extractedAttachment.filename || 'Arquivo';
-    const rawType = (
-      extractedAttachment.type ||
-      extractedAttachment.mimetype ||
-      extractedAttachment.mimeType ||
-      m.mimetype ||
-      m.mime_type ||
-      ''
-    ).toLowerCase().trim();
-
-    const rawUrl =
-      extractedAttachment.url ||
-      extractedAttachment.dataUrl ||
-      extractedAttachment.storagePath ||
-      extractedAttachment.path ||
-      extractedAttachment.mediaUrl ||
-      m.mediaUrl ||
-      m.media_url ||
-      '';
-
-    const resolvedUrl = resolvePublicMediaUrl(rawUrl, rawType.startsWith('audio/') ? 'chat-audios' : 'chat-attachments');
-
-    attachment = {
-      ...extractedAttachment,
-      name: rawName,
-      type: rawType,
-      url: resolvedUrl || rawUrl,
-      dataUrl: resolvedUrl || extractedAttachment.dataUrl || rawUrl,
-      size: extractedAttachment.size || ''
-    };
-  }
-
-  // Extração do MIME Type Real
-  const mimeType = (
-    attachment?.type ||
-    m.mimetype ||
-    m.mime_type ||
-    m.mimeType ||
-    ''
-  ).toLowerCase().trim();
-
-  // CLASSIFICAÇÃO RIGOROSA BASEADA EM MIME-TYPE:
-
-  // 1. É IMAGEM?
-  // mimeType deve ser image/* (ou fallback por extensão se o mimeType for vazio e não conflitante)
-  const isImageMime = mimeType.startsWith('image/');
-  const isImageExt = !mimeType && attachment?.name && /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(attachment.name);
-  const isImage = Boolean((isImageMime || isImageExt || m.isImage || m.is_image) && !mimeType.startsWith('audio/') && !mimeType.includes('pdf'));
-
-  // 2. É ÁUDIO?
-  // REGRA ESTRITA:
-  // - Se existir anexo: SÓ pode ser áudio se o MIME-type for explicitamente audio/* (ex: audio/ogg, audio/mp3, audio/wav, audio/webm).
-  // - Se o mimeType for nulo, vazio, desconhecido ('application/octet-stream') ou de documento ('application/pdf', etc.):
-  //   NUNCA PODE SER ÁUDIO! Deve ser renderizado como cartão de arquivo genérico.
-  // - Se NÃO houver anexo: pode ser mensagem de voz WhatsApp/interna caso tenha áudio explícito (audioUrl ou flag isAudio).
-  const isAudioMime = mimeType.startsWith('audio/');
-  let isAudio = false;
-  let extractedAudioUrl = null;
-  let duration = m.duration || attachment?.duration || null;
-  let transcription = m.audioTranscription || null;
-
-  if (attachment) {
-    if (isAudioMime) {
-      isAudio = true;
-      extractedAudioUrl = attachment.url || attachment.dataUrl;
-    } else {
-      // Existe anexo mas o MIME não é audio/* -> JAMAIS é áudio!
-      isAudio = false;
-    }
-  } else {
-    // Sem anexo de arquivo: verifica se é mensagem de voz pura
-    const hasAudioIndicators = Boolean(
-      m.isAudio ||
-      m.is_audio ||
-      m.audioUrl ||
-      m.audio_url ||
-      rawText.includes('<!-- AUDIO_URL:') ||
-      rawText.includes('<!-- IS_AUDIO:true -->') ||
-      rawText.includes('🎙️ [Áudio recebido via WhatsApp]') ||
-      (rawText.includes('🎙️') && (rawText.includes('Áudio') || rawText.includes('Mensagem de voz')))
-    );
-
-    if (hasAudioIndicators && !isImage) {
-      isAudio = true;
-      extractedAudioUrl = m.audioUrl || m.audio_url || null;
-    }
-  }
-
-  // Intercepta AUDIO_URL nos metadados somente se isAudio for verdadeiro
-  if (isAudio && !extractedAudioUrl && rawText.includes('<!-- AUDIO_URL:')) {
-    const match = rawText.match(/<!-- AUDIO_URL:([\s\S]+?) -->/);
-    if (match) {
-      extractedAudioUrl = resolvePublicAudioUrl(match[1].trim());
-    }
-  }
-
-  if (isAudio && !duration && rawText.includes('<!-- DURATION:')) {
-    const match = rawText.match(/<!-- DURATION:([\s\S]+?) -->/);
-    if (match) {
-      duration = match[1].trim();
-    }
-  }
-
-  if (rawText.includes('[ÁUDIO_TRANSCRIÇÃO:')) {
-    const match = rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*"([\s\S]+?)"\]/) || rawText.match(/\[ÁUDIO_TRANSCRIÇÃO:\s*([\s\S]+?)\]/);
-    if (match) {
-      transcription = match[1].replace(/^["']|["']$/g, '');
-    }
-  }
-
-  // 3. É ARQUIVO/DOCUMENTO GENÉRICO?
-  // Qualquer anexo que NÃO seja imagem e NÃO seja áudio é um documento/arquivo
-  const isFile = Boolean(attachment && !isImage && !isAudio);
-
-  // 4. Limpeza de texto
-  let cleanText = sanitizedText
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
-    .replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '')
-    .replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '')
-    .trim();
-
-  // Se for documento ou arquivo, remove placeholders textuais genéricos se forem redundantes
-  if (isFile && (cleanText === '📄 Documento recebido' || cleanText.startsWith('📄 Documento recebido:'))) {
-    cleanText = '';
-  }
-  if (isImage && cleanText === '🖼️ Imagem recebida') {
-    cleanText = '';
-  }
-
-  // Se for áudio, extrai duração caso não tenha
-  if (isAudio && !duration) {
-    const durMatch = cleanText.match(/\((\d{1,2}:\d{2})\)/);
-    if (durMatch) duration = durMatch[1];
-  }
-
-  const isOnlyAudioPlaceholder =
-    isAudio && !attachment && (
-      !cleanText ||
-      cleanText === '🎙️ [Áudio recebido via WhatsApp]' ||
-      /^🎙️\s*(Mensagem de voz|Áudio)\s*(\(\d{1,2}:\d{2}\))?$/i.test(cleanText.trim())
-    );
-
-  return {
-    cleanText,
-    isOnlyAudioPlaceholder,
-    attachment,
-    isImage,
-    isAudio,
-    isFile,
-    audioUrl: isAudio ? resolvePublicAudioUrl(extractedAudioUrl) : null,
-    duration: duration || '0:14',
-    transcription
-  };
-}
-
-// Player interativo e de alta fidelidade para áudios do WhatsApp e Equipe Interna com suporte cruzado (MP4, MPEG, WebM, OGG)
-function AudioMessagePlayer({ audioUrl, duration = '0:14', transcription, isOutgoing = false, isInternal = false }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [currentTime, setCurrentTime] = useState('0:00');
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const [audioError, setAudioError] = useState(false);
-  const audioRef = useRef(null);
-  const webAudioHandleRef = useRef(null);
-
-  // Garante resolução de caminhos do Supabase Storage para URL pública absoluta
-  const resolvedAudioUrl = React.useMemo(() => {
-    return resolvePublicAudioUrl(audioUrl);
-  }, [audioUrl]);
-
-  // Converte fluxos (Base64 ou Data URLs) se necessário para Blob estável
-  const audioSource = React.useMemo(() => {
-    return processAudioSource(resolvedAudioUrl);
-  }, [resolvedAudioUrl]);
-
-  // URL final para o player: confia na URL pública gerada no Supabase
-  const audioPlaySrc = resolvedAudioUrl || audioSource.blobUrl;
-
-  // Libera a URL do Blob criada quando o componente desmontar ou audioUrl mudar
-  useEffect(() => {
-    return () => {
-      if (audioSource?.blobUrl && audioSource.blobUrl.startsWith('blob:')) {
-        try {
-          URL.revokeObjectURL(audioSource.blobUrl);
-        } catch {}
-      }
-      if (webAudioHandleRef.current) {
-        try {
-          webAudioHandleRef.current.stop();
-        } catch {}
-      }
-    };
-  }, [audioSource]);
-
-  // Recarrega o elemento <audio> nativo quando a fonte mudar
-  useEffect(() => {
-    if (audioRef.current && audioPlaySrc) {
-      try {
-        audioRef.current.load();
-        setAudioError(false);
-      } catch (err) {
-        console.warn('Erro ao carregar fontes de áudio no elemento <audio>:', err);
-      }
-    }
-  }, [audioPlaySrc]);
-
-  // Duração em segundos calculada
-  const parsedDurationSec = React.useMemo(() => {
-    if (typeof duration === 'number') return duration;
-    if (typeof duration === 'string' && duration.includes(':')) {
-      const [m, s] = duration.split(':').map(Number);
-      return (m || 0) * 60 + (s || 14);
-    }
-    return 14;
-  }, [duration]);
-
-  const stopWebAudio = () => {
-    if (webAudioHandleRef.current) {
-      try {
-        webAudioHandleRef.current.stop();
-      } catch {}
-      webAudioHandleRef.current = null;
-    }
-  };
-
-  // Fallback acústico limpo de voz real: Web Audio PCM ou síntese de fala
-  const triggerFallbackPlay = async () => {
-    setIsPlaying(true);
-    setProgress(0);
-
-    // 1. Tenta decodificar o fluxo PCM real via Web Audio API caso haja arrayBuffer ou baixa da URL
-    let buffer = audioSource.arrayBuffer;
-    if (!buffer && audioSource.blobUrl && !audioSource.blobUrl.startsWith('data:')) {
-      try {
-        const res = await fetch(audioSource.blobUrl);
-        if (res.ok) {
-          buffer = await res.arrayBuffer();
-        }
-      } catch (err) {
-        console.warn('Erro ao obter arrayBuffer da URL para Web Audio:', err);
-      }
-    }
-
-    if (buffer) {
-      try {
-        stopWebAudio();
-        const handle = await playDecodedAudioBuffer(buffer, playbackRate, () => {
-          setIsPlaying(false);
-          setProgress(0);
-          setCurrentTime('0:00');
-          webAudioHandleRef.current = null;
-        });
-        if (handle) {
-          webAudioHandleRef.current = handle;
-          setAudioError(false);
-          return;
-        }
-      } catch (err) {
-        console.warn('Fallback Web Audio PCM falhou:', err);
-      }
-    }
-
-    // 2. Se há transcrição e suporte a SpeechSynthesis (fala a transcrição em voz pt-BR)
-    if ('speechSynthesis' in window && transcription) {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(transcription);
-      utterance.lang = 'pt-BR';
-      utterance.rate = playbackRate;
-
-      utterance.onend = () => {
-        setIsPlaying(false);
-        setProgress(0);
-        setCurrentTime('0:00');
-      };
-      utterance.onerror = () => {
-        setIsPlaying(false);
-        setProgress(0);
-        setCurrentTime('0:00');
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } else {
-      setIsPlaying(false);
-    }
-  };
-
-  // Alterna Reprodução e Pausa com Priorização Nativa e Fallback Decodificado
-  const togglePlay = async () => {
-    if (isPlaying) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
-      stopWebAudio();
-      if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
-        window.speechSynthesis.cancel();
-      }
-      setIsPlaying(false);
-      return;
-    }
-
-    // 1. Tenta reproduzir pelo elemento nativo com a URL resolvida
-    if (audioRef.current && audioPlaySrc && !audioError) {
-      audioRef.current.playbackRate = playbackRate;
-      try {
-        await audioRef.current.play();
-        setIsPlaying(true);
-        setAudioError(false);
-        return;
-      } catch (err) {
-        console.warn('HTML5 Audio play falhou, recorrendo a Web Audio PCM:', err);
-        setAudioError(true);
-      }
-    }
-
-    // 2. Se elemento nativo falhar, aciona reprodução decodificada sem ruídos
-    await triggerFallbackPlay();
-  };
-
-  // Atualização de progresso durante simulação/fala ou reprodução Web Audio
-  useEffect(() => {
-    let interval = null;
-    if (isPlaying && (audioError || webAudioHandleRef.current || !audioRef.current)) {
-      const stepMs = 200;
-      const totalSteps = (parsedDurationSec * 1000) / (stepMs * playbackRate);
-      interval = setInterval(() => {
-        setProgress((prev) => {
-          const next = prev + (100 / totalSteps);
-          if (next >= 100) {
-            setIsPlaying(false);
-            setCurrentTime(duration);
-            return 100;
-          }
-          const curSecs = Math.floor((next / 100) * parsedDurationSec);
-          const mins = Math.floor(curSecs / 60);
-          const secs = curSecs % 60;
-          setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
-          return next;
-        });
-      }, stepMs);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, audioError, parsedDurationSec, playbackRate, duration]);
-
-  // Manipuladores de Eventos do Elemento <audio> Nativo
-  const handleTimeUpdate = () => {
-    if (audioRef.current && !webAudioHandleRef.current) {
-      const current = audioRef.current.currentTime;
-      const total = audioRef.current.duration || parsedDurationSec || 1;
-      setProgress((current / total) * 100);
-      const mins = Math.floor(current / 60);
-      const secs = Math.floor(current % 60);
-      setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
-    }
-  };
-
-  const handleEnded = () => {
-    setIsPlaying(false);
-    setProgress(0);
-    setCurrentTime('0:00');
-  };
-
-  const handleSeek = (e) => {
-    e.stopPropagation();
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const clickPercent = Math.max(0, Math.min(1, clickX / rect.width));
-    setProgress(clickPercent * 100);
-
-    if (audioRef.current && audioRef.current.duration && !audioError) {
-      audioRef.current.currentTime = clickPercent * audioRef.current.duration;
-    } else {
-      const curSecs = Math.floor(clickPercent * parsedDurationSec);
-      const mins = Math.floor(curSecs / 60);
-      const secs = curSecs % 60;
-      setCurrentTime(`${mins}:${secs < 10 ? '0' : ''}${secs}`);
-    }
-  };
-
-  const cycleSpeed = (e) => {
-    e.stopPropagation();
-    const nextRate = playbackRate === 1 ? 1.5 : playbackRate === 1.5 ? 2 : 1;
-    setPlaybackRate(nextRate);
-    if (audioRef.current) {
-      audioRef.current.playbackRate = nextRate;
-    }
-  };
-
-  return (
-    <div className="space-y-1.5 max-w-sm sm:max-w-md my-1">
-      {/* Elemento de Player de Áudio Nativo do Navegador (<audio controls ... />) sem atributo type hardcoded */}
-      {audioPlaySrc ? (
-        <div className="w-full max-w-xs space-y-1">
-          <audio
-            ref={audioRef}
-            src={audioPlaySrc}
-            controls
-            preload="metadata"
-            className="w-full max-w-xs my-1 rounded-lg block accent-emerald-600 dark:accent-emerald-400"
-            onPlay={() => {
-              setIsPlaying(true);
-              setAudioError(false);
-            }}
-            onPause={() => setIsPlaying(false)}
-            onTimeUpdate={handleTimeUpdate}
-            onEnded={handleEnded}
-            onError={(e) => {
-              console.warn('HTML5 Audio elemento onError disparado:', e?.target?.error);
-              setAudioError(true);
-            }}
-          />
-
-          {/* Tratamento e Fallback Visual caso o áudio não possa ser carregado / codec incompatível */}
-          {audioError && (
-            <div className="p-2.5 rounded-xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs space-y-2">
-              <div className="flex items-start gap-2">
-                <AlertCircle size={15} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                <div className="flex-1 min-w-0">
-                  <p className="font-semibold text-[11.5px] leading-tight">
-                    Falha ao reproduzir áudio no navegador
-                  </p>
-                  <p className="text-[10.5px] opacity-80 mt-0.5 leading-snug">
-                    O formato deste arquivo não pôde ser decodificado nativamente neste navegador.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-amber-500/20">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAudioError(false);
-                    if (audioRef.current) {
-                      audioRef.current.load();
-                      audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setAudioError(true));
-                    }
-                  }}
-                  className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white font-medium text-[10.5px] transition flex items-center gap-1 shadow-sm"
-                >
-                  <RotateCcw size={11} /> Tentar Novamente
-                </button>
-
-                {audioPlaySrc && (
-                  <a
-                    href={audioPlaySrc}
-                    download="audio_chat"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2.5 py-1 rounded bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-current font-medium text-[10.5px] transition flex items-center gap-1"
-                  >
-                    <Download size={11} /> Baixar Áudio
-                  </a>
-                )}
-
-                {transcription && (
-                  <button
-                    type="button"
-                    onClick={triggerFallbackPlay}
-                    className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[10.5px] transition flex items-center gap-1 shadow-sm"
-                  >
-                    <Volume2 size={11} /> Ouvir Leitura (IA)
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="p-2 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-between text-xs">
-          <span className="text-chatTextMuted">🎙️ {isInternal ? 'Mensagem de voz interna' : 'Mensagem de voz WhatsApp'}</span>
-          {transcription && (
-            <button
-              type="button"
-              onClick={triggerFallbackPlay}
-              className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-[11px]"
-            >
-              Ouvir Leitura
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Card do Player Estilo WhatsApp com Barra de Ondas */}
-      <div className={`p-2.5 rounded-2xl border transition-all ${
-        isOutgoing
-          ? 'bg-emerald-500/10 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-700/40'
-          : 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10'
-      }`}>
-        <div className="flex items-center gap-3">
-          {/* Botão Play / Pause */}
-          <button
-            type="button"
-            onClick={togglePlay}
-            className="w-10 h-10 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-md hover:scale-105 active:scale-95 transition"
-            title={isPlaying ? "Pausar áudio" : "Reproduzir áudio"}
-          >
-            {isPlaying ? <Pause size={18} /> : <Play size={18} className="ml-0.5" />}
-          </button>
-
-          {/* Área de Barra de Onda Interativa (Waveform) */}
-          <div className="flex-1 space-y-1">
-            <div
-              className="relative flex items-center gap-0.5 sm:gap-1 h-6 items-end cursor-pointer py-1"
-              onClick={handleSeek}
-              title="Clique em qualquer ponto para avançar ou retroceder o áudio"
-            >
-              {[35, 70, 45, 85, 55, 100, 40, 80, 60, 95, 50, 75, 90, 40, 65, 85, 50, 70, 95, 60, 40, 80, 55, 30].map((h, idx) => {
-                const barPercent = (idx / 24) * 100;
-                const isActive = progress >= barPercent;
-                return (
-                  <div
-                    key={idx}
-                    className={`flex-1 rounded-full transition-all duration-75 ${
-                      isActive
-                        ? 'bg-emerald-600 dark:bg-emerald-400'
-                        : 'bg-emerald-600/30 dark:bg-emerald-400/30 hover:bg-emerald-500/50'
-                    }`}
-                    style={{ height: `${h}%` }}
-                  />
-                );
-              })}
-            </div>
-
-            {/* Tempo e Metadados */}
-            <div className="flex items-center justify-between text-[10px] opacity-75 font-medium">
-              <span>{isPlaying ? currentTime : duration}</span>
-              <div className="flex items-center gap-2">
-                {/* Botão de Velocidade (1x / 1.5x / 2x) */}
-                <button
-                  type="button"
-                  onClick={cycleSpeed}
-                  className="px-1.5 py-0.2 rounded-full bg-black/10 dark:bg-white/10 hover:bg-emerald-600 hover:text-white transition font-bold text-[9px]"
-                  title="Alterar velocidade de reprodução"
-                >
-                  {playbackRate}x
-                </button>
-                <span>{isInternal ? 'Equipe Interna' : 'Voz WhatsApp'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Botão de Download */}
-          {audioSource.blobUrl && (
-            <a
-              href={audioSource.blobUrl}
-              download={audioSource.mimeType?.includes('mp4') ? 'audio_chat.mp4' : 'audio_chat.webm'}
-              className="p-2 text-slate-500 hover:text-emerald-600 transition rounded-lg hover:bg-black/5 dark:hover:bg-white/5"
-              title="Baixar arquivo de áudio para o computador"
-            >
-              <Download size={15} />
-            </a>
-          )}
-        </div>
-      </div>
-
-      {/* Transcrição Speech-to-Text */}
-      {transcription && (
-        <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-xs space-y-1">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
-              <Headphones size={13} />
-              <span>Transcrição Speech-to-Text:</span>
-            </div>
-            <button
-              type="button"
-              onClick={triggerFallbackPlay}
-              className="text-[10px] text-emerald-700 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-0.5"
-              title="Ouvir leitura em voz alta"
-            >
-              <Volume2 size={11} /> Ouvir Leitura
-            </button>
-          </div>
-          <p className="italic text-chatTextTitle leading-relaxed text-[11px]">
-            "{transcription}"
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Helper para cruzar os IDs de read_by com a lista de colaboradores e retornar os primeiros nomes
-function getReadByCollaboratorNames(readByList, collaborators, senderId) {
-  const safeList = Array.isArray(readByList) ? readByList : [];
-  if (safeList.length === 0) return [];
-  const safeCollabs = Array.isArray(collaborators) ? collaborators : [];
-  const senderIdClean = senderId ? String(senderId) : '';
-  const viewerIds = safeList.filter((id) => id && String(id) !== senderIdClean);
-  const names = [];
-
-  viewerIds.forEach((id) => {
-    const collab = safeCollabs.find((c) => c && (String(c.id) === String(id) || String(c.user_id) === String(id)));
-    if (collab?.name) {
-      const firstName = String(collab.name).trim().split(' ')[0];
-      if (firstName && !names.includes(firstName)) {
-        names.push(firstName);
-      }
-    } else {
-      const fallbackId = String(id);
-      if (fallbackId && !names.includes(fallbackId)) {
-        names.push(fallbackId);
-      }
-    }
-  });
-
-  return names;
-}
-
-// Componente de Tooltip / Message Info exclusivo para mensagens do grupo #geral
-function MessageReadReceiptTooltip({ readBy = [], collaborators = [], senderId, isMe }) {
-  const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef(null);
-
-  const safeReadBy = useMemo(() => {
-    if (Array.isArray(readBy)) return readBy;
-    if (typeof readBy === 'string') {
-      try {
-        const parsed = JSON.parse(readBy);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-      return readBy.replace(/[{}]/g, '').split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
-    }
-    return [];
-  }, [readBy]);
-
-  const names = useMemo(() => {
-    return getReadByCollaboratorNames(safeReadBy, collaborators, senderId);
-  }, [safeReadBy, collaborators, senderId]);
-
-  const hasReaders = Array.isArray(names) && names.length > 0;
-  const tooltipText = hasReaders
-    ? `Lido por: ${names.join(', ')}`
-    : 'Aguardando visualização';
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleClickOutside = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
-        setIsOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isOpen]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="relative inline-flex items-center"
-      onMouseEnter={() => setIsOpen(true)}
-      onMouseLeave={() => setIsOpen(false)}
-    >
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setIsOpen((prev) => !prev);
-        }}
-        title={tooltipText}
-        className={`p-0.5 rounded transition flex items-center justify-center cursor-pointer ${
-          hasReaders
-            ? 'text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300'
-            : 'opacity-60 hover:opacity-100 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300'
-        }`}
-        aria-label="Info da mensagem"
-      >
-        <Info size={11} className={hasReaders ? 'stroke-[2.5]' : 'stroke-2'} />
-      </button>
-
-      {isOpen && (
-        <div
-          className={`absolute bottom-full mb-1.5 z-50 whitespace-nowrap px-2.5 py-1 text-[11px] font-medium rounded-md shadow-lg border backdrop-blur-sm transition-all duration-150 animate-in fade-in zoom-in-95 pointer-events-none ${
-            isMe
-              ? 'right-0 bg-slate-900/95 text-slate-100 border-slate-700/80 shadow-slate-950/40'
-              : 'left-0 bg-slate-900/95 text-slate-100 border-slate-700/80 shadow-slate-950/40'
-          }`}
-        >
-          <div className="flex items-center gap-1.5">
-            <span className={hasReaders ? 'text-blue-300 font-semibold' : 'text-slate-300'}>
-              {tooltipText}
-            </span>
-          </div>
-          <div
-            className={`absolute top-full border-4 border-transparent border-t-slate-900/95 ${
-              isMe ? 'right-2' : 'left-2'
-            }`}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function ChatArea({
   activeChat,
@@ -829,6 +83,7 @@ export default function ChatArea({
   const [replyingTo, setReplyingTo] = useState(null); // Estado para Resposta / Quote (Item 5)
   const [forwardingMessage, setForwardingMessage] = useState(null); // Estado para Encaminhamento de Mensagem
   const [isStudentDossierOpen, setIsStudentDossierOpen] = useState(false); // Dossiê Acadêmico EduControl
+  const [selectedMessageForInfo, setSelectedMessageForInfo] = useState(null); // Modal WhatsApp de Dados da Mensagem (Lida por)
 
   // Estado do Seletor Interativo de Fila & Responsável (Item 1)
   const [isAssignmentOpen, setIsAssignmentOpen] = useState(false);
@@ -917,6 +172,8 @@ export default function ChatArea({
       try {
         if (typeof document !== 'undefined' && document.hidden) return;
         const recent = Array.isArray(messages) ? messages.slice(-50) : [];
+        const pendingMapUpdates = {};
+
         recent.forEach((m) => {
           if (!m || !m.id || m.senderId === 'system' || m.senderId === currentUser.id || String(m.id).startsWith('temp_')) return;
 
@@ -942,7 +199,7 @@ export default function ChatArea({
               markedReadIdsRef.current?.add(m.id);
 
               const nextReadBy = Array.from(new Set([...(Array.isArray(currentList) ? currentList : []), currentUser.id]));
-              setLocalReadByMap((prev) => ({ ...(prev || {}), [m.id]: nextReadBy }));
+              pendingMapUpdates[m.id] = nextReadBy;
 
               supabase
                 .from('messages')
@@ -1003,12 +260,20 @@ export default function ChatArea({
             }
           }
         });
+
+        // Atualiza o mapa de leitura local em lote único para evitar re-renders em cascata
+        if (Object.keys(pendingMapUpdates).length > 0) {
+          setLocalReadByMap((prev) => ({ ...(prev || {}), ...pendingMapUpdates }));
+        }
       } catch (err) {
         console.warn('[markRecentMessagesAsRead] Erro não fatal:', err);
       }
     };
 
-    markRecentMessagesAsRead();
+    // Debounce de 300ms para evitar chamadas contínuas durante digitação ou transições
+    const readTimer = setTimeout(() => {
+      markRecentMessagesAsRead();
+    }, 300);
 
     const handleFocusOrVisible = () => {
       markRecentMessagesAsRead();
@@ -1018,10 +283,11 @@ export default function ChatArea({
     document.addEventListener('visibilitychange', handleFocusOrVisible);
 
     return () => {
+      clearTimeout(readTimer);
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
     };
-  }, [messages, isGeral, isChannel, isDM, currentUser?.id]);
+  }, [messages?.length, isGeral, isChannel, isDM, currentUser?.id]);
 
   // Reconhecimento inteligente do aluno na base EduControl
   const matchedStudent = isWhatsApp
@@ -1217,7 +483,26 @@ export default function ChatArea({
     };
   }, []);
 
-  const handleSend = async (e) => {
+  const handleReply = useCallback((m) => {
+    setReplyingTo(m);
+    requestAnimationFrame(() => {
+      try {
+        textareaRef.current?.focus({ preventScroll: true });
+      } catch {
+        textareaRef.current?.focus();
+      }
+    });
+  }, []);
+
+  const handleForward = useCallback((m) => {
+    setForwardingMessage(m);
+  }, []);
+
+  const handleOpenMessageInfo = useCallback((m) => {
+    setSelectedMessageForInfo(m);
+  }, []);
+
+  const handleSend = (e) => {
     e?.preventDefault();
     if (!inputText.trim() && !pendingAttachment) return;
 
@@ -1225,48 +510,37 @@ export default function ChatArea({
     const attachmentToSend = pendingAttachment;
     const replyingToSend = replyingTo;
 
-    try {
-      const result = await onSendMessage(textToSend, attachmentToSend, {
-        replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null,
-        isAudio: false,
-        audioUrl: null,
-        isDM,
-        channelId: isDM ? null : (activeChat?.id || null),
-        recipientId: isDM ? (target?.id || activeChat?.id || null) : null
-      });
-
-      if (result && result.success === false) {
-        console.error("Erro no Insert:", result.error);
-        return;
-      }
-
-      // SUCESSO CONFIRMADO NO BACKEND: Limpa o campo e rola para o fim
-      setInputText('');
-      setPendingAttachment(null);
-      setReplyingTo(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-      if (textareaRef.current) {
-        textareaRef.current.style.height = 'auto';
-      }
-
-      requestAnimationFrame(() => {
-        scrollToBottom(true);
-        try {
-          textareaRef.current?.focus({ preventScroll: true });
-        } catch {
-          textareaRef.current?.focus();
-        }
-      });
-    } catch (err) {
-      console.error("Erro no Insert:", err);
-      toast.error(err?.message || 'Erro ao enviar mensagem');
-    } finally {
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+    // Zero-Freeze Optimistic UI: Limpa imediatamente o input e previews no mesmo frame
+    setInputText('');
+    setPendingAttachment(null);
+    setReplyingTo(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+
+    requestAnimationFrame(() => {
+      scrollToBottom(true);
+      try {
+        textareaRef.current?.focus({ preventScroll: true });
+      } catch {
+        textareaRef.current?.focus();
+      }
+    });
+
+    // Disparo em background sem travar o event loop da digitação
+    onSendMessage(textToSend, attachmentToSend, {
+      replyTo: replyingToSend ? { id: replyingToSend.id, senderName: replyingToSend.senderName, text: replyingToSend.text } : null,
+      isAudio: false,
+      audioUrl: null,
+      isDM,
+      channelId: isDM ? null : (activeChat?.id || null),
+      recipientId: isDM ? (target?.id || activeChat?.id || null) : null
+    }).catch((err) => {
+      console.error('[ChatArea] Erro no envio assíncrono:', err);
+    });
   };
 
   // Iniciar Gravação de Áudio Nativa com Seleção Dinâmica Cross-Browser (Item 1)
@@ -1486,6 +760,65 @@ export default function ChatArea({
       fileInputRef.current.value = '';
     }
     e.target.value = null;
+  };
+
+  // Tratamento do evento onPaste: permite colar links e texto puro imediatamente,
+  // ou intercepta arquivos/mídias (ex: PrintScreen / Ctrl+V de imagem) para anexo
+  const handlePaste = (e) => {
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+
+    const files = clipboard.files;
+    const text = clipboard.getData('text') || clipboard.getData('text/plain');
+
+    // 1. Prioridade para texto simples / links (Google Meet, URLs, mensagens de texto):
+    // Se o clipboard contiver texto e não houver arquivos anexados, injeta o texto diretamente
+    // no estado e posiciona o cursor adequadamente sem bloquear a colagem
+    if (text && (!files || files.length === 0)) {
+      e.preventDefault();
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const start = textarea.selectionStart ?? inputText.length;
+        const end = textarea.selectionEnd ?? inputText.length;
+        const before = inputText.slice(0, start);
+        const after = inputText.slice(end);
+        const newText = before + text + after;
+        setInputText(newText);
+
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            const nextCursor = start + text.length;
+            textareaRef.current.selectionStart = nextCursor;
+            textareaRef.current.selectionEnd = nextCursor;
+          }
+        });
+      } else {
+        setInputText((prev) => prev + text);
+      }
+      return;
+    }
+
+    // 2. Se contiver arquivos/mídias (ex: colagem de captura de tela / screenshot):
+    if (files && files.length > 0) {
+      const file = files[0];
+      if (file && (file.type || file.size > 0)) {
+        e.preventDefault();
+        const isImage = file.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
+        const reader = new FileReader();
+        reader.onload = () => {
+          setPendingAttachment({
+            name: file.name || (isImage ? 'imagem_colada.png' : 'arquivo_colado'),
+            size: (file.size / 1024).toFixed(1) + ' KB',
+            type: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
+            dataUrl: reader.result,
+            url: reader.result,
+            isImage: isImage,
+            isAudio: false
+          });
+        };
+        reader.readAsDataURL(file);
+      }
+    }
   };
 
   // Helper para formatar nomes nos grupos
@@ -1929,514 +1262,35 @@ export default function ChatArea({
         ) : (
           (uniqueMessages || []).map((m) => {
             if (!m || typeof m !== 'object') return null;
-            try {
-              const isChannelTarget = target?.type === 'channel' || String(target?.id || '').startsWith('c-') || String(target?.id || '').startsWith('#');
-              const isDossier =
-                m.isDossier ||
-                (typeof m.text === 'string' &&
-                  (m.text.includes('DOSSIÊ EXECUTIVO') || m.text.includes('<!-- DOSSIER_RECORD:')));
-
-              // 1. BLOQUEIO ESTRITO: Dossiê NUNCA pode ser renderizado em canais públicos da equipe
-              if (isChannelTarget && isDossier) {
-                return null;
-              }
-
-              // 2. ISOLAMENTO DE DESTINATÁRIO: Se a mensagem tiver recipient_id específico e for de outro usuário
-              if (m.recipientId && m.recipientId !== currentUser?.id && m.senderId !== currentUser?.id) {
-                return null;
-              }
-              if (m.recipient_id && m.recipient_id !== currentUser?.id && m.sender_id !== currentUser?.id) {
-                return null;
-              }
-
-              const isSystemOrCopilot =
-                m.senderId === 'system' ||
-                m.sender_id === 'system' ||
-                m.senderId === 'u_ia_copilot' ||
-                m.sender_id === 'u_ia_copilot';
-
-              if (isSystemOrCopilot) {
-                if (isDossier) {
-                  return (
-                    <div key={m.id || Math.random()} className="flex justify-center my-3 w-full px-2 animate-in fade-in">
-                      <div className="w-full max-w-2xl bg-gradient-to-br from-purple-50/95 via-white to-indigo-50/95 dark:from-purple-950/40 dark:via-chatPanel dark:to-indigo-950/40 border border-purple-200 dark:border-purple-500/30 rounded-2xl p-4 shadow-md text-xs space-y-3">
-                        <div className="flex items-center justify-between pb-2.5 border-b border-purple-200/60 dark:border-purple-500/20">
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-                              📋
-                            </div>
-                            <div>
-                              <h4 className="font-bold text-purple-900 dark:text-purple-200 text-xs flex items-center gap-1.5">
-                                Dossiê do WhatsApp • Nota Interna
-                                <span className="text-[9.5px] bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded-full font-bold">
-                                  IA Operacional
-                                </span>
-                              </h4>
-                              <p className="text-[10px] text-purple-700/80 dark:text-purple-400">
-                                Contexto consolidado da negociação e atendimento
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {m.hasKanban || (typeof m.text === 'string' && m.text.includes('cards no Kanban')) ? (
-                              <span className="text-[10px] bg-emerald-100 dark:bg-emerald-950/50 text-emerald-800 dark:text-emerald-300 font-bold px-2 py-0.5 rounded border border-emerald-300 dark:border-emerald-600/30 flex items-center gap-1">
-                                ✓ Cards no Kanban
-                              </span>
-                            ) : (
-                              <span className="text-[10px] bg-slate-100 dark:bg-chatSidebar text-slate-600 dark:text-chatTextMuted font-medium px-2 py-0.5 rounded border border-slate-200 dark:border-chatBorder">
-                                Apenas Chat (Sem Kanban)
-                              </span>
-                            )}
-                            <span className="text-[10px] text-chatTextMuted font-mono">
-                              {getSaoPauloTime(m.timestamp || m.created_at)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="text-chatTextBody leading-relaxed whitespace-pre-wrap font-sans text-xs">
-                          {typeof m.text === 'string'
-                            ? m.text
-                                .replace(/<!--[\s\S]*?-->/g, '')
-                                .replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '')
-                                .trim()
-                            : ''}
-                        </div>
-
-                        <div className="pt-2 border-t border-purple-200/50 dark:border-purple-500/20 flex items-center justify-between text-[10.5px] text-purple-800/80 dark:text-purple-400">
-                          <span className="flex items-center gap-1 font-medium">
-                            🔒 Visível exclusivamente para a equipe interna (não enviado ao aluno)
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                }
-
-                return (
-                  <div key={m.id || Math.random()} className="flex justify-center my-2 animate-in fade-in">
-                    <div className="bg-slate-200/85 dark:bg-chatPanel/90 backdrop-blur-2xs text-[#54656f] dark:text-chatTextMuted text-[11px] font-medium px-3.5 py-1.5 rounded-full shadow-2xs max-w-lg text-center border border-slate-300/60 dark:border-chatBorder flex items-center gap-2">
-                      <span className="leading-tight">
-                        {typeof m.text === 'string'
-                          ? m.text.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').trim()
-                          : ''}
-                      </span>
-                      <span className="text-[9.5px] opacity-75 font-mono shrink-0">{getSaoPauloTime(m.timestamp || m.created_at)}</span>
-                    </div>
-                  </div>
-                );
-              }
-
-              const isMe =
-                m.senderId === currentUser?.id ||
-                m.sender_id === currentUser?.id ||
-                m.senderId === 'u_matriz' ||
-              Boolean(m.fromMe) ||
-              (isWhatsApp && (m.senderId === 'u_ia_copilot' || m.senderId === 'bot' || (!m.fromStudent && m.senderId !== target?.id)));
-            const isBot = !isWhatsApp && (m.senderId === 'bot' || m.senderId === 'u_ia_copilot');
+            const isMe = m.senderId === currentUser?.id || m.sender_id === currentUser?.id;
+            const isBot = m.senderId === 'u_ia_copilot' || m.sender_id === 'u_ia_copilot';
 
             return (
-              <div
-                key={m.id}
-                className={`flex flex-col group ${isMe ? 'items-end' : 'items-start'}`}
-              >
-                {!isMe && !isDM && (
-                  <span className="text-[11px] font-semibold text-[#008069] dark:text-[#00a884] ml-2 mb-0.5">
-                    {m.senderName}
-                  </span>
-                )}
-
-                <div className="relative max-w-lg md:max-w-xl">
-                  {/* Balão da Mensagem - Estilo WhatsApp Oficial */}
-                  <div
-                    className={`px-3.5 py-2 text-sm shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] transition-all ${
-                      isMe
-                        ? 'bg-[#d9fdd3] dark:bg-chatBubbleUser text-[#111b21] dark:text-chatBubbleUserText rounded-lg rounded-tr-none'
-                        : isBot
-                        ? 'bg-[#fef9c3] dark:bg-purple-950/40 text-[#111b21] dark:text-purple-200 rounded-lg border border-yellow-300 dark:border-purple-500/40'
-                        : 'bg-white dark:bg-chatBubbleOther text-[#111b21] dark:text-chatBubbleOtherText rounded-lg rounded-tl-none'
-                    }`}
-                  >
-                    {/* Identificação de Mensagem Encaminhada (Estilo WhatsApp) */}
-                    {(m.isForwarded || m.is_forwarded || (typeof m.text === 'string' && m.text.includes('<!-- FORWARDED'))) && (
-                      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 pb-1 border-b border-black/5 dark:border-white/5 select-none">
-                        <Forward size={12} className="text-slate-500 dark:text-slate-400 shrink-0" />
-                        <span className="italic">Encaminhada</span>
-                        {(() => {
-                          let fwdFrom = m.forwardedFrom;
-                          if (!fwdFrom && typeof m.text === 'string') {
-                            const match = m.text.match(/<!-- FORWARDED_FROM:([\s\S]+?) -->/);
-                            if (match) {
-                              try { fwdFrom = JSON.parse(match[1]); } catch { fwdFrom = match[1]; }
-                            }
-                          }
-                          return fwdFrom ? (
-                            <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">
-                              • de {fwdFrom}
-                            </span>
-                          ) : null;
-                        })()}
-                      </div>
-                    )}
-
-                    {/* Bloco de Citação no Balão (Item 5) */}
-                    {m.replyTo && (
-                      <div className="mb-2 p-2 bg-black/5 dark:bg-white/5 border-l-4 border-brand-600 dark:border-brand-500 rounded-r-lg text-xs">
-                        <span className="font-bold text-brand-600 dark:text-brand-400 block text-[11px] mb-0.5">
-                          {m.replyTo.senderName || 'Mensagem'}:
-                        </span>
-                        <p className="text-chatTextMuted truncate text-[11.5px] line-clamp-2">
-                          {m.replyTo.text
-                            ? m.replyTo.text.replace(/<!--[\s\S]*?-->/g, '').replace(/\[ARQUIVO_ANEXO:[\s\S]*?\]/gi, '').replace(/\[ARQUIVO_ANEXO:[^\]]*$/gi, '').replace(/\[ÁUDIO_TRANSCRIÇÃO:[\s\S]*?\]/gi, '').trim() || '🎙️ Mensagem de voz'
-                            : (m.replyTo.attachment ? `[Arquivo] ${m.replyTo.attachment.name}` : 'Mensagem')}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Parse e renderização segura da mensagem (Áudio Nativo, Anexos, Texto) */}
-                    {(() => {
-                      const parsed = parseMessageContent(m);
-
-                      return (
-                        <>
-                          {/* 1. Imagem anexada (JAMAIS reproduzida como áudio) */}
-                          {parsed.attachment && parsed.isImage && (
-                            <div className="mb-2">
-                              <div className="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 max-w-sm shadow-xs">
-                                <img
-                                  src={parsed.attachment.url || parsed.attachment.dataUrl}
-                                  alt={parsed.attachment.name || 'Imagem'}
-                                  className="w-full max-h-64 object-cover cursor-pointer hover:opacity-95 transition"
-                                  onClick={() => openDocument(parsed.attachment)}
-                                />
-                                <div className="p-2 bg-black/5 dark:bg-white/5 flex items-center justify-between text-[11.5px]">
-                                  <span className="truncate font-medium">{parsed.attachment.name}</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => downloadDocument(parsed.attachment)}
-                                    className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-semibold shrink-0 ml-2 cursor-pointer"
-                                  >
-                                    <Download size={13} /> Baixar
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 2. Arquivo/Documento anexado (PDF, DOCX, XLSX ou MIME nulo/desconhecido) - NUNCA ÁUDIO */}
-                          {parsed.attachment && parsed.isFile && (
-                            <FileAttachmentCard
-                              attachment={parsed.attachment}
-                              isOutgoing={isMe}
-                            />
-                          )}
-
-                          {/* 3. Player de Áudio Nativo / Voz Equipe Interna / WhatsApp - SOMENTE SE FOR STRICT AUDIO */}
-                          {parsed.isAudio && parsed.audioUrl && !parsed.isImage && !parsed.isFile && (
-                            <AudioMessagePlayer
-                              audioUrl={parsed.audioUrl}
-                              duration={parsed.duration}
-                              transcription={parsed.transcription}
-                              isOutgoing={isMe}
-                              isInternal={!isWhatsApp}
-                            />
-                          )}
-
-                          {/* 4. Texto da mensagem (apenas se não for placeholder exclusivo de áudio) */}
-                          {!parsed.isOnlyAudioPlaceholder && parsed.cleanText ? (
-                            <FormattedMessageText text={parsed.cleanText} />
-                          ) : null}
-                        </>
-                      );
-                    })()}
-
-                    {/* Botões Rápidos Interativos para URA / Menu de Triagem */}
-                    {(m.isTriageMenu || m.text?.includes('1️⃣ Matrículas') || m.text?.includes('1️⃣ Secretaria')) && (
-                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 space-y-1.5">
-                        <span className="text-[10px] font-bold text-chatTextMuted block">
-                          ⚡ Escolha uma opção para direcionar o atendimento:
-                        </span>
-                        <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-                          <button
-                            type="button"
-                            onClick={() => onSendMessage('1')}
-                            className="p-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-500/30 font-semibold text-left transition"
-                          >
-                            1️⃣ Matrículas / Secretaria
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onSendMessage('2')}
-                            className="p-1.5 rounded-lg bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-200 border border-blue-200 dark:border-blue-500/30 font-semibold text-left transition"
-                          >
-                            2️⃣ Tutoria / Financeiro
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onSendMessage('3')}
-                            className="p-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/40 hover:bg-purple-100 dark:hover:bg-purple-900/50 text-purple-800 dark:text-purple-200 border border-purple-200 dark:border-purple-500/30 font-semibold text-left transition"
-                          >
-                            3️⃣ Financeiro / Ouvidoria
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => onSendMessage('4')}
-                            className="p-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-200 dark:border-amber-500/30 font-semibold text-left transition"
-                          >
-                            4️⃣ Documentos / Novos Cursos
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Barra de Ações Rápidas do Kanban Criado no Chat (Editar, Agendar, Delegar, Excluir) */}
-                    {m.taskId && (
-                      <div className="mt-2.5 pt-2 border-t border-black/10 dark:border-white/10 space-y-2">
-                        <div className="flex items-center justify-between gap-1 flex-wrap">
-                          <span className="text-[10px] text-yellow-800 dark:text-yellow-300 font-semibold flex items-center gap-1">
-                            <Sparkles size={11} className="text-yellow-600 animate-pulse" /> Demanda criada no Kanban
-                          </span>
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => onOpenTaskDetail && onOpenTaskDetail(m.taskId)}
-                              className="px-2 py-0.5 rounded bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 border border-brand-200 dark:border-brand-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
-                              title="Editar título, descrição ou prazo desta demanda"
-                            >
-                              <Edit2 size={10} />
-                              <span>Editar</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveScheduleId(activeScheduleId === m.taskId ? null : m.taskId);
-                                setActiveDelegateId(null);
-                              }}
-                              className="px-2 py-0.5 rounded bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 border border-purple-200 dark:border-purple-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
-                              title="Agendar prazo para esta demanda"
-                            >
-                              <Calendar size={10} />
-                              <span>Agendar</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveDelegateId(activeDelegateId === m.taskId ? null : m.taskId);
-                                setActiveScheduleId(null);
-                              }}
-                              className="px-2 py-0.5 rounded bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
-                              title="Delegar para outro responsável caso direcionado errado"
-                            >
-                              <UserPlus size={10} />
-                              <span>Delegar</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => onDeleteTaskFromMessage && onDeleteTaskFromMessage(m.taskId, m.id)}
-                              className="px-2 py-0.5 rounded bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 border border-rose-200 dark:border-rose-500/30 text-[10px] font-semibold flex items-center gap-1 transition"
-                              title="Excluir este card do Kanban caso não seja necessário"
-                            >
-                              <Trash2 size={10} />
-                              <span>Excluir</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Popover Inline para Agendar Prazo (Item 3) */}
-                        {activeScheduleId === m.taskId && (
-                          <div className="p-2 bg-white/95 dark:bg-chatPanel rounded-lg border border-purple-300 dark:border-purple-500/40 shadow-xs space-y-1.5 animate-in fade-in">
-                            <span className="text-[10px] font-bold text-purple-900 dark:text-purple-200 block">
-                              📅 Escolha um Prazo de Agendamento:
-                            </span>
-                            <div className="grid grid-cols-2 gap-1 text-[10px]">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Hoje às 17h');
-                                  setActiveScheduleId(null);
-                                }}
-                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
-                              >
-                                ⚡ Hoje às 17h
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Amanhã às 09h');
-                                  setActiveScheduleId(null);
-                                }}
-                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
-                              >
-                                🌅 Amanhã 09h
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Sexta-feira 18h');
-                                  setActiveScheduleId(null);
-                                }}
-                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
-                              >
-                                🗓️ Sexta 18h
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (onScheduleTask) onScheduleTask(m.taskId, 'Em 48 horas');
-                                  setActiveScheduleId(null);
-                                }}
-                                className="p-1.5 rounded bg-purple-50 dark:bg-purple-950/30 hover:bg-purple-100 text-purple-800 dark:text-purple-200 border border-purple-200 text-left font-semibold"
-                              >
-                                ⏳ Em 48 horas
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Popover Inline para Delegar Responsável (Item 5) */}
-                        {activeDelegateId === m.taskId && (
-                          <div className="p-2 bg-white/95 dark:bg-chatPanel rounded-lg border border-blue-300 dark:border-blue-500/40 shadow-xs space-y-1.5 animate-in fade-in">
-                            <span className="text-[10px] font-bold text-blue-900 dark:text-blue-200 block">
-                              👥 Redirecionar / Delegar para:
-                            </span>
-                            <select
-                              onChange={(e) => {
-                                if (e.target.value && onDelegateTask) {
-                                  onDelegateTask(m.taskId, e.target.value);
-                                  setActiveDelegateId(null);
-                                }
-                              }}
-                              defaultValue=""
-                              className="w-full text-xs bg-white dark:bg-chatCard text-chatTextTitle border border-slate-300 dark:border-chatBorder rounded p-1.5 font-semibold cursor-pointer"
-                            >
-                              <option value="" disabled>Selecione o novo colaborador...</option>
-                              {collaborators.filter(c => !c.isBot).map(c => (
-                                <option key={c.id} value={c.name}>
-                                  {c.avatar} {c.name} ({c.department})
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Confirmação de Leitura Dinâmica & Ações */}
-                    <div className="flex items-center justify-end gap-1 mt-0.5 text-[10px] text-[#667781] dark:text-chatTextMuted select-none">
-                      {!isWhatsApp && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setForwardingMessage(m);
-                          }}
-                          title="Encaminhar mensagem"
-                          className="opacity-60 hover:opacity-100 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 p-0.5 rounded transition cursor-pointer"
-                        >
-                          <Forward size={11} />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (onDeleteMessage) onDeleteMessage(m.id);
-                        }}
-                        title="Excluir mensagem da conversa e do Supabase"
-                        className="opacity-60 hover:opacity-100 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 p-0.5 rounded transition cursor-pointer"
-                      >
-                        <Trash2 size={11} />
-                      </button>
-                      <span>{getSaoPauloTime(m.timestamp || m.created_at)}</span>
-                      {isGeral && (
-                        <MessageReadReceiptTooltip
-                          readBy={
-                            Array.isArray(localReadByMap?.[m?.id])
-                              ? localReadByMap[m.id]
-                              : (Array.isArray(m?.read_by)
-                                  ? m.read_by
-                                  : (Array.isArray(m?.readBy) ? m.readBy : []))
-                          }
-                          collaborators={collaborators || []}
-                          senderId={m?.senderId || m?.sender_id}
-                          isMe={isMe}
-                        />
-                      )}
-                      {isMe && (
-                        <span title={m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'}>
-                          {m.status === 'read' ? (
-                            <span className="text-[#53bdeb] font-bold text-xs leading-none">✓✓</span>
-                          ) : m.status === 'delivered' ? (
-                            <span className="text-[#8696a0] font-bold text-xs leading-none">✓✓</span>
-                          ) : (
-                            <span className="text-[#8696a0] font-bold text-xs leading-none">✓</span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Botões Hover: Responder, Gerar Card no Kanban e Excluir Mensagem */}
-                  <div
-                    className={`absolute top-0 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-all duration-150 z-10 flex items-center gap-1 ${
-                      isMe ? 'left-0 -translate-x-full pr-2' : 'right-0 translate-x-full pl-2'
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setReplyingTo(m)}
-                      title="Responder a esta mensagem diretamente"
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
-                    >
-                      <Reply size={11} className="text-blue-300" />
-                      <span>Responder</span>
-                    </button>
-
-                    {!isWhatsApp && (
-                      <button
-                        type="button"
-                        onClick={() => setForwardingMessage(m)}
-                        title="Encaminhar esta mensagem"
-                        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
-                      >
-                        <Forward size={11} className="text-emerald-400" />
-                        <span>Encaminhar</span>
-                      </button>
-                    )}
-
-                    {!isBot && (
-                      <button
-                        type="button"
-                        onClick={() => onCreateTaskFromMessage(m)}
-                        title="Transformar esta mensagem em Tarefa no Kanban com IA"
-                        className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-700 hover:bg-purple-600 text-white text-[10px] font-semibold shadow-md border border-purple-400/40 whitespace-nowrap hover:scale-105 transition"
-                      >
-                        <Sparkles size={11} className="text-yellow-300 animate-pulse" />
-                        <span>Gerar Card</span>
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => onDeleteMessage && onDeleteMessage(m.id)}
-                      title="Excluir mensagem da conversa e do Supabase"
-                      className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-700/90 hover:bg-rose-800 text-white text-[10px] font-semibold shadow-md border border-rose-500/50 whitespace-nowrap hover:scale-105 transition"
-                    >
-                      <Trash2 size={11} className="text-rose-200" />
-                      <span>Excluir</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <MessageItem
+                key={m.id || Math.random()}
+                message={m}
+                isMe={isMe}
+                isBot={isBot}
+                isDM={isDM}
+                isChannel={isChannel}
+                isWhatsApp={isWhatsApp}
+                collaborators={collaborators}
+                currentUser={currentUser}
+                readBy={localReadByMap?.[m.id] ?? m.read_by ?? m.readBy ?? []}
+                onReply={handleReply}
+                onForward={handleForward}
+                onDeleteMessage={onDeleteMessage}
+                onCreateTaskFromMessage={onCreateTaskFromMessage}
+                onDeleteTaskFromMessage={onDeleteTaskFromMessage}
+                onOpenTaskDetail={onOpenTaskDetail}
+                onScheduleTask={onScheduleTask}
+                onDelegateTask={onDelegateTask}
+                onOpenMessageInfo={handleOpenMessageInfo}
+                onSendMessage={onSendMessage}
+              />
             );
-          } catch (err) {
-            console.warn('[ChatArea] Falha defensiva na renderização da mensagem:', m?.id, err);
-            return null;
-          }
-        })
-      )}
+          })
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -2593,6 +1447,7 @@ export default function ChatArea({
                   handleSend(e);
                 }
               }}
+              onPaste={handlePaste}
               placeholder={pendingAttachment ? "Adicione uma legenda ou envie..." : replyingTo ? `Respondendo a ${replyingTo.senderName}...` : "Digite uma mensagem"}
               spellCheck={false}
               autoCorrect="off"
@@ -2927,6 +1782,17 @@ export default function ChatArea({
           }}
         />
       )}
+
+      {/* Modal WhatsApp-Style de Dados da Mensagem (Quem já leu no Grupo) */}
+      <MessageReadInfoModal
+        isOpen={Boolean(selectedMessageForInfo)}
+        onClose={() => setSelectedMessageForInfo(null)}
+        message={selectedMessageForInfo}
+        collaborators={collaborators}
+        channelName={target?.name || activeChat?.name || 'geral'}
+        localReadByMap={localReadByMap}
+        currentUser={currentUser}
+      />
     </section>
   );
 }

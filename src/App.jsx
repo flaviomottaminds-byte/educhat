@@ -3922,7 +3922,7 @@ export default function App() {
       isImage: isImageMsg,
       audioUrl: isAudioMsg ? (attachment?.url || attachment?.dataUrl || options.audioUrl || null) : null,
       duration: isAudioMsg ? (options.duration || attachment?.duration || '0:14') : null,
-      status: initialStatus,
+      status: 'sending', // Provisório imediato: animação de envio rápido
       actionExtracted: false,
     };
 
@@ -3935,107 +3935,20 @@ export default function App() {
       payloadText = `${payloadText}\n<!-- REPLY_TO:${JSON.stringify(options.replyTo)} -->`;
     }
 
-    // =========================================================================
-    // REGRA GLOBAL DE PERSISTÊNCIA (WHATSAPP E CHAT INTERNO):
-    // FIM DA INSERÇÃO OTIMISTA CEGA.
-    // Nenhuma mensagem (texto, áudio ou anexo), em nenhuma das abas,
-    // é exibida no frontend antes da confirmação de sucesso do banco de dados (Supabase)
-    // ou da API do WhatsApp (Evolution API).
-    // Se houver qualquer falha, a mensagem NÃO é adicionada ao estado da tela,
-    // um toast de alerta visual é exibido e o rascunho é restaurado no input.
-    // =========================================================================
-
     const isWhatsAppChat = activeChat.type === 'whatsapp' || currentChatKey.startsWith('wa-');
-    let messageToRender = newMsg;
+
+    // =========================================================================
+    // ATUALIZAÇÃO OTIMISTA (Optimistic UI - Zero-Freeze):
+    // Insere a mensagem IMEDIATAMENTE no estado da tela com status provisório 'sending'.
+    // O processamento de rede (Supabase / Evolution API) ocorre em background assincronamente.
+    // =========================================================================
+    setMessages((prev) => ({
+      ...prev,
+      [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
+    }));
 
     if (isWhatsAppChat) {
-      // -----------------------------------------------------------------------
-      // ABA DE CHAT EXTERNO (WhatsApp Alunos)
-      // -----------------------------------------------------------------------
-      const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
-      const primaryTarget =
-        waContact?.preferredTarget ||
-        waContact?.remoteJidAlt ||
-        waContact?.remoteJid ||
-        waContact?.phone ||
-        toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
-      const fallbackTarget =
-        waContact?.remoteJid && waContact?.remoteJid !== primaryTarget
-          ? waContact.remoteJid
-          : (waContact?.remoteJidAlt && waContact?.remoteJidAlt !== primaryTarget ? waContact.remoteJidAlt : null);
-
-      if (!primaryTarget) {
-        const errorMsg = 'Destinatário do WhatsApp não encontrado ou número inválido.';
-        console.error('[WhatsApp Send]', errorMsg);
-        toast.error(errorMsg);
-        return { success: false, error: errorMsg };
-      }
-
-      if (!attachment && !!text) {
-        // Envio de mensagem de texto via Evolution API
-        try {
-          const result = await sendWhatsAppText(primaryTarget, text, fallbackTarget);
-          if (!result.ok || !result.messageId) {
-            console.error('Falha ao enviar WhatsApp via Evolution API:', result.error);
-            toast.error(`Falha ao enviar WhatsApp: ${result.error || 'Erro no envio'}`);
-            return { success: false, error: result.error };
-          }
-
-          const rawId = String(result.messageId);
-          const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
-          messageToRender = { ...newMsg, id: realId, senderId: verifiedSenderId, senderName: verifiedSenderName, status: 'sent' };
-
-          // Persistência obrigatória no Supabase com o ID real da mensagem e sender_id autenticado
-          const { error: waInsertError } = await supabase.from('messages').insert([{
-            id: realId,
-            chat_id: currentChatKey,
-            sender_id: verifiedSenderId,
-            sender_name: verifiedSenderName,
-            text: payloadText,
-            timestamp: messageToRender.timestamp
-          }]).select();
-
-          if (waInsertError) {
-            console.error("Erro no Insert:", waInsertError);
-            toast.error(waInsertError.message || 'Erro no Supabase');
-            return { success: false, error: waInsertError };
-          }
-        } catch (waErr) {
-          console.error("Erro no Insert:", waErr);
-          toast.error(waErr.message || 'Erro de comunicação com o WhatsApp');
-          return { success: false, error: waErr };
-        }
-      } else {
-        // Envio de Áudio ou Anexo em conversa do WhatsApp
-        try {
-          const { error: insertError } = await supabase.from('messages').insert([{
-            id: newMsg.id,
-            chat_id: currentChatKey,
-            sender_id: verifiedSenderId,
-            sender_name: verifiedSenderName,
-            text: payloadText,
-            timestamp: newMsg.timestamp
-          }]).select();
-
-          if (insertError) {
-            console.error("Erro no Insert:", insertError);
-            toast.error(insertError.message || 'Erro no banco de dados');
-            return { success: false, error: insertError };
-          }
-        } catch (dbErr) {
-          console.error("Erro no Insert:", dbErr);
-          toast.error(dbErr.message || 'Servidor indisponível');
-          return { success: false, error: dbErr };
-        }
-      }
-
-      // SUCESSO COMPROVADO (API e Supabase): Renderiza SOMENTE agora na tela do WhatsApp!
-      setMessages((prev) => ({
-        ...prev,
-        [currentChatKey]: [...(prev[currentChatKey] || []), messageToRender],
-      }));
-
-      // Atualiza ordenação e última interação do contato de WhatsApp
+      // Atualiza ordenação e última interação do contato de WhatsApp instantaneamente
       setWhatsAppContacts((prev) => {
         const existing = prev.find((c) => c.id === currentChatKey);
         if (!existing) return prev;
@@ -4048,85 +3961,224 @@ export default function App() {
         const remaining = prev.filter((c) => c.id !== currentChatKey);
         return [updatedContact, ...remaining];
       });
-    } else {
-      // -----------------------------------------------------------------------
-      // ABA DE CHAT INTERNO (Equipe Interna - Canais e DMs):
-      // A mensagem SÓ DEVE ir para a tela após a promessa do INSERT retornar sucesso no Supabase!
-      // Fluxo: await supabase.from(...) -> Se erro: toast.error e interrompe -> Se sucesso: setMessages
-      // -----------------------------------------------------------------------
+    }
+
+    // Processamento de rede em segundo plano (não bloqueia UI nem digitação)
+    (async () => {
+      // Blindagem adicional de integridade da sessão
       try {
-        const insertPayload = {
-          id: newMsg.id,
-          chat_id: currentChatKey,
-          sender_id: verifiedSenderId,
-          sender_name: verifiedSenderName,
-          text: payloadText,
-          timestamp: newMsg.timestamp
-        };
-
-        // Regra Estrita: Em Direct Messages (1 a 1), NUNCA envia channel_id
-        const isDmChat = activeChat.type === 'dm' || options.isDM;
-        if (isDmChat) {
-          const recId = activeChat.id || options.recipientId;
-          if (recId) {
-            insertPayload.recipient_id = recId;
-          }
-        } else if (activeChat.type === 'channel') {
-          // Apenas envia channel_id se for um canal
-          const chId = options.channelId || currentChatKey;
-          if (chId) {
-            insertPayload.channel_id = chId;
-          }
+        const validSessionUser = await validateAndEvictMismatchedAuth(supabase, activeUser);
+        if (validSessionUser?.id) {
+          verifiedSenderId = validSessionUser.id;
+          verifiedSenderName = validSessionUser.name || verifiedSenderName;
         }
-
-        let { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
-
-        // FALLBACK IMEDIATO: Se o PostgREST acusar falta de 'channel_id' no schema cache (PGRST204)
-        if (
-          insertError &&
-          (insertError.message?.includes('channel_id') ||
-            insertError.code === 'PGRST204' ||
-            insertError.message?.includes('schema cache'))
-        ) {
-          console.warn('[handleSendMessage] Retentando insert sem channel_id devido ao schema cache:', insertError.message);
-          delete insertPayload.channel_id;
-          const retryRes = await supabase.from('messages').insert([insertPayload]).select();
-          insertError = retryRes.error;
-        }
-
-        // FALLBACK IMEDIATO: Se o PostgREST acusar falta de 'recipient_id' no schema cache
-        if (
-          insertError &&
-          (insertError.message?.includes('recipient_id') ||
-            insertError.code === 'PGRST204' ||
-            insertError.message?.includes('schema cache'))
-        ) {
-          console.warn('[handleSendMessage] Retentando insert sem recipient_id devido ao schema cache:', insertError.message);
-          delete insertPayload.recipient_id;
-          const retryRes = await supabase.from('messages').insert([insertPayload]).select();
-          insertError = retryRes.error;
-        }
-
-        if (insertError) {
-          console.error("Erro no Insert:", insertError);
-          toast.error(insertError.message || 'Erro no banco de dados');
-          return { success: false, error: insertError };
-        }
-      } catch (error) {
-        console.error("Erro no Insert:", error);
-        toast.error(error?.message || 'Servidor indisponível');
-        return { success: false, error };
+      } catch (authErr) {
+        console.warn('[handleSendMessage] Falha ao verificar integridade da sessão:', authErr);
       }
 
-      // SUCESSO COMPROVADO NO BANCO: Renderiza SOMENTE agora na lista do chat interno!
-      setMessages((prev) => ({
-        ...prev,
-        [currentChatKey]: [...(prev[currentChatKey] || []), newMsg],
-      }));
+      if (isWhatsAppChat) {
+        const waContact = whatsAppContacts.find((c) => c.id === currentChatKey);
+        const primaryTarget =
+          waContact?.preferredTarget ||
+          waContact?.remoteJidAlt ||
+          waContact?.remoteJid ||
+          waContact?.phone ||
+          toWhatsAppTarget(currentChatKey.replace(/^wa-/, ''));
+        const fallbackTarget =
+          waContact?.remoteJid && waContact?.remoteJid !== primaryTarget
+            ? waContact.remoteJid
+            : (waContact?.remoteJidAlt && waContact?.remoteJidAlt !== primaryTarget ? waContact.remoteJidAlt : null);
 
-      // Publica imediatamente para todos os colaboradores em tempo real
-      publishInternalMessage(currentChatKey, newMsg);
-    }
+        if (!primaryTarget) {
+          const errorMsg = 'Destinatário do WhatsApp não encontrado ou número inválido.';
+          console.error('[WhatsApp Send]', errorMsg);
+          toast.error(errorMsg);
+          setMessages((prev) => ({
+            ...prev,
+            [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+              m.id === messageId ? { ...m, status: 'error' } : m
+            ),
+          }));
+          return;
+        }
+
+        if (!attachment && !!text) {
+          try {
+            const result = await sendWhatsAppText(primaryTarget, text, fallbackTarget);
+            if (!result.ok || !result.messageId) {
+              console.error('Falha ao enviar WhatsApp via Evolution API:', result.error);
+              toast.error(`Falha ao enviar WhatsApp: ${result.error || 'Erro no envio'}`);
+              setMessages((prev) => ({
+                ...prev,
+                [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                  m.id === messageId ? { ...m, status: 'error' } : m
+                ),
+              }));
+              return;
+            }
+
+            const rawId = String(result.messageId);
+            const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
+            const updatedMsg = { ...newMsg, id: realId, senderId: verifiedSenderId, senderName: verifiedSenderName, status: 'sent' };
+
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                m.id === messageId ? updatedMsg : m
+              ),
+            }));
+
+            const { error: waInsertError } = await supabase.from('messages').insert([{
+              id: realId,
+              chat_id: currentChatKey,
+              sender_id: verifiedSenderId,
+              sender_name: verifiedSenderName,
+              text: payloadText,
+              timestamp: updatedMsg.timestamp
+            }]).select();
+
+            if (waInsertError) {
+              console.error("Erro no Insert WhatsApp:", waInsertError);
+            }
+          } catch (waErr) {
+            console.error("Erro no envio WhatsApp:", waErr);
+            toast.error(waErr.message || 'Erro de comunicação com o WhatsApp');
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                m.id === messageId ? { ...m, status: 'error' } : m
+              ),
+            }));
+          }
+        } else {
+          try {
+            const { error: insertError } = await supabase.from('messages').insert([{
+              id: newMsg.id,
+              chat_id: currentChatKey,
+              sender_id: verifiedSenderId,
+              sender_name: verifiedSenderName,
+              text: payloadText,
+              timestamp: newMsg.timestamp
+            }]).select();
+
+            if (insertError) {
+              console.error("Erro no Insert:", insertError);
+              toast.error(insertError.message || 'Erro no banco de dados');
+              setMessages((prev) => ({
+                ...prev,
+                [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                  m.id === messageId ? { ...m, status: 'error' } : m
+                ),
+              }));
+            } else {
+              setMessages((prev) => ({
+                ...prev,
+                [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                  m.id === messageId ? { ...m, status: 'sent' } : m
+                ),
+              }));
+            }
+          } catch (dbErr) {
+            console.error("Erro no Insert:", dbErr);
+            toast.error(dbErr.message || 'Servidor indisponível');
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                m.id === messageId ? { ...m, status: 'error' } : m
+              ),
+            }));
+          }
+        }
+      } else {
+        // Chat Interno (Canais e DMs)
+        try {
+          const insertPayload = {
+            id: newMsg.id,
+            chat_id: currentChatKey,
+            sender_id: verifiedSenderId,
+            sender_name: verifiedSenderName,
+            text: payloadText,
+            timestamp: newMsg.timestamp
+          };
+
+          const isDmChat = activeChat.type === 'dm' || options.isDM;
+          if (isDmChat) {
+            const recId = activeChat.id || options.recipientId;
+            if (recId) {
+              insertPayload.recipient_id = recId;
+            }
+          } else if (activeChat.type === 'channel') {
+            const chId = options.channelId || currentChatKey;
+            if (chId) {
+              insertPayload.channel_id = chId;
+            }
+          }
+
+          let { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
+
+          if (
+            insertError &&
+            (insertError.message?.includes('channel_id') ||
+              insertError.code === 'PGRST204' ||
+              insertError.message?.includes('schema cache'))
+          ) {
+            console.warn('[handleSendMessage] Retentando insert sem channel_id devido ao schema cache:', insertError.message);
+            delete insertPayload.channel_id;
+            const retryRes = await supabase.from('messages').insert([insertPayload]).select();
+            insertError = retryRes.error;
+          }
+
+          if (
+            insertError &&
+            (insertError.message?.includes('recipient_id') ||
+              insertError.code === 'PGRST204' ||
+              insertError.message?.includes('schema cache'))
+          ) {
+            console.warn('[handleSendMessage] Retentando insert sem recipient_id devido ao schema cache:', insertError.message);
+            delete insertPayload.recipient_id;
+            const retryRes = await supabase.from('messages').insert([insertPayload]).select();
+            insertError = retryRes.error;
+          }
+
+          if (insertError) {
+            console.error("Erro no Insert:", insertError);
+            toast.error(insertError.message || 'Erro no banco de dados');
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                m.id === messageId ? { ...m, status: 'error' } : m
+              ),
+            }));
+            return;
+          }
+
+          const confirmedMsg = {
+            ...newMsg,
+            senderId: verifiedSenderId,
+            senderName: verifiedSenderName,
+            status: initialStatus
+          };
+
+          setMessages((prev) => ({
+            ...prev,
+            [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+              m.id === messageId ? confirmedMsg : m
+            ),
+          }));
+
+          publishInternalMessage(currentChatKey, confirmedMsg);
+        } catch (error) {
+          console.error("Erro no Insert:", error);
+          toast.error(error?.message || 'Servidor indisponível');
+          setMessages((prev) => ({
+            ...prev,
+            [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+              m.id === messageId ? { ...m, status: 'error' } : m
+            ),
+          }));
+        }
+      }
+    })();
 
     // GATILHO IA: Se for conversa com o Assistente IA ou menção @ia / @copilot
     const isIAChat = (activeChat?.type === 'dm' && activeChat?.id === 'u_ia_copilot');
@@ -4587,7 +4639,7 @@ export default function App() {
       }
     }
 
-    return { success: true, message: messageToRender };
+    return { success: true, message: newMsg };
   };
 
   // 3. ENCAMINHAMENTO DE MENSAGENS NO CHAT INTERNO (Estilo WhatsApp)
