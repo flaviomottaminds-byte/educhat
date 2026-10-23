@@ -9,16 +9,19 @@ import {
   Forward,
   Download,
   CheckCheck,
+  Check,
   Info,
   Play,
   Pause,
   AlertCircle,
-  RotateCcw
+  RotateCcw,
+  ChevronDown
 } from 'lucide-react';
 import { getSaoPauloTime } from '../lib/timezone';
 import { extractAttachmentFromText, openDocument, downloadDocument, resolvePublicMediaUrl } from '../lib/attachmentParser';
 import { processAudioSource, playDecodedAudioBuffer, resolvePublicAudioUrl } from '../lib/audioStreamHelper';
 import FileAttachmentCard from './FileAttachmentCard';
+import { extractReadByList } from './MessageReadInfoModal';
 
 // Helper para renderizar texto com links clicáveis
 function FormattedMessageText({ text }) {
@@ -556,6 +559,29 @@ function MessageItemComponent({
   const m = message;
   const [isScheduling, setIsScheduling] = useState(false);
   const [isDelegating, setIsDelegating] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const handleOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [isDropdownOpen]);
+
+  const normalizedReadBy = useMemo(() => {
+    const listA = extractReadByList(m, {});
+    const listB = Array.isArray(readBy) ? readBy : [];
+    return Array.from(new Set([...listA, ...listB.map(String)]));
+  }, [m, readBy]);
+
+  const readersNames = useMemo(() => {
+    return getReadByCollaboratorNames(normalizedReadBy, collaborators, m?.senderId || m?.sender_id);
+  }, [normalizedReadBy, collaborators, m?.senderId, m?.sender_id]);
 
   // Isolamento de destinatário
   if (m.recipientId && m.recipientId !== currentUser?.id && m.senderId !== currentUser?.id) {
@@ -668,7 +694,7 @@ function MessageItemComponent({
       <div className="relative max-w-lg md:max-w-xl">
         {/* Balão da Mensagem - Estilo WhatsApp Oficial */}
         <div
-          className={`px-3.5 py-2 text-sm shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] transition-all ${
+          className={`relative px-3.5 py-2 text-sm shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] transition-all ${
             isMe
               ? 'bg-[#d9fdd3] dark:bg-chatBubbleUser text-[#111b21] dark:text-chatBubbleUserText rounded-lg rounded-tr-none'
               : isBot
@@ -676,6 +702,98 @@ function MessageItemComponent({
               : 'bg-white dark:bg-chatBubbleOther text-[#111b21] dark:text-chatBubbleOtherText rounded-lg rounded-tl-none'
           }`}
         >
+          {/* Menu Dropdown Estilo WhatsApp Web (Chevron no topo do balão) */}
+          <div className="absolute top-1 right-1 z-20" ref={dropdownRef}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsDropdownOpen((prev) => !prev);
+              }}
+              className="w-5 h-5 rounded-full bg-black/5 dark:bg-white/10 hover:bg-black/15 dark:hover:bg-white/20 text-current flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-2xs"
+              title="Menu da mensagem"
+              aria-label="Menu de contexto da mensagem"
+            >
+              <ChevronDown size={13} />
+            </button>
+
+            {isDropdownOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 w-52 rounded-xl bg-white dark:bg-[#202c33] text-slate-800 dark:text-[#e9edef] shadow-xl border border-slate-200 dark:border-[#2a3942] py-1.5 z-50 animate-in fade-in zoom-in-95 text-xs select-none"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {isChannel && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      onOpenMessageInfo && onOpenMessageInfo(m);
+                    }}
+                    className="w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-100 dark:hover:bg-[#111b21] transition text-blue-600 dark:text-blue-400 font-semibold cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <CheckCheck size={14} className="text-[#53bdeb]" />
+                      <span>Dados da mensagem</span>
+                    </span>
+                    {readersNames.length > 0 && (
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-200 font-bold">
+                        {readersNames.length}
+                      </span>
+                    )}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDropdownOpen(false);
+                    onReply && onReply(m);
+                  }}
+                  className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-[#111b21] transition cursor-pointer"
+                >
+                  <Reply size={14} className="text-blue-500" />
+                  <span>Responder</span>
+                </button>
+                {!isWhatsApp && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      onForward && onForward(m);
+                    }}
+                    className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-[#111b21] transition cursor-pointer"
+                  >
+                    <Forward size={14} className="text-emerald-500" />
+                    <span>Encaminhar</span>
+                  </button>
+                )}
+                {!isBot && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDropdownOpen(false);
+                      onCreateTaskFromMessage && onCreateTaskFromMessage(m);
+                    }}
+                    className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-slate-100 dark:hover:bg-[#111b21] transition text-purple-600 dark:text-purple-400 font-medium cursor-pointer"
+                  >
+                    <Sparkles size={14} className="text-yellow-500" />
+                    <span>Criar card no Kanban</span>
+                  </button>
+                )}
+                <div className="my-1 border-t border-slate-100 dark:border-[#2a3942]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDropdownOpen(false);
+                    onDeleteMessage && onDeleteMessage(m.id);
+                  }}
+                  className="w-full px-3 py-2 text-left flex items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 transition cursor-pointer"
+                >
+                  <Trash2 size={14} />
+                  <span>Apagar mensagem</span>
+                </button>
+              </div>
+            )}
+          </div>
           {/* Identificação de Mensagem Encaminhada */}
           {(m.isForwarded || m.is_forwarded || (typeof m.text === 'string' && m.text.includes('<!-- FORWARDED'))) && (
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 pb-1 border-b border-black/5 dark:border-white/5 select-none">
@@ -961,59 +1079,56 @@ function MessageItemComponent({
               <Trash2 size={11} />
             </button>
             <span>{getSaoPauloTime(m.timestamp || m.created_at)}</span>
-            {isChannel && (
-              <MessageReadReceiptTooltip
-                readBy={readBy}
-                collaborators={collaborators}
-                senderId={m?.senderId || m?.sender_id}
-                isMe={isMe}
-                onOpenDetails={() => onOpenMessageInfo && onOpenMessageInfo(m)}
-              />
-            )}
-            {isMe && (
+
+            {/* Em Canais: Gatilho direto de 'Lida por' nos Checks / Badge com número de leituras */}
+            {isChannel ? (
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (isChannel && onOpenMessageInfo) {
-                    onOpenMessageInfo(m);
-                  }
+                  onOpenMessageInfo && onOpenMessageInfo(m);
                 }}
-                disabled={!isChannel}
                 title={
-                  m.status === 'sending'
-                    ? 'Enviando...'
-                    : m.status === 'error'
-                    ? 'Erro no envio'
-                    : isChannel
-                    ? 'Ver quem já leu esta mensagem (Dados da Mensagem)'
-                    : m.status === 'read' ? 'Lida' : m.status === 'delivered' ? 'Entregue' : 'Enviada'
+                  readersNames.length > 0
+                    ? `Lida por ${readersNames.length} colaborador(es): ${readersNames.join(', ')} • Clique para ver Dados da Mensagem`
+                    : 'Ainda não lida por outros colaboradores • Clique para ver Dados da Mensagem'
                 }
-                className={`inline-flex items-center leading-none ${
-                  isChannel ? 'hover:scale-125 transition cursor-pointer p-0.5 rounded' : ''
+                className={`inline-flex items-center gap-1 leading-none py-0.5 px-1.5 rounded-full transition cursor-pointer select-none active:scale-95 ${
+                  readersNames.length > 0
+                    ? 'bg-blue-500/15 dark:bg-blue-400/20 hover:bg-blue-500/25 text-[#53bdeb] border border-blue-400/40 shadow-2xs font-semibold'
+                    : 'hover:bg-black/10 dark:hover:bg-white/10 text-[#8696a0]'
                 }`}
               >
-                {(() => {
-                  if (m.status === 'sending') {
-                    return <span className="text-slate-400 font-bold text-xs leading-none animate-pulse">🕒</span>;
-                  }
-                  if (m.status === 'error') {
-                    return <span className="text-red-500 font-bold text-xs leading-none" title="Erro no envio">⚠️</span>;
-                  }
-                  const safeReadBy = Array.isArray(readBy) ? readBy : [];
-                  const hasChannelReaders = isChannel && safeReadBy.filter((id) => id && String(id) !== String(m?.senderId || m?.sender_id)).length > 0;
-                  const isBlue = m.status === 'read' || hasChannelReaders;
-
-                  if (isBlue) {
-                    return <span className="text-[#53bdeb] font-bold text-xs leading-none">✓✓</span>;
-                  }
-                  if (m.status === 'delivered' || isChannel) {
-                    return <span className="text-[#8696a0] font-bold text-xs leading-none">✓✓</span>;
-                  }
-                  return <span className="text-[#8696a0] font-bold text-xs leading-none">✓</span>;
-                })()}
+                {m.status === 'sending' ? (
+                  <span className="text-slate-400 font-bold text-xs leading-none animate-pulse">🕒</span>
+                ) : m.status === 'error' ? (
+                  <span className="text-red-500 font-bold text-xs leading-none" title="Erro no envio">⚠️</span>
+                ) : (
+                  <>
+                    <CheckCheck size={13} className={readersNames.length > 0 ? 'text-[#53bdeb]' : 'text-[#8696a0]'} />
+                    {readersNames.length > 0 && (
+                      <span className="text-[10px] font-bold text-[#53bdeb]">
+                        {readersNames.length}
+                      </span>
+                    )}
+                  </>
+                )}
               </button>
-            )}
+            ) : isMe ? (
+              <span className="inline-flex items-center leading-none">
+                {m.status === 'sending' ? (
+                  <span className="text-slate-400 font-bold text-xs leading-none animate-pulse">🕒</span>
+                ) : m.status === 'error' ? (
+                  <span className="text-red-500 font-bold text-xs leading-none" title="Erro no envio">⚠️</span>
+                ) : m.status === 'read' ? (
+                  <span className="text-[#53bdeb] font-bold text-xs leading-none" title="Lida">✓✓</span>
+                ) : m.status === 'delivered' ? (
+                  <span className="text-[#8696a0] font-bold text-xs leading-none" title="Entregue">✓✓</span>
+                ) : (
+                  <span className="text-[#8696a0] font-bold text-xs leading-none" title="Enviada">✓</span>
+                )}
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -1028,10 +1143,10 @@ function MessageItemComponent({
               type="button"
               onClick={() => onOpenMessageInfo && onOpenMessageInfo(m)}
               title="Ver dados da mensagem (quem já leu no canal)"
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
+              className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-slate-800/90 hover:bg-slate-900 text-white text-[10px] font-semibold shadow-md border border-slate-700/60 whitespace-nowrap hover:scale-105 transition cursor-pointer"
             >
-              <CheckCheck size={11} className="text-[#53bdeb]" />
-              <span>Dados</span>
+              <CheckCheck size={12} className="text-[#53bdeb]" />
+              <span>Dados da Mensagem{readersNames.length > 0 ? ` (${readersNames.length})` : ''}</span>
             </button>
           )}
           <button

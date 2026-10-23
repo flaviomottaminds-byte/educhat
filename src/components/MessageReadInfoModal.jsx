@@ -19,44 +19,48 @@ import { getSaoPauloTime } from '../lib/timezone';
 export function extractReadByList(message, localReadByMap = {}) {
   if (!message) return [];
 
-  // 1. Mapa local em tempo real (atualizado no frame atual)
-  const localList = localReadByMap?.[message.id];
-  if (Array.isArray(localList) && localList.length > 0) {
-    return localList.map(String);
-  }
+  const allIds = new Set();
 
-  // 2. Campo direto do objeto de mensagem
-  const rawVal = message.read_by ?? message.readBy;
-  if (Array.isArray(rawVal) && rawVal.length > 0) {
-    return rawVal.map(String);
-  }
+  const addItems = (val) => {
+    if (!val) return;
+    if (Array.isArray(val)) {
+      val.forEach((id) => id && allIds.add(String(id).trim()));
+    } else if (typeof val === 'string' && val.trim()) {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((id) => id && allIds.add(String(id).trim()));
+          return;
+        }
+      } catch {}
+      val
+        .replace(/[{}]/g, '')
+        .split(',')
+        .map((s) => s.trim().replace(/^"|"$/g, ''))
+        .filter(Boolean)
+        .forEach((id) => allIds.add(String(id).trim()));
+    }
+  };
 
-  // 3. String JSON ou formato Postgres array: {"u1","u2"} ou {u1,u2}
-  if (typeof rawVal === 'string' && rawVal.trim()) {
-    try {
-      const parsed = JSON.parse(rawVal);
-      if (Array.isArray(parsed)) return parsed.map(String);
-    } catch {}
-    const cleaned = rawVal
-      .replace(/[{}]/g, '')
-      .split(',')
-      .map((s) => s.trim().replace(/^"|"$/g, ''))
-      .filter(Boolean);
-    if (cleaned.length > 0) return cleaned;
-  }
+  // Funde de forma segura a leitura local em tempo real com a persistida no Supabase
+  addItems(localReadByMap?.[message.id]);
+  addItems(message.read_by);
+  addItems(message.readBy);
 
-  // 4. Fallback: anotação oculta em HTML <!-- READ_BY:[...] --> no corpo da mensagem
+  // Fallback para anotação oculta no corpo do texto <!-- READ_BY:[...] -->
   if (typeof message.text === 'string' && message.text.includes('<!-- READ_BY:')) {
     const match = message.text.match(/<!-- READ_BY:([\s\S]*?)-->/);
     if (match?.[1]) {
       try {
         const parsed = JSON.parse(match[1]);
-        if (Array.isArray(parsed)) return parsed.map(String);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((id) => id && allIds.add(String(id).trim()));
+        }
       } catch {}
     }
   }
 
-  return [];
+  return Array.from(allIds);
 }
 
 export default function MessageReadInfoModal({
