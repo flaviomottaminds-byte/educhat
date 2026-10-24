@@ -4402,6 +4402,83 @@ export default function App() {
                 reporter_id: currentUser?.id || 'u1'
               };
               supabase.from('bug_reports').insert([fallbackRecord]).select();
+            } else if (fnName === 'consultar_operacao_educontrol') {
+              const rawTermo = (fnArgs.termo_busca || queryText || '').trim();
+              const cleanTermo = rawTermo.replace(/^(?:alun[oa]|estudante|polo|consultor|curso|status)\s*[:\-]?\s*(?:d[eoa]\s+)?/i, '').trim();
+              const termo = cleanTermo || rawTermo;
+              const cleanDigits = termo.replace(/\D/g, '');
+              const isCpf = cleanDigits.length >= 9 && cleanDigits.length <= 11;
+
+              try {
+                // 1. Busca aluno com suporte a nomes parciais, nomes do meio, unaccent e ILIKE
+                let alData = [];
+                if (isCpf) {
+                  const { data } = await supabase.from('alunos').select('*').ilike('cpf', `%${cleanDigits}%`).limit(3);
+                  if (Array.isArray(data) && data.length > 0) alData = data;
+                }
+
+                if (alData.length === 0) {
+                  try {
+                    const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo });
+                    if (Array.isArray(rpcData) && rpcData.length > 0) alData = rpcData;
+                  } catch (e) {
+                    console.warn('[EduControl] Erro na RPC buscar_alunos_flexivel:', e);
+                  }
+                }
+
+                if (alData.length === 0) {
+                  const { data: directData } = await supabase.from('alunos').select('*').or(`nome_completo.ilike.%${termo}%,email.ilike.%${termo}%,telefone.ilike.%${termo}%`).limit(3);
+                  if (Array.isArray(directData) && directData.length > 0) alData = directData;
+                }
+
+                if (alData.length === 0) {
+                  const stopWords = new Set(['de', 'da', 'do', 'dos', 'das', 'e', 'aluno', 'aluna', 'consultar', 'verificar', 'status', 'dados']);
+                  const tokens = termo.split(/\s+/).filter((w) => w.length >= 3 && !stopWords.has(w.toLowerCase()));
+                  if (tokens.length >= 1) {
+                    let q = supabase.from('alunos').select('*');
+                    for (const t of tokens) {
+                      q = q.ilike('nome_completo', `%${t}%`);
+                    }
+                    const { data: tokenData } = await q.limit(3);
+                    if (Array.isArray(tokenData) && tokenData.length > 0) alData = tokenData;
+                  }
+                }
+
+                if (alData && alData.length > 0) {
+                  alData.sort((a, b) => new Date(b.created_date || 0) - new Date(a.created_date || 0));
+                  const al = alData[0];
+                  const allStudentIds = Array.from(new Set(alData.map((a) => a.id)));
+                  const { data: mats } = await supabase
+                    .from('matriculas')
+                    .select('*')
+                    .in('student_id', allStudentIds)
+                    .order('created_date', { ascending: false });
+                  const { data: polo } = al.hub_id ? await supabase.from('polos').select('*').eq('id', al.hub_id).maybeSingle() : { data: null };
+
+                  replyText = `🎓 **Aluno Localizado:** ${al.nome_completo}\n` +
+                    `• **CPF:** ${al.cpf || 'Não informado'} | **E-mail:** ${al.email || 'Não informado'}\n` +
+                    `• **Telefone:** ${al.telefone || 'Não informado'}\n` +
+                    (polo ? `• **Polo:** ${polo.nome_exibicao || polo.razao_social} (${polo.polo_uf || '-'})\n` : '') +
+                    (mats && mats.length > 0
+                      ? `\n📚 **Matrículas / Processos (${mats.length}):**\n` + mats.map((m) => `  - **${m.nome_curso}** — Status: **${m.status}**${m.codigo_verificacao ? ` (Cód: \`${m.codigo_verificacao}\`)` : ''}`).join('\n')
+                      : '\nℹ️ Aluno com cadastro preliminar (nenhuma matrícula registrada ainda).');
+                } else {
+                  // 2. Busca polo
+                  const { data: poloData } = await supabase.from('polos').select('*').or(`razao_social.ilike.%${termo}%,nome_exibicao.ilike.%${termo}%,cnpj.ilike.%${termo}%`).limit(1);
+                  if (poloData && poloData.length > 0) {
+                    const p = poloData[0];
+                    replyText = `🏛️ **Polo Localizado:** ${p.nome_exibicao || p.razao_social}\n` +
+                      `• **Cidade/UF:** ${p.polo_nome_municipio || '-'} / ${p.polo_uf || '-'}\n` +
+                      `• **CNPJ:** ${p.cnpj || 'Não informado'} | **Contato:** ${p.nome_contato || '-'}\n` +
+                      `• **Regime:** ${p.regime_cobranca || 'fatura_vaga'} | **Saldo:** R$ ${Number(p.saldo_disponivel || 0).toFixed(2)}`;
+                  } else {
+                    replyText = `🔍 Não localizei nenhum registro de aluno, polo ou matrícula com o termo **"${termo}"** nas vistas do Supabase.`;
+                  }
+                }
+              } catch (opErr) {
+                console.warn('Erro ao consultar operação via Tool:', opErr);
+                replyText = `⚠️ Ocorreu um erro ao consultar o Supabase: ${opErr.message}`;
+              }
             }
           }
 

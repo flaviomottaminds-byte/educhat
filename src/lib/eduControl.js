@@ -2,7 +2,93 @@
 // NÚCLEO DE DADOS & INTELIGÊNCIA EDUCONTROL (FACULDADE OLAVO BILAC / ESTUDEMAIS)
 // Padrão Base44: Nome Completo, CPF, Telefone e E-mail
 // Gerencia a base de alunos, reconhecimento em tempo real e sincronização
+// Conexão direta com as vistas do Supabase: alunos, matriculas, polos, consultores
 // =========================================================================
+
+import { supabase } from './supabase';
+
+/**
+ * Consulta de Aluno em tempo real diretamente no Supabase (Cérebro Único)
+ */
+export async function fetchEduControlStudentFromSupabase(query) {
+  if (!supabase || !query) return null;
+  const digits = String(query).replace(/\D/g, '');
+  const isCpf = digits.length >= 9 && digits.length <= 11;
+
+  try {
+    let students = [];
+    if (isCpf) {
+      const { data } = await supabase.from('alunos').select('*').ilike('cpf', `%${digits}%`).limit(1);
+      if (Array.isArray(data) && data.length > 0) students = data;
+    }
+
+    if (students.length === 0) {
+      try {
+        const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: query });
+        if (Array.isArray(rpcData) && rpcData.length > 0) students = rpcData;
+      } catch {}
+    }
+
+    if (students.length === 0) {
+      const { data } = await supabase
+        .from('alunos')
+        .select('*')
+        .or(`nome_completo.ilike.%${query}%,email.ilike.%${query}%,telefone.ilike.%${query}%`)
+        .limit(1);
+      if (Array.isArray(data) && data.length > 0) students = data;
+    }
+
+    if (students.length === 0) {
+      const tokens = String(query).split(/\s+/).filter((w) => w.length >= 3 && !['de', 'da', 'do', 'dos', 'das', 'e'].includes(w.toLowerCase()));
+      if (tokens.length > 1) {
+        let q = supabase.from('alunos').select('*');
+        for (const t of tokens) {
+          q = q.ilike('nome_completo', `%${t}%`);
+        }
+        const { data: tokenData } = await q.limit(1);
+        if (Array.isArray(tokenData) && tokenData.length > 0) students = tokenData;
+      }
+    }
+
+    if (!students || students.length === 0) return null;
+
+    const student = students[0];
+    const [matsRes, poloRes] = await Promise.all([
+      supabase.from('matriculas').select('*').eq('student_id', student.id),
+      student.hub_id ? supabase.from('polos').select('*').eq('id', student.hub_id).maybeSingle() : Promise.resolve({ data: null })
+    ]);
+
+    return {
+      ...student,
+      matriculas: matsRes.data || [],
+      polo: poloRes.data || null
+    };
+  } catch (err) {
+    console.warn('Erro ao consultar aluno no Supabase:', err);
+    return null;
+  }
+}
+
+/**
+ * Consulta de Polo em tempo real diretamente no Supabase
+ */
+export async function fetchEduControlPoloFromSupabase(query) {
+  if (!supabase || !query) return null;
+  try {
+    const { data, error } = await supabase
+      .from('polos')
+      .select('*, consultores(*)')
+      .or(`razao_social.ilike.%${query}%,nome_exibicao.ilike.%${query}%,cnpj.ilike.%${query}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return null;
+    return data;
+  } catch (err) {
+    console.warn('Erro ao consultar polo no Supabase:', err);
+    return null;
+  }
+}
 
 // Limpeza, validação e formatação estrita de CPF (Chave Primária de Unicidade)
 export function cleanStudentCPF(rawCPF) {

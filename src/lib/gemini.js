@@ -494,23 +494,27 @@ export async function queryOnDemandDatabaseRecord(queryText = '', learnedDocumen
   const lowerQuery = normalizeText(rawQuery);
 
   const searchKeywords = [
-    'aluno', 'aluna', 'certificado', 'diploma', 'veracidade', 'verificar', 'autenticidade',
-    'codigo', 'código', 'cpf', 'matricula', 'matrícula', 'aprovado', 'aprovada', 'conclusao',
+    'aluno', 'aluna', 'estudante', 'certificado', 'diploma', 'veracidade', 'verificar', 'autenticidade',
+    'codigo', 'código', 'cpf', 'matricula', 'matrícula', 'matriculado', 'matriculada', 'aprovado', 'aprovada', 'conclusao',
     'conclusão', 'facob', 'certificacao', 'certificação', 'declaracao', 'declaração', 'extensao', 'extensão',
-    'curso', 'polo', 'status', 'consulta', 'consultar', 'buscar', 'pesquisar'
+    'curso', 'polo', 'status', 'consulta', 'consultar', 'buscar', 'pesquisar', 'situacao', 'situação',
+    'dados', 'processo', 'informacao', 'informação', 'informacoes', 'informações', 'andamento', 'analise', 'análise',
+    'conferir', 'checar', 'encontrar', 'quem', 'existe', 'localizar', 'eja'
   ];
 
-  const hasSearchIntent = searchKeywords.some((kw) => lowerQuery.includes(kw)) || Boolean(studentContext);
+  // Se a consulta contiver nome próprio (2+ palavras) ou qualquer palavra-chave ou CPF/Código
+  const isPotentialPersonName = /^[A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Úa-zà-ú]+)+$/.test(rawQuery);
+  const hasSearchIntent = searchKeywords.some((kw) => lowerQuery.includes(kw)) || Boolean(studentContext) || isPotentialPersonName;
   const codeMatch = rawQuery.match(/FACOB-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i) || rawQuery.match(/[A-Z0-9]{4,6}-[A-Z0-9]{4,6}-[A-Z0-9]{4,6}/i);
   const cpfDigitsMatch = rawQuery.replace(/\D/g, '').match(/\d{9,11}/);
 
-  if (!hasSearchIntent && !codeMatch && !cpfDigitsMatch) {
+  if (!hasSearchIntent && !codeMatch && !cpfDigitsMatch && rawQuery.split(/\s+/).length < 2) {
     return null;
   }
 
   // 1. EXTRAÇÃO DO TERMO DE BUSCA:
   const extractedTerm = extractSearchTermFromQuery(rawQuery);
-  const searchTerm = extractedTerm || studentContext?.name || '';
+  const searchTerm = extractedTerm || studentContext?.name || rawQuery;
 
   // 3. VALIDAÇÃO NO CONSOLE:
   console.log("Termo pesquisado no BD:", searchTerm);
@@ -519,62 +523,166 @@ export async function queryOnDemandDatabaseRecord(queryText = '', learnedDocumen
     return null;
   }
 
-  // 2. APLICAÇÃO DO FILTRO (WHERE / ILIKE) NO SUPABASE:
+  // 2. CONSULTA NATIVA AO CÉREBRO ÚNICO (VISTAS SEMÂNTICAS DO SUPABASE: alunos, matriculas, polos, consultores):
   if (supabase && searchTerm) {
-    try {
-      const { data: studentRows, error: stErr } = await supabase
-        .from('students')
-        .select('*')
-        .ilike('nome_aluno', `%${searchTerm}%`)
-        .limit(1);
+    const cleanDigits = (searchTerm || '').replace(/\D/g, '');
+    const isCpf = cleanDigits.length >= 9 && cleanDigits.length <= 11;
 
-      if (!stErr && Array.isArray(studentRows) && studentRows.length > 0) {
-        const rec = studentRows[0];
-        const formattedPairs = Object.entries(rec)
-          .filter(([k, v]) => v !== null && v !== undefined && k !== 'id' && !k.startsWith('sys_'))
-          .map(([k, v]) => `${k}: ${v}`);
-        return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
+    // A. Busca de Aluno Flexível (por CPF, RPC unaccent/trigram ou tokens parciais ILIKE)
+    try {
+      let alunoRows = [];
+
+      // 1. Se for CPF (dígitos numéricos)
+      if (isCpf) {
+        const { data } = await supabase
+          .from('alunos')
+          .select('*')
+          .ilike('cpf', `%${cleanDigits}%`)
+          .limit(2);
+        if (Array.isArray(data) && data.length > 0) alunoRows = data;
       }
-    } catch {}
 
-    try {
-      const { data: alunoRows, error: alErr } = await supabase
-        .from('alunos')
-        .select('*')
-        .or(`nome.ilike.%${searchTerm}%,nome_aluno.ilike.%${searchTerm}%`)
-        .limit(1);
-
-      if (!alErr && Array.isArray(alunoRows) && alunoRows.length > 0) {
-        const rec = alunoRows[0];
-        const formattedPairs = Object.entries(rec)
-          .filter(([k, v]) => v !== null && v !== undefined && k !== 'id' && !k.startsWith('sys_'))
-          .map(([k, v]) => `${k}: ${v}`);
-        return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
+      // 2. Busca flexível via RPC (unaccent + trigram)
+      if (alunoRows.length === 0) {
+        try {
+          const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: searchTerm });
+          if (Array.isArray(rpcData) && rpcData.length > 0) {
+            alunoRows = rpcData;
+          }
+        } catch {}
       }
-    } catch {}
 
-    try {
-      const { data: msgRows, error: msgErr } = await supabase
-        .from('messages')
-        .select('id, text')
-        .eq('chat_id', 'sys_educontrol_students')
-        .ilike('text', `%${searchTerm}%`)
-        .limit(1);
-
-      if (!msgErr && Array.isArray(msgRows) && msgRows.length > 0) {
-        const rawText = msgRows[0].text;
-        const match = rawText.match(/<!-- STUDENT_RECORD:([\s\S]*?) -->/);
-        if (match) {
-          try {
-            const parsed = JSON.parse(match[1]);
-            const formattedPairs = Object.entries(parsed)
-              .filter(([k, v]) => v !== null && v !== undefined && k !== 'id')
-              .map(([k, v]) => `${k}: ${v}`);
-            return `O banco de dados retornou: [${formattedPairs.join(' | ')}]. Responda à dúvida do usuário com base apenas nisto.`;
-          } catch {}
+      // 3. Correspondência contínua ILIKE (NUNCA usa .eq(), sempre ILIKE com curingas %termo%)
+      if (alunoRows.length === 0) {
+        const { data: directMatch } = await supabase
+          .from('alunos')
+          .select('*')
+          .or(`nome_completo.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%,telefone.ilike.%${searchTerm}%`)
+          .limit(2);
+        if (Array.isArray(directMatch) && directMatch.length > 0) {
+          alunoRows = directMatch;
         }
       }
-    } catch {}
+
+      // 4. Busca multi-token: quebra em palavras individuais e encadeia ILIKEs (permite nomes do meio ou ausência do primeiro nome)
+      if (alunoRows.length === 0) {
+        const stopWords = new Set(['de', 'da', 'do', 'dos', 'das', 'e', 'aluno', 'aluna', 'consultar', 'verificar', 'dados', 'status']);
+        const nameTokens = searchTerm
+          .split(/\s+/)
+          .map((w) => w.trim())
+          .filter((w) => w.length >= 3 && !stopWords.has(w.toLowerCase()));
+
+        if (nameTokens.length > 1) {
+          let tokenQuery = supabase.from('alunos').select('*');
+          for (const token of nameTokens) {
+            tokenQuery = tokenQuery.ilike('nome_completo', `%${token}%`);
+          }
+          const { data: tokenData } = await tokenQuery.limit(3);
+          if (Array.isArray(tokenData) && tokenData.length > 0) {
+            alunoRows = tokenData;
+          }
+        }
+      }
+
+      if (Array.isArray(alunoRows) && alunoRows.length > 0) {
+        // Ordena por data de criação decrescente para priorizar o cadastro mais recente
+        alunoRows.sort((a, b) => new Date(b.created_date || 0) - new Date(a.created_date || 0));
+        const aluno = alunoRows[0];
+        const allStudentIds = Array.from(new Set(alunoRows.map((a) => a.id)));
+        
+        // Busca matrículas de TODOS os registros associados ao aluno (inclusive 'Em Analise', 'Pendente', etc.)
+        const [matsRes, poloRes] = await Promise.all([
+          supabase
+            .from('matriculas')
+            .select('id, nome_curso, tipo_processo, status, data_inicio, data_fim, numero_registro, codigo_verificacao, created_date')
+            .in('student_id', allStudentIds)
+            .order('created_date', { ascending: false })
+            .limit(10),
+          aluno.hub_id ? supabase.from('polos').select('id, razao_social, nome_exibicao, polo_uf, consultant_id').eq('id', aluno.hub_id).maybeSingle() : Promise.resolve({ data: null })
+        ]);
+
+        const matriculas = matsRes?.data || [];
+        const polo = poloRes?.data;
+        let consultorNome = '-';
+        if (polo?.consultant_id) {
+          const { data: cData } = await supabase.from('consultores').select('nome').eq('id', polo.consultant_id).maybeSingle();
+          if (cData?.nome) consultorNome = cData.nome;
+        }
+
+        const formattedAluno = [
+          `Aluno: ${aluno.nome_completo}`,
+          aluno.cpf ? `CPF: ${aluno.cpf}` : null,
+          aluno.email ? `E-mail: ${aluno.email}` : null,
+          aluno.telefone ? `Telefone: ${aluno.telefone}` : null,
+          polo ? `Polo: ${polo.nome_exibicao || polo.razao_social} (${polo.polo_uf || '-'})` : null,
+          consultorNome !== '-' ? `Consultor: ${consultorNome}` : null,
+          matriculas.length > 0
+            ? `Matrículas/Processos: ${matriculas.map((m) => `${m.nome_curso} [Status: ${m.status}${m.codigo_verificacao ? `, Código: ${m.codigo_verificacao}` : ''}]`).join('; ')}`
+            : 'Aluno com cadastro preliminar (nenhuma matrícula registrada ainda)'
+        ].filter(Boolean).join(' | ');
+
+        return `O banco de dados operacional (Cérebro Único) retornou: [${formattedAluno}]. Responda com base nestes dados exatos.`;
+      }
+    } catch (err) {
+      console.warn('Erro ao consultar vista alunos:', err);
+    }
+
+    // B. Busca de Polo (por razao_social, nome_exibicao ou cnpj)
+    try {
+      const { data: poloRows } = await supabase
+        .from('polos')
+        .select('*')
+        .or(`razao_social.ilike.%${searchTerm}%,nome_exibicao.ilike.%${searchTerm}%,cnpj.ilike.%${searchTerm}%`)
+        .limit(2);
+
+      if (Array.isArray(poloRows) && poloRows.length > 0) {
+        const polo = poloRows[0];
+        let consultorNome = '-';
+        if (polo.consultant_id) {
+          const { data: cData } = await supabase.from('consultores').select('nome').eq('id', polo.consultant_id).maybeSingle();
+          if (cData?.nome) consultorNome = cData.nome;
+        }
+        const formattedPolo = [
+          `Polo: ${polo.nome_exibicao || polo.razao_social}`,
+          polo.cnpj ? `CNPJ: ${polo.cnpj}` : null,
+          polo.polo_uf ? `UF: ${polo.polo_uf}` : null,
+          polo.polo_nome_municipio ? `Cidade: ${polo.polo_nome_municipio}` : null,
+          polo.email_login ? `E-mail: ${polo.email_login}` : null,
+          polo.telefone ? `Telefone: ${polo.telefone}` : null,
+          `Regime Cobrança: ${polo.regime_cobranca || 'fatura_vaga'}`,
+          `Saldo Disponível: R$ ${polo.saldo_disponivel || 0}`,
+          `Consultor Responsável: ${consultorNome}`
+        ].filter(Boolean).join(' | ');
+
+        return `O banco de dados operacional retornou o seguinte Polo: [${formattedPolo}]. Use estas informações para orientar o usuário.`;
+      }
+    } catch (err) {
+      console.warn('Erro ao consultar vista polos:', err);
+    }
+
+    // C. Busca de Matrícula direta (por nome_curso, numero_registro ou codigo_verificacao)
+    try {
+      const { data: matRows } = await supabase
+        .from('matriculas')
+        .select('*')
+        .or(`nome_curso.ilike.%${searchTerm}%,codigo_verificacao.ilike.%${searchTerm}%,numero_registro.ilike.%${searchTerm}%`)
+        .limit(2);
+
+      if (Array.isArray(matRows) && matRows.length > 0) {
+        const m = matRows[0];
+        const formattedMat = [
+          `Curso: ${m.nome_curso}`,
+          `Status: ${m.status}`,
+          m.tipo_processo ? `Tipo: ${m.tipo_processo}` : null,
+          m.codigo_verificacao ? `Cód. Verificação: ${m.codigo_verificacao}` : null,
+          m.numero_registro ? `Reg.: ${m.numero_registro}` : null
+        ].filter(Boolean).join(' | ');
+
+        return `O banco de dados operacional retornou a seguinte Matrícula/Processo: [${formattedMat}].`;
+      }
+    } catch (err) {
+      console.warn('Erro ao consultar vista matriculas:', err);
+    }
   }
 
   // BUSCA DINÂMICA NA BASE DE CONHECIMENTO E DOCUMENTOS ESTRUTURADOS (CSV / TSV)
@@ -988,6 +1096,25 @@ export const GEMINI_CHAT_TOOLS = [
           },
           required: ['title', 'problem']
         }
+      },
+      {
+        name: 'consultar_operacao_educontrol',
+        description: 'Consulta em tempo real a base de dados unificada do EduControl no Supabase (Cérebro Único), cobrindo alunos, matrículas, polos e consultores. Use sempre que o usuário fizer perguntas operacionais sobre a vida acadêmica de um aluno, status de curso/diploma/certificado, dados de um polo parceiro ou consultor responsável.',
+        parameters: {
+          type: 'OBJECT',
+          properties: {
+            tipo_consulta: {
+              type: 'STRING',
+              enum: ['aluno', 'matricula', 'polo', 'consultor', 'geral'],
+              description: 'O tipo de entidade principal da consulta operacional'
+            },
+            termo_busca: {
+              type: 'STRING',
+              description: 'O termo de busca (nome do aluno, CPF, e-mail, nome do polo, nome do curso ou código de matrícula/registro)'
+            }
+          },
+          required: ['termo_busca']
+        }
       }
     ]
   }
@@ -1183,7 +1310,9 @@ export function buildSystemInstruction({
   prompt += `   • INDEPENDÊNCIA DE VOCABULÁRIO: Se a lista ou pedido do usuário contiver palavras como "erro", "bug", "falha", "defeito" ou "problema", a ferramenta correta CONTINUA SENDO 'create_kanban_cards'. As palavras "erro" e "bug" são apenas o assunto do card a ser trabalhado pela equipe no Kanban (ex: 'Corrigir bug no envio de comprovante'), e NUNCA devem ser transformadas em chamado técnico de TI quando o usuário pedir Kanban.\n`;
   prompt += `2. 'create_technical_ticket' -> Registra chamado técnico de software na tabela bug_reports.\n`;
   prompt += `   • Use ESTA ferramenta APENAS quando o administrador relatar uma falha no próprio software EduChat para a equipe de tecnologia E NÃO tiver solicitado abertura de card no Kanban operacional.\n`;
-  prompt += `   • Se o usuário mencionar qualquer intenção de Kanban, NUNCA acione 'create_technical_ticket'.\n\n`;
+  prompt += `   • Se o usuário mencionar qualquer intenção de Kanban, NUNCA acione 'create_technical_ticket'.\n`;
+  prompt += `3. 'consultar_operacao_educontrol' -> Consulta instantânea ao Cérebro Único (vistas alunos, matriculas, polos, consultores).\n`;
+  prompt += `   • Acione esta ferramenta para buscar dados de alunos, consultar situação de matrículas, polos parceiros ou consultores comerciais diretamente no banco de dados.\n\n`;
 
   prompt += `=== INSTRUÇÕES DE RESPOSTA ===\n`;
   prompt += `1. Responda sempre em português claro, objetivo, estruturado e profissional.\n`;
