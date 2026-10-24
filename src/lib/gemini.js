@@ -532,14 +532,23 @@ export async function queryOnDemandDatabaseRecord(queryText = '', learnedDocumen
     try {
       let alunoRows = [];
 
-      // 1. Se for CPF (dígitos numéricos)
+      // 1. Se for CPF (dígitos numéricos ou formatado com pontuação)
       if (isCpf) {
+        const fmtDots = cleanDigits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3.$4');
+        const fmtDash = cleanDigits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
         const { data } = await supabase
           .from('alunos')
           .select('*')
-          .ilike('cpf', `%${cleanDigits}%`)
-          .limit(2);
+          .or(`cpf.ilike.%${cleanDigits}%,cpf.ilike.%${fmtDots}%,cpf.ilike.%${fmtDash}%`)
+          .limit(3);
         if (Array.isArray(data) && data.length > 0) alunoRows = data;
+
+        if (alunoRows.length === 0) {
+          try {
+            const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: cleanDigits });
+            if (Array.isArray(rpcData) && rpcData.length > 0) alunoRows = rpcData;
+          } catch {}
+        }
       }
 
       // 2. Busca flexível via RPC (unaccent + trigram)
@@ -1099,7 +1108,7 @@ export const GEMINI_CHAT_TOOLS = [
       },
       {
         name: 'consultar_operacao_educontrol',
-        description: 'Consulta em tempo real a base de dados unificada do EduControl no Supabase (Cérebro Único), cobrindo alunos, matrículas, polos e consultores. Use sempre que o usuário fizer perguntas operacionais sobre a vida acadêmica de um aluno, status de curso/diploma/certificado, dados de um polo parceiro ou consultor responsável.',
+        description: 'Consulta em tempo real a base de dados unificada do EduControl no Supabase (Cérebro Único), cobrindo alunos, matrículas, polos e consultores. Use SEMPRE que o usuário informar um CPF (com ou sem pontuação), nome de aluno, matrícula, status de processo, certificado, diploma ou polo parceiro.',
         parameters: {
           type: 'OBJECT',
           properties: {
@@ -1110,7 +1119,7 @@ export const GEMINI_CHAT_TOOLS = [
             },
             termo_busca: {
               type: 'STRING',
-              description: 'O termo de busca (nome do aluno, CPF, e-mail, nome do polo, nome do curso ou código de matrícula/registro)'
+              description: 'O termo de busca (CPF, nome do aluno, e-mail, nome do polo, nome do curso ou código de matrícula/registro)'
             }
           },
           required: ['termo_busca']
@@ -1312,7 +1321,7 @@ export function buildSystemInstruction({
   prompt += `   • Use ESTA ferramenta APENAS quando o administrador relatar uma falha no próprio software EduChat para a equipe de tecnologia E NÃO tiver solicitado abertura de card no Kanban operacional.\n`;
   prompt += `   • Se o usuário mencionar qualquer intenção de Kanban, NUNCA acione 'create_technical_ticket'.\n`;
   prompt += `3. 'consultar_operacao_educontrol' -> Consulta instantânea ao Cérebro Único (vistas alunos, matriculas, polos, consultores).\n`;
-  prompt += `   • Acione esta ferramenta para buscar dados de alunos, consultar situação de matrículas, polos parceiros ou consultores comerciais diretamente no banco de dados.\n\n`;
+  prompt += `   • REGRA MANDATÓRIA: Sempre que a mensagem contiver um CPF (mesmo que apenas números como 18756889780), nome de aluno, situação de matrícula, código ou polo parceiro, você DEVE OBRIGATORIAMENTE acionar a ferramenta 'consultar_operacao_educontrol'. NUNCA responda dizendo que não encontrou sem antes acionar esta ferramenta!\n\n`;
 
   prompt += `=== INSTRUÇÕES DE RESPOSTA ===\n`;
   prompt += `1. Responda sempre em português claro, objetivo, estruturado e profissional.\n`;

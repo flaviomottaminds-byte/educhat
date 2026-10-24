@@ -18,13 +18,26 @@ export async function fetchEduControlStudentFromSupabase(query) {
   try {
     let students = [];
     if (isCpf) {
-      const { data } = await supabase.from('alunos').select('*').ilike('cpf', `%${digits}%`).limit(1);
+      const fmtDots = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3.$4');
+      const fmtDash = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+      const { data } = await supabase
+        .from('alunos')
+        .select('*')
+        .or(`cpf.ilike.%${digits}%,cpf.ilike.%${fmtDots}%,cpf.ilike.%${fmtDash}%`)
+        .limit(2);
       if (Array.isArray(data) && data.length > 0) students = data;
+
+      if (students.length === 0) {
+        try {
+          const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: digits });
+          if (Array.isArray(rpcData) && rpcData.length > 0) students = rpcData;
+        } catch {}
+      }
     }
 
     if (students.length === 0) {
       try {
-        const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: query });
+        const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: isCpf ? digits : query });
         if (Array.isArray(rpcData) && rpcData.length > 0) students = rpcData;
       } catch {}
     }

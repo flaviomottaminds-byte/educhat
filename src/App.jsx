@@ -2056,6 +2056,51 @@ export default function App() {
         }
       }
 
+      // 1A-2. Hidratação da base de alunos a partir da view public.alunos do Supabase
+      try {
+        const { data: directAlunos } = await supabase
+          .from('alunos')
+          .select('id, nome_completo, cpf, email, telefone, hub_id, created_date')
+          .order('created_date', { ascending: false })
+          .limit(200);
+
+        if (Array.isArray(directAlunos) && directAlunos.length > 0) {
+          setEduControlStudents((prev) => {
+            const list = [...prev];
+            directAlunos.forEach((a) => {
+              const cleanCpf = (a.cpf || '').replace(/\D/g, '');
+              const cleanPhone = (a.telefone || '').replace(/\D/g, '');
+              const existingIdx = list.findIndex(
+                (s) => (cleanCpf && s.cleanCPF === cleanCpf) || (cleanPhone && s.cleanDigits === cleanPhone) || s.id === a.id
+              );
+              const mapped = {
+                id: a.id,
+                name: a.nome_completo,
+                cpf: a.cpf || '',
+                cleanCPF: cleanCpf,
+                phone: a.telefone || '',
+                cleanDigits: cleanPhone,
+                email: a.email || '',
+                hubId: a.hub_id || null,
+                assignee: 'Secretaria Acadêmica',
+                department: 'Secretaria Acadêmica'
+              };
+              if (existingIdx !== -1) {
+                list[existingIdx] = { ...list[existingIdx], ...mapped };
+              } else {
+                list.push(mapped);
+              }
+            });
+            try {
+              localStorage.setItem('educhat_educontrol_students', JSON.stringify(list));
+            } catch {}
+            return list;
+          });
+        }
+      } catch (alErr) {
+        console.warn('Aviso ao carregar alunos recentes da view alunos:', alErr);
+      }
+
       // 1A-3. Busca os recibos de leitura persistidos no Supabase para o usuário atual
       try {
         const { data: readReceipts } = await supabase
@@ -4413,13 +4458,28 @@ export default function App() {
                 // 1. Busca aluno com suporte a nomes parciais, nomes do meio, unaccent e ILIKE
                 let alData = [];
                 if (isCpf) {
-                  const { data } = await supabase.from('alunos').select('*').ilike('cpf', `%${cleanDigits}%`).limit(3);
+                  const fmtDots = cleanDigits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3.$4');
+                  const fmtDash = cleanDigits.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+                  const { data } = await supabase
+                    .from('alunos')
+                    .select('*')
+                    .or(`cpf.ilike.%${cleanDigits}%,cpf.ilike.%${fmtDots}%,cpf.ilike.%${fmtDash}%`)
+                    .limit(3);
                   if (Array.isArray(data) && data.length > 0) alData = data;
+
+                  if (alData.length === 0) {
+                    try {
+                      const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: cleanDigits });
+                      if (Array.isArray(rpcData) && rpcData.length > 0) alData = rpcData;
+                    } catch (e) {
+                      console.warn('[EduControl] Erro na RPC buscar_alunos_flexivel (CPF):', e);
+                    }
+                  }
                 }
 
                 if (alData.length === 0) {
                   try {
-                    const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo });
+                    const { data: rpcData } = await supabase.rpc('buscar_alunos_flexivel', { termo: isCpf ? cleanDigits : termo });
                     if (Array.isArray(rpcData) && rpcData.length > 0) alData = rpcData;
                   } catch (e) {
                     console.warn('[EduControl] Erro na RPC buscar_alunos_flexivel:', e);
