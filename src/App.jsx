@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import KanbanBoard from './components/KanbanBoard';
 import GestaoDashboard from './components/GestaoDashboard';
+import SecretariaView from './components/SecretariaView';
 import AICopilotModal from './components/AICopilotModal';
 import NewItemModal from './components/NewItemModal';
 import AIMemoryModal from './components/AIMemoryModal';
@@ -159,9 +160,12 @@ export default function App() {
       if (path === '/kanban' || hash === '#kanban') {
         return 'kanban';
       }
+      if (path.startsWith('/secretaria') || hash === '#secretaria') {
+        return 'secretaria';
+      }
     }
     return 'chat';
-  }); // 'chat' | 'kanban' | 'dashboard' | 'gestao'
+  }); // 'chat' | 'kanban' | 'dashboard' | 'gestao' | 'secretaria'
   const [theme, setTheme] = useState('light'); // 'light' (Clean White WhatsApp) | 'dark'
   const toggleTheme = () => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   const [collaborators, setCollaborators] = useState(() => {
@@ -237,6 +241,8 @@ export default function App() {
       targetPath = '/dashboard';
     } else if (activeView === 'kanban') {
       targetPath = '/kanban';
+    } else if (activeView === 'secretaria') {
+      targetPath = '/secretaria';
     }
 
     if (currentPath !== targetPath && (currentPath === '/' || currentPath === '/dashboard' || currentPath === '/relatorios' || currentPath === '/kanban')) {
@@ -254,6 +260,8 @@ export default function App() {
         setActiveView('dashboard');
       } else if (path === '/kanban' || hash === '#kanban') {
         setActiveView('kanban');
+      } else if (path.startsWith('/secretaria') || hash === '#secretaria') {
+        setActiveView('secretaria');
       } else {
         setActiveView('chat');
       }
@@ -6674,6 +6682,13 @@ export default function App() {
             setAiModal({ isOpen: true, mode: 'extract_task', sourceMessage: null })
           }
           onCardClick={(task) => setSelectedTaskDetail(task)}
+        />
+      )}
+
+      {activeView === 'secretaria' && (
+        <SecretariaView
+          currentUser={currentUser}
+          onBackToChat={() => setActiveView('chat')}
         />
       )}
 

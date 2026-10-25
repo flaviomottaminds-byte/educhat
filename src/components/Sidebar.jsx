@@ -459,18 +459,32 @@ export default function Sidebar({
           Kanban
         </button>
         {isManager && (
-          <button
-            onClick={() => setActiveView('dashboard')}
-            className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
-              activeView === 'dashboard' || activeView === 'gestao'
-                ? 'bg-brand-600 text-white shadow-sm'
-                : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
-            }`}
-            title="Painel do Gestor (BI, Indicadores e Atas Executivas)"
-          >
-            <BarChart3 size={15} />
-            Gestão
-          </button>
+          <>
+            <button
+              onClick={() => setActiveView('dashboard')}
+              className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                activeView === 'dashboard' || activeView === 'gestao'
+                  ? 'bg-brand-600 text-white shadow-sm'
+                  : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
+              }`}
+              title="Painel do Gestor (BI, Indicadores e Atas Executivas)"
+            >
+              <BarChart3 size={15} />
+              Gestão
+            </button>
+            <button
+              onClick={() => setActiveView('secretaria')}
+              className={`flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                activeView === 'secretaria'
+                  ? 'bg-brand-600 text-white shadow-sm'
+                  : 'text-chatTextMuted hover:bg-slate-100 dark:hover:bg-chatPanel hover:text-chatTextTitle'
+              }`}
+              title="Secretaria Acadêmica & Gestão de Polos"
+            >
+              <GraduationCap size={15} />
+              Secretaria
+            </button>
+          </>
         )}
       </div>
 
