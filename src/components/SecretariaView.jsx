@@ -25,6 +25,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import NewEnrollmentWizardModal from './NewEnrollmentWizardModal';
 
 export default function SecretariaView({ currentUser = {}, onBackToChat }) {
   const [activeTab, setActiveTab] = useState('alunos'); // 'alunos' | 'polos' | 'matriculas'
@@ -51,6 +52,7 @@ export default function SecretariaView({ currentUser = {}, onBackToChat }) {
   const [studentModal, setStudentModal] = useState({ isOpen: false, isEditing: false, data: null });
   const [hubModal, setHubModal] = useState({ isOpen: false, isEditing: false, data: null });
   const [detailsModal, setDetailsModal] = useState({ isOpen: false, student: null, processes: [] });
+  const [wizardModal, setWizardModal] = useState({ isOpen: false, preselectedStudent: null });
 
   // 1. Carregamento de Dados Principais
   const loadData = useCallback(async () => {
@@ -451,13 +453,22 @@ export default function SecretariaView({ currentUser = {}, onBackToChat }) {
 
           {/* BOTÕES DE AÇÃO PRIMÁRIA */}
           {activeTab === 'alunos' && (
-            <button
-              onClick={() => setStudentModal({ isOpen: true, isEditing: false, data: null })}
-              className="px-3.5 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-            >
-              <Plus size={15} />
-              Novo Aluno
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setWizardModal({ isOpen: true, preselectedStudent: null })}
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <GraduationCap size={15} />
+                Nova Matrícula
+              </button>
+              <button
+                onClick={() => setStudentModal({ isOpen: true, isEditing: false, data: null })}
+                className="px-3.5 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              >
+                <Plus size={15} />
+                Novo Aluno
+              </button>
+            </div>
           )}
 
           {activeTab === 'polos' && (
@@ -467,6 +478,16 @@ export default function SecretariaView({ currentUser = {}, onBackToChat }) {
             >
               <Plus size={15} />
               Novo Polo Parceiro
+            </button>
+          )}
+
+          {activeTab === 'matriculas' && (
+            <button
+              onClick={() => setWizardModal({ isOpen: true, preselectedStudent: null })}
+              className="px-3.5 py-2 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            >
+              <Plus size={15} />
+              Nova Matrícula & Asaas
             </button>
           )}
         </div>
@@ -554,6 +575,13 @@ export default function SecretariaView({ currentUser = {}, onBackToChat }) {
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             <div className="flex items-center justify-end gap-1">
+                              <button
+                                onClick={() => setWizardModal({ isOpen: true, preselectedStudent: aluno })}
+                                title="Criar Nova Matrícula para este Aluno"
+                                className="p-1.5 text-chatTextMuted hover:text-emerald-600 hover:bg-emerald-500/10 rounded-lg transition cursor-pointer"
+                              >
+                                <GraduationCap size={15} />
+                              </button>
                               <button
                                 onClick={() => handleOpenStudentDetails(aluno)}
                                 title="Ver Matrículas & Dossiê"
@@ -796,6 +824,22 @@ export default function SecretariaView({ currentUser = {}, onBackToChat }) {
           processes={detailsModal.processes}
           hub={hubsMap.get(detailsModal.student.hub_id)}
           onClose={() => setDetailsModal({ isOpen: false, student: null, processes: [] })}
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 4: WIZARD DE NOVA MATRÍCULA & SPLIT ASAAS (SPRINT 3.3) */}
+      {/* ========================================================================= */}
+      {wizardModal.isOpen && (
+        <NewEnrollmentWizardModal
+          isOpen={wizardModal.isOpen}
+          hubs={hubs}
+          preselectedStudent={wizardModal.preselectedStudent}
+          onClose={() => setWizardModal({ isOpen: false, preselectedStudent: null })}
+          onSuccess={(result) => {
+            setSuccessToast(`Matrícula ${result.processId} criada e cobrança Asaas emitida com sucesso!`);
+            loadData();
+          }}
         />
       )}
     </div>
