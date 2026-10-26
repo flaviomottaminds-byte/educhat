@@ -2921,9 +2921,29 @@ export default function App() {
             } catch {}
             return merged;
           });
+        } else {
+          // Fallback para cache local caso a consulta ao banco venha vazia ou em falha temporária
+          try {
+            const cached = localStorage.getItem('educhat_tasks_cache');
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setTasks(parsed);
+              }
+            }
+          } catch {}
         }
       } catch (errTasks) {
         console.warn('[Supabase] Falha ao consultar tarefas do Kanban:', errTasks);
+        try {
+          const cached = localStorage.getItem('educhat_tasks_cache');
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setTasks(parsed);
+            }
+          }
+        } catch {}
       }
 
       syncGeminiApiKeyFromCloud().catch(() => {});
@@ -5769,7 +5789,6 @@ export default function App() {
       .from('tasks')
       .update({ status: newStatus })
       .eq('id', normId)
-      .select()
       .then(({ error }) => {
         if (error) console.warn('Erro ao atualizar status da tarefa no Supabase:', error);
       });

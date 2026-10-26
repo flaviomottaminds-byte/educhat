@@ -371,6 +371,16 @@ export default function KanbanBoard({
   // Gestor/Admin: padrão 'global'
   const [scopeFilter, setScopeFilter] = useState(() => (isManager ? 'global' : 'all_my'));
 
+  // Rastreia se o usuário trocou manualmente de aba para não sobrescrever a escolha do gestor
+  const userSwitchedTabManuallyRef = React.useRef(false);
+
+  // Garante que gestor/admin sempre inicie ou sincronize em 'global' ao autenticar
+  useEffect(() => {
+    if (isManager && !userSwitchedTabManuallyRef.current) {
+      setScopeFilter('global');
+    }
+  }, [isManager]);
+
   // Garante que usuário comum nunca permaneça em 'global'
   const effectiveScope = !isManager && scopeFilter === 'global' ? 'all_my' : scopeFilter;
 
@@ -539,7 +549,10 @@ export default function KanbanBoard({
             {isManager && (
               <button
                 type="button"
-                onClick={() => setScopeFilter('global')}
+                onClick={() => {
+                  userSwitchedTabManuallyRef.current = true;
+                  setScopeFilter('global');
+                }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                   effectiveScope === 'global'
                     ? 'bg-brand-600 text-white shadow-xs'
@@ -562,7 +575,10 @@ export default function KanbanBoard({
 
             <button
               type="button"
-              onClick={() => setScopeFilter('all_my')}
+              onClick={() => {
+                userSwitchedTabManuallyRef.current = true;
+                setScopeFilter('all_my');
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                 effectiveScope === 'all_my'
                   ? 'bg-brand-600 text-white shadow-xs'
@@ -584,7 +600,10 @@ export default function KanbanBoard({
 
             <button
               type="button"
-              onClick={() => setScopeFilter('my_demands')}
+              onClick={() => {
+                userSwitchedTabManuallyRef.current = true;
+                setScopeFilter('my_demands');
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                 effectiveScope === 'my_demands'
                   ? 'bg-brand-600 text-white shadow-xs'
@@ -606,7 +625,10 @@ export default function KanbanBoard({
 
             <button
               type="button"
-              onClick={() => setScopeFilter('my_requests')}
+              onClick={() => {
+                userSwitchedTabManuallyRef.current = true;
+                setScopeFilter('my_requests');
+              }}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
                 effectiveScope === 'my_requests'
                   ? 'bg-brand-600 text-white shadow-xs'
@@ -864,9 +886,10 @@ export default function KanbanBoard({
                       {/* Botões para mover coluna */}
                       <div className="pt-1 flex justify-between items-center text-xs text-chatTextMuted">
                         <button
+                          type="button"
                           onClick={(e) => handleMove(e, t.id, t.status, 'prev')}
-                          disabled={t.status === 'backlog'}
-                          className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition"
+                          disabled={normalizeTaskStatus(t.status) === 'backlog'}
+                          className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition cursor-pointer"
                           title="Mover para coluna anterior"
                         >
                           <ArrowLeft size={14} />
@@ -875,9 +898,10 @@ export default function KanbanBoard({
                           Ampliar / Transferir Setor
                         </span>
                         <button
+                          type="button"
                           onClick={(e) => handleMove(e, t.id, t.status, 'next')}
-                          disabled={t.status === 'done'}
-                          className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition"
+                          disabled={normalizeTaskStatus(t.status) === 'done'}
+                          className="p-1 hover:text-chatTextTitle disabled:opacity-20 disabled:hover:text-chatTextMuted transition cursor-pointer"
                           title="Avançar coluna"
                         >
                           <ArrowRight size={14} />
