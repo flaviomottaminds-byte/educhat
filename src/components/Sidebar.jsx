@@ -316,19 +316,19 @@ export default function Sidebar({
 
   const myWhatsAppUnread = myWhatsAppContacts.reduce((sum, c) => {
     const count = (c?.id && safeUnread[c.id]) || c?.unread_count || c?.unread || 0;
-    return sum + Number(count || 0);
+    return sum + Math.max(0, Number(count || 0));
   }, 0);
 
   const totalWhatsAppUnread = accessibleWhatsAppContacts.reduce((sum, c) => {
     const count = (c?.id && safeUnread[c.id]) || c?.unread_count || c?.unread || 0;
-    return sum + Number(count || 0);
+    return sum + Math.max(0, Number(count || 0));
   }, 0);
 
-  const currentScopeUnread = whatsappFilterScope === 'mine' ? myWhatsAppUnread : totalWhatsAppUnread;
+  const currentScopeUnread = Math.max(0, whatsappFilterScope === 'mine' ? myWhatsAppUnread : totalWhatsAppUnread);
 
   const currentUserId = currentUser?.id || 'u1';
 
-  const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
+  const totalInternalUnread = Math.max(0, accessibleChannels.reduce((sum, c) => {
     if (!c) return sum;
     const strippedId = (c.id || '').replace(/^c-/, '');
     const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === strippedId || activeChat?.id === `c-${strippedId}` || activeChat?.id === c.name);
@@ -342,7 +342,7 @@ export default function Sidebar({
       Number(c.unread_count) ||
       Number(c.unread) ||
       0;
-    return sum + count;
+    return sum + Math.max(0, count);
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
     const dmKey = getChatKey({ type: 'dm', id: u.id }, currentUserId);
@@ -357,10 +357,10 @@ export default function Sidebar({
       Number(u.unread_count) ||
       Number(u.unread) ||
       0;
-    return sum + count;
-  }, 0);
+    return sum + Math.max(0, count);
+  }, 0));
 
-  const totalUnreadAll = totalInternalUnread + currentScopeUnread;
+  const totalUnreadAll = Math.max(0, totalInternalUnread + currentScopeUnread);
 
   return (
     <aside className="w-84 bg-chatSidebar border-r border-chatBorder flex flex-col h-full select-none transition-colors">
@@ -451,7 +451,7 @@ export default function Sidebar({
           Conversas
           {totalUnreadAll > 0 && (
             <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-1 ring-white/60">
-              {totalUnreadAll}
+              {Math.max(0, totalUnreadAll)}
             </span>
           )}
         </button>
@@ -508,12 +508,10 @@ export default function Sidebar({
           }`}
         >
           <Smartphone size={13} />
-          {whatsappFilterScope === 'mine'
-            ? `Meus (${myWhatsAppContacts.length})`
-            : `WhatsApp Alunos (${accessibleWhatsAppContacts.length})`}
+          <span>WhatsApp Alunos</span>
           {currentScopeUnread > 0 && (
             <span className="bg-white text-emerald-700 text-[10px] font-bold px-1.5 rounded-full">
-              {currentScopeUnread}
+              {Math.max(0, currentScopeUnread)}
             </span>
           )}
         </button>
@@ -527,10 +525,10 @@ export default function Sidebar({
           }`}
         >
           <Users size={13} />
-          Equipe Interna
+          <span>Equipe Interna</span>
           {totalInternalUnread > 0 && (
             <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-1 ring-white/60">
-              {totalInternalUnread}
+              {Math.max(0, totalInternalUnread)}
             </span>
           )}
         </button>
@@ -578,15 +576,14 @@ export default function Sidebar({
                 }`}
               >
                 <span>Meus</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                  whatsappFilterScope === 'mine'
-                    ? 'bg-emerald-700/80 text-white'
-                    : 'bg-slate-200 dark:bg-chatSidebar text-chatTextTitle'
-                }`}>
-                  {myWhatsAppContacts.length}
-                </span>
                 {myWhatsAppUnread > 0 && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    whatsappFilterScope === 'mine'
+                      ? 'bg-emerald-700/80 text-white'
+                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                  }`}>
+                    {Math.max(0, myWhatsAppUnread)}
+                  </span>
                 )}
               </button>
 
@@ -600,24 +597,21 @@ export default function Sidebar({
                 }`}
               >
                 <span>Ver Todos</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-                  whatsappFilterScope === 'all'
-                    ? 'bg-emerald-700/80 text-white'
-                    : 'bg-slate-200 dark:bg-chatSidebar text-chatTextTitle'
-                }`}>
-                  {accessibleWhatsAppContacts.length}
-                </span>
                 {totalWhatsAppUnread > 0 && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                    whatsappFilterScope === 'all'
+                      ? 'bg-emerald-700/80 text-white'
+                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300'
+                  }`}>
+                    {Math.max(0, totalWhatsAppUnread)}
+                  </span>
                 )}
               </button>
             </div>
 
             <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-chatTextMuted mb-1 px-2">
               <span>
-                {whatsappFilterScope === 'mine'
-                  ? `Meus Atendimentos (${filteredWhatsAppContacts.length})`
-                  : `Todos os Atendimentos (${filteredWhatsAppContacts.length})`}
+                {whatsappFilterScope === 'mine' ? 'Meus Atendimentos' : 'Todos os Atendimentos'}
               </span>
               <button
                 type="button"
@@ -763,7 +757,7 @@ export default function Sidebar({
                       </span>
                       {contactUnread > 0 && (
                         <span className="bg-emerald-600 text-white text-[9.5px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce inline-flex items-center justify-center">
-                          {contactUnread}
+                          {Math.max(0, Math.floor(contactUnread))}
                         </span>
                       )}
                       {onDeleteChat && (
@@ -922,7 +916,7 @@ export default function Sidebar({
                         </div>
                         {channelUnread > 0 && (
                           <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-2 ring-red-200 dark:ring-red-900/60">
-                            {channelUnread}
+                            {Math.max(0, Math.floor(channelUnread))}
                           </span>
                         )}
                       </button>
@@ -1015,7 +1009,7 @@ export default function Sidebar({
                           <div className="flex items-center gap-1.5 shrink-0">
                             {dmUnread > 0 ? (
                               <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce ring-2 ring-red-200 dark:ring-red-900/60">
-                                {dmUnread}
+                                {Math.max(0, Math.floor(dmUnread))}
                               </span>
                             ) : (
                               <span className="text-[10px] text-chatTextMuted bg-slate-100 dark:bg-chatBoxSecondary px-1.5 py-0.5 rounded border border-slate-200 dark:border-chatBorder">

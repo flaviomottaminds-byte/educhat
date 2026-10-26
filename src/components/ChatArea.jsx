@@ -1103,7 +1103,7 @@ export default function ChatArea({
                       {target.assignee || 'Aguardando'}
                       {Array.isArray(target.assignees) && target.assignees.length > 1 && (
                         <span className="text-purple-600 dark:text-purple-400 font-semibold ml-1">
-                          (+{target.assignees.length - 1} co-resp)
+                          (+{Math.max(1, target.assignees.length - 1)} co-resp)
                         </span>
                       )}
                     </strong>

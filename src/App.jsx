@@ -830,11 +830,41 @@ export default function App() {
     return { u2: now, u3: now };
   });
 
+  const [whatsappReadReceipts, setWhatsappReadReceipts] = useState(() => {
+    try {
+      const saved = localStorage.getItem(`educhat_wa_reads_${currentUser?.id || 'u1'}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {};
+  });
+
   const channelReadReceiptsRef = useRef(channelReadReceipts);
   channelReadReceiptsRef.current = channelReadReceipts;
 
   const dmReadReceiptsRef = useRef(dmReadReceipts);
   dmReadReceiptsRef.current = dmReadReceipts;
+
+  const whatsappReadReceiptsRef = useRef(whatsappReadReceipts);
+  whatsappReadReceiptsRef.current = whatsappReadReceipts;
+
+  const saveWhatsAppReadReceipt = (contactId, timestampIso = new Date().toISOString()) => {
+    if (!contactId) return;
+    const userId = currentUserRef.current?.id || 'u1';
+    setWhatsappReadReceipts((prev) => {
+      const next = { ...prev };
+      next[contactId] = timestampIso;
+      const cleanDigits = String(contactId).replace(/\D/g, '');
+      if (cleanDigits) {
+        next[`wa-${cleanDigits}`] = timestampIso;
+        next[cleanDigits] = timestampIso;
+      }
+      try {
+        localStorage.setItem(`educhat_wa_reads_${userId}`, JSON.stringify(next));
+      } catch {}
+      whatsappReadReceiptsRef.current = next;
+      return next;
+    });
+  };
 
   useEffect(() => {
     const userId = currentUser?.id || 'u1';
@@ -865,6 +895,15 @@ export default function App() {
       } else {
         const now = new Date().toISOString();
         setDmReadReceipts({ u2: now, u3: now });
+      }
+
+      const savedWa = localStorage.getItem(`educhat_wa_reads_${userId}`);
+      if (savedWa) {
+        try {
+          const parsedWa = JSON.parse(savedWa);
+          setWhatsappReadReceipts(parsedWa);
+          whatsappReadReceiptsRef.current = parsedWa;
+        } catch {}
       }
     } catch {}
   }, [currentUser?.id]);
@@ -1215,10 +1254,14 @@ export default function App() {
           delete next[k];
         }
       });
-      const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+      const totalUnread = Math.max(0, Object.values(next).reduce((a, b) => a + Math.max(0, Number(b) || 0), 0));
       document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
       return next;
     });
+
+    if (String(targetId).startsWith('wa-') || /^\+?\d+$/.test(String(targetId))) {
+      saveWhatsAppReadReceipt(targetId);
+    }
 
     setCollaborators((prev) =>
       prev.map((u) => (u.id === targetId || u.name === targetId ? { ...u, unread: 0, unread_count: 0 } : u))
@@ -1466,6 +1509,7 @@ export default function App() {
 
     // 3. Conversas de WhatsApp
     if (chat.type === 'whatsapp') {
+      saveWhatsAppReadReceipt(chat.id, nowIso);
       supabase
         .from('messages')
         .select('id, text')
@@ -1723,105 +1767,9 @@ export default function App() {
     };
   }, [activeChat?.id, activeChat?.type, currentUser?.id, historyRetryTick]);
 
-  // EFFECT B — REALTIME (isolado do histórico; apenas merge incremental, nunca substitui nem zera a lista)
-  useEffect(() => {
-    if (!activeChat?.id) return;
-
-    const chat = activeChat;
-    const activeUserId = currentUserRef.current?.id || 'u1';
-    const targetChatKey = getChatKey(chat, activeUserId);
-    const rawId = chat.id;
-    let isCancelled = false;
-
-    const activeChatChannelName = `chat_active_${targetChatKey.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`;
-    const activeChatChannel = supabase.channel(activeChatChannelName);
-
-    const isMessageBelongsToActive = (row) => {
-      if (!row || !row.chat_id || String(row.chat_id).startsWith('sys_')) return false;
-      if (chat.type === 'channel') {
-        const stripped = rawId.replace(/^c-/, '');
-        return (
-          row.chat_id === rawId ||
-          row.chat_id === stripped ||
-          row.chat_id === `c-${stripped}` ||
-          row.chat_id === `#${stripped}`
-        );
-      }
-      if (chat.type === 'dm') {
-        const partnerId = rawId;
-        const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
-        return (
-          row.chat_id === targetChatKey ||
-          row.chat_id === reverseDmKey ||
-          row.chat_id === `dm-u1-${partnerId}` ||
-          row.chat_id === `dm-${partnerId}-u1` ||
-          (row.sender_id === activeUserId && row.recipient_id === partnerId) ||
-          (row.sender_id === partnerId && row.recipient_id === activeUserId) ||
-          (row.sender_id === 'u1' && row.recipient_id === partnerId) ||
-          (row.sender_id === partnerId && row.recipient_id === 'u1') ||
-          (row.chat_id && row.chat_id.startsWith('dm-') && row.chat_id.includes(partnerId))
-        );
-      }
-      if (chat.type === 'whatsapp') {
-        const cleanPhone = rawId.replace(/^wa-/, '');
-        return (
-          row.chat_id === rawId ||
-          row.chat_id === `wa-${cleanPhone}` ||
-          row.chat_id === cleanPhone
-        );
-      }
-      return row.chat_id === rawId;
-    };
-
-    activeChatChannel
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
-        (payload) => {
-          if (isCancelled) return;
-          const row = payload.new;
-          if (!isMessageBelongsToActive(row)) return;
-
-          const parsed = parseDatabaseMessage(row, { stripHeavyAttachments: false });
-          setMessages((prev) => {
-            const currentList = prev[targetChatKey] || [];
-            if (currentList.some((m) => m.id === parsed.id)) return prev;
-            return {
-              ...prev,
-              [targetChatKey]: mergeMessageLists(currentList, [parsed])
-            };
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages' },
-        (payload) => {
-          if (isCancelled) return;
-          const row = payload.new;
-          if (!isMessageBelongsToActive(row)) return;
-
-          const parsed = parseDatabaseMessage(row, { stripHeavyAttachments: false });
-          setMessages((prev) => {
-            const currentList = prev[targetChatKey] || [];
-            if (!currentList.some((m) => m.id === parsed.id)) return prev;
-            return {
-              ...prev,
-              [targetChatKey]: currentList.map((m) => (m.id === parsed.id ? { ...m, ...parsed } : m))
-            };
-          });
-        }
-      )
-      .subscribe();
-
-    // removeChannel obrigatório ao desmontar ou trocar de chat (elimina ghost listeners)
-    return () => {
-      isCancelled = true;
-      try {
-        supabase.removeChannel(activeChatChannel);
-      } catch {}
-    };
-  }, [activeChat?.id, activeChat?.type, currentUser?.id]);
+  // EFFECT B — REALTIME UNIFICADO:
+  // A escuta de mensagens ativas e background é realizada exclusivamente pelo canal global contínuo (educhat_user_realtime_*),
+  // eliminando quedas de conexão, subscrições efêmeras e canais zumbis ao trocar de conversa.
 
   // Limpa notificações quando a janela/aba do navegador ganha foco
   useEffect(() => {
@@ -1950,12 +1898,12 @@ export default function App() {
 
       // Incrementa badge de não lido estritamente para o canal (NUNCA para o remetente nem para DMs!)
       setUnreadCounts((prev) => {
-        const currentCount = Number(prev[canonicalChannelId] || 0);
+        const currentCount = Math.max(0, Number(prev[canonicalChannelId] || 0));
         const next = {
           ...prev,
           [canonicalChannelId]: currentCount + 1
         };
-        const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+        const totalUnread = Math.max(0, Object.values(next).reduce((a, b) => a + Math.max(0, Number(b) || 0), 0));
         document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
         return next;
       });
@@ -1987,13 +1935,12 @@ export default function App() {
 
       // Incrementa badge de DM apenas para o parceiro
       setUnreadCounts((prev) => {
-        const cur = Number(prev[partnerId] || 0);
+        const cur = Math.max(0, Number(prev[partnerId] || 0));
         const next = {
           ...prev,
-          [partnerId]: cur + 1,
-          [dmKey]: cur + 1
+          [partnerId]: cur + 1
         };
-        const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+        const totalUnread = Math.max(0, Object.values(next).reduce((a, b) => a + Math.max(0, Number(b) || 0), 0));
         document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
         return next;
       });
@@ -2015,12 +1962,12 @@ export default function App() {
       );
 
       setUnreadCounts((prev) => {
-        const cur = Number(prev[rawKey] || 0);
+        const cur = Math.max(0, Number(prev[rawKey] || 0));
         const next = {
           ...prev,
           [rawKey]: cur + 1
         };
-        const totalUnread = Object.values(next).reduce((a, b) => a + (Number(b) || 0), 0);
+        const totalUnread = Math.max(0, Object.values(next).reduce((a, b) => a + Math.max(0, Number(b) || 0), 0));
         document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
         return next;
       });
@@ -2562,15 +2509,10 @@ export default function App() {
               if (chReadAt) {
                 const rawTime = m.created_at || m.timestampRaw;
                 let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
-                if (!msgTime || isNaN(msgTime)) {
-                  if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
-                    return;
-                  }
-                  return;
-                }
-                if (msgTime <= new Date(chReadAt).getTime()) {
-                  return;
-                }
+                if (!msgTime || isNaN(msgTime)) return;
+                if (msgTime <= new Date(chReadAt).getTime()) return;
+              } else {
+                return;
               }
             }
 
@@ -2586,25 +2528,37 @@ export default function App() {
               if (dmReadAt) {
                 const rawTime = m.created_at || m.timestampRaw;
                 let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
-                if (!msgTime || isNaN(msgTime)) {
-                  if (m.id && (String(m.id).startsWith('msg_') || String(m.id).startsWith('init_'))) {
-                    return;
-                  }
-                  return;
-                }
-                if (msgTime <= new Date(dmReadAt).getTime()) {
+                if (!msgTime || isNaN(msgTime)) return;
+                if (msgTime <= new Date(dmReadAt).getTime()) return;
+              } else {
+                return;
+              }
+            }
+
+            // Se for WhatsApp: verifica se o usuário tem recibo de leitura recente ou se o contato foi atendido
+            if (key.startsWith('wa-')) {
+              const cleanDigits = key.replace(/\D/g, '');
+              const waReadAt =
+                whatsappReadReceiptsRef.current?.[key] ||
+                whatsappReadReceiptsRef.current?.[cleanDigits] ||
+                whatsappReadReceiptsRef.current?.[`wa-${cleanDigits}`];
+              if (waReadAt) {
+                const rawTime = m.created_at || m.timestampRaw;
+                let msgTime = rawTime ? new Date(rawTime).getTime() : 0;
+                if (msgTime && msgTime <= new Date(waReadAt).getTime()) {
                   return;
                 }
               }
             }
 
-            let badgeKey = key;
+            let canonicalBadgeKey = key;
             if (key.startsWith('dm-')) {
               const parts = key.replace('dm-', '').split('-');
-              badgeKey = parts[0] === activeUser.id ? parts[1] : parts[0];
+              canonicalBadgeKey = parts[0] === activeUser.id ? parts[1] : parts[0];
+            } else if (key.startsWith('c-')) {
+              canonicalBadgeKey = key;
             }
-            unreadMap[badgeKey] = (unreadMap[badgeKey] || 0) + 1;
-            unreadMap[key] = (unreadMap[key] || 0) + 1;
+            unreadMap[canonicalBadgeKey] = Math.max(0, (unreadMap[canonicalBadgeKey] || 0) + 1);
           }
         });
 
@@ -2612,21 +2566,27 @@ export default function App() {
         // O histórico de mensagens nunca é injetado globalmente para evitar State Leakage entre chats.
 
         setUnreadCounts(() => {
-          const freshCounts = { ...unreadMap };
+          const freshCounts = {};
+          Object.keys(unreadMap).forEach((k) => {
+            const count = Math.max(0, Math.floor(Number(unreadMap[k]) || 0));
+            if (count > 0) {
+              freshCounts[k] = count;
+            }
+          });
           if (activeChatRef.current?.id) {
             delete freshCounts[activeChatRef.current.id];
             if (activeChatRef.current.id.startsWith('c-')) {
               delete freshCounts[activeChatRef.current.id.replace(/^c-/, '')];
             }
           }
-          const totalUnread = Object.values(freshCounts).reduce((a, b) => a + (Number(b) || 0), 0);
+          const totalUnread = Math.max(0, Object.values(freshCounts).reduce((a, b) => a + Math.max(0, Number(b) || 0), 0));
           document.title = totalUnread > 0 ? `(${totalUnread}) EduChat` : 'EduChat';
           return freshCounts;
         });
 
         setChannels((prev) =>
           prev.map((c) => {
-            const count = unreadMap[c.id] || unreadMap[c.name] || 0;
+            const count = Math.max(0, Math.floor(Number(unreadMap[c.id] || unreadMap[c.name] || 0)));
             return {
               ...c,
               unread: count,
@@ -2637,8 +2597,7 @@ export default function App() {
 
         setCollaborators((prev) =>
           prev.map((u) => {
-            const dmKey = getChatKey({ type: 'dm', id: u.id }, activeUser.id);
-            const count = unreadMap[u.id] || unreadMap[dmKey] || 0;
+            const count = Math.max(0, Math.floor(Number(unreadMap[u.id] || 0)));
             return {
               ...u,
               unread: count,
@@ -2675,7 +2634,7 @@ export default function App() {
               ? (latestRealMsg.created_at || latestRealMsg.timestampRaw || latestRealMsg.timestamp)
               : (c.created_at || c.createdAt || c.lastMessageAt || '2026-10-17T08:00:00.000Z');
 
-            const unreadCount = unreadMap[c.id] ?? c.unread_count ?? c.unread ?? 0;
+            const unreadCount = Math.max(0, Math.floor(Number(unreadMap[c.id] || 0)));
             const primaryAssignee = asgn?.assignee !== undefined ? asgn.assignee : c.assignee;
             const allAssignees = asgn?.assignees || (asgn?.assignee ? [asgn.assignee] : c.assignees || [c.assignee]);
 
@@ -2724,7 +2683,7 @@ export default function App() {
 
               const rawDigits = waKey.replace('wa-', '');
               const formattedPhone = rawDigits.length >= 10 ? `+${rawDigits}` : rawDigits;
-              const unreadCount = unreadMap[waKey] || 0;
+              const unreadCount = Math.max(0, Math.floor(Number(unreadMap[waKey] || 0)));
 
               // Se há mensagem real, usa created_at da última mensagem. Se não, usa data original de criação (nunca new Date())!
               const rawLastTime = latestRealMsg
@@ -3248,7 +3207,7 @@ export default function App() {
           // 2. FILTRO ESTRITO NO LISTENER DE REALTIME:
           // Verifica se o payload.new pertence exatamente à conversa que está aberta na tela
           let isCurrentActive = false;
-          if (currentActiveChat && !document.hidden) {
+          if (currentActiveChat) {
             if (currentActiveChat.type === 'dm') {
               // Se for um chat 1 a 1: A mensagem só entra na tela atual se o sender_id ou recipient_id for o selectedUser.id
               const selectedUserId = currentActiveChat.id;
@@ -3269,7 +3228,14 @@ export default function App() {
                 cKey === activeChannelId;
             } else if (currentActiveChat.type === 'whatsapp') {
               const currentActiveKey = getChatKey(currentActiveChat, currentUserId);
-              isCurrentActive = (cKey === currentActiveKey || activeChatRef.current?.id === cKey || activeChatRef.current?.id === row.chat_id);
+              const canonActive = getCanonicalPhoneKey(currentActiveChat?.id || currentActiveChat?.phone);
+              const canonRow = getCanonicalPhoneKey(row.chat_id);
+              isCurrentActive = (
+                cKey === currentActiveKey ||
+                activeChatRef.current?.id === cKey ||
+                activeChatRef.current?.id === row.chat_id ||
+                Boolean(canonActive && canonRow && canonActive === canonRow)
+              );
             }
           }
 
@@ -3285,8 +3251,14 @@ export default function App() {
             return;
           }
 
+          // Pertence à conversa ativa: se a aba do navegador estiver oculta/minimizada, emite alerta/notificação nativa
+          if (document.hidden && row.sender_id !== currentUserId && row.sender_id !== 'system') {
+            handleIncomingNotification(incoming, row.chat_id || cKey);
+          }
+
           // AQUI: Pertence exatamente à conversa aberta na tela!
           const activeKey = getChatKey(currentActiveChat, currentUserId);
+          const aliasKeys = getChatAliasKeys(currentActiveChat, currentUserId);
           setMessages((prevMessages) => {
             const prevList = prevMessages[activeKey] || prevMessages[cKey] || [];
 
@@ -3299,7 +3271,11 @@ export default function App() {
                 ...incoming,
                 status: incoming.status || next[exactIdx].status
               };
-              return { ...prevMessages, [activeKey]: next };
+              const nextState = { ...prevMessages };
+              aliasKeys.forEach((k) => {
+                nextState[k] = next;
+              });
+              return nextState;
             }
 
             // 2. Se for mensagem enviada por nós (outgoing / echo do webhook), funde com a mensagem otimista
@@ -3331,14 +3307,20 @@ export default function App() {
                   id: incoming.id,
                   status: incoming.status || 'delivered'
                 };
-                return { ...prevMessages, [activeKey]: next };
+                const nextState = { ...prevMessages };
+                aliasKeys.forEach((k) => {
+                  nextState[k] = next;
+                });
+                return nextState;
               }
             }
 
-            return {
-              ...prevMessages,
-              [activeKey]: [...prevList, incoming]
-            };
+            const updatedList = [...prevList, incoming];
+            const nextState = { ...prevMessages };
+            aliasKeys.forEach((k) => {
+              nextState[k] = updatedList;
+            });
+            return nextState;
           });
 
           // Broadcast de disponibilidade de usuários em tempo real
@@ -3977,8 +3959,7 @@ export default function App() {
           presenceChannelRef.current = channel;
           await trackMyPresence();
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-          console.warn('[Realtime Supabase] Status do canal (operando em modo de contingência SSE):', status, err);
-          // Não degrada realtimeStatus para error pois o relay interno ntfy e polling Evolution API estão 100% online
+          console.warn('[Realtime Supabase] Status do canal:', status, err);
           if (!cancelled) {
             setTimeout(() => {
               if (!cancelled) {
@@ -3986,10 +3967,21 @@ export default function App() {
                   channel.subscribe();
                 } catch {}
               }
-            }, 8000);
+            }, 3000);
           }
         }
       });
+
+    const handleOnline = () => {
+      if (!cancelled) {
+        try {
+          channel.subscribe();
+          trackMyPresence();
+          pollLatestMessages();
+        } catch {}
+      }
+    };
+    window.addEventListener('online', handleOnline);
 
     // Sincronização periódica ativa (Fallback Realtime): garante que novas mensagens internas e de WhatsApp
     // apareçam imediatamente na tela sem precisar recarregar a página, mesmo sob instabilidade do WebSocket
@@ -4113,6 +4105,7 @@ export default function App() {
       clearInterval(hbInterval);
       clearInterval(pollInterval);
       window.removeEventListener('pagehide', markMyselfOffline);
+      window.removeEventListener('online', handleOnline);
       document.removeEventListener('visibilitychange', onVisible);
       presenceChannelRef.current = null;
       try {
