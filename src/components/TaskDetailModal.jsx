@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { normalizeTaskStatus } from './KanbanBoard';
 import {
   X,
   Clock,
@@ -416,7 +417,7 @@ export default function TaskDetailModal({
             <div className="p-3 rounded-xl bg-slate-50 dark:bg-chatSidebar border border-chatBorder">
               <span className="text-[11px] text-chatTextMuted block font-medium mb-1">Status Atual:</span>
               <select
-                value={task.status}
+                value={normalizeTaskStatus(task.status)}
                 onChange={(e) => onUpdateStatus(task.id, e.target.value)}
                 className="w-full bg-white dark:bg-chatCard text-xs font-bold text-chatTextTitle border border-slate-300 dark:border-chatBorder rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-500 cursor-pointer"
               >
