@@ -395,10 +395,19 @@ export default function ChatArea({
 
         // Blindagem estrita de isolamento de mensagens (Prevenção de State Leakage entre DMs)
         if (isDM && target?.id) {
-          const isFromMe = m.senderId === currentUser?.id || m.sender_id === currentUser?.id || m.senderId === 'u_matriz' || Boolean(m.fromMe);
+          const isFromMe =
+            m.senderId === currentUser?.id ||
+            m.sender_id === currentUser?.id ||
+            m.senderId === 'u1' ||
+            m.sender_id === 'u1' ||
+            m.senderId === 'u_matriz' ||
+            Boolean(m.fromMe);
           const isFromTarget = m.senderId === target.id || m.sender_id === target.id;
           const isToTarget = m.recipientId === target.id || m.recipient_id === target.id;
-          if (!isFromMe && !isFromTarget && !isToTarget) {
+          const isBelongsToDm =
+            (m.chat_id && (m.chat_id === `dm-u1-${target.id}` || m.chat_id === `dm-${target.id}-u1` || m.chat_id.includes(target.id))) ||
+            (m.chatId && (m.chatId === `dm-u1-${target.id}` || m.chatId === `dm-${target.id}-u1` || m.chatId.includes(target.id)));
+          if (!isFromMe && !isFromTarget && !isToTarget && !isBelongsToDm) {
             continue;
           }
         }

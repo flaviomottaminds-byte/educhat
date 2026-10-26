@@ -697,7 +697,11 @@ export default function App() {
         const savedId = localStorage.getItem('educhat_user_id');
         const currentList = collaboratorsRef.current || [];
         const matched = currentList.find(
-          (c) => c.id === u.id || (c.email && u.email && c.email.toLowerCase() === u.email.toLowerCase())
+          (c) =>
+            c.id === u.id ||
+            (c.email && u.email && c.email.toLowerCase() === u.email.toLowerCase()) ||
+            (u.email && u.email.toLowerCase().includes('flavio') && c.id === 'u1') ||
+            (u.user_metadata?.name && c.name && u.user_metadata.name.toLowerCase() === c.name.toLowerCase())
         );
 
         // BLINDAGEM DE SESSÃO:
@@ -711,10 +715,13 @@ export default function App() {
           return;
         }
 
+        const canonicalId = matched?.id || (u.email?.toLowerCase().includes('flavio') ? 'u1' : u.id);
         const resolvedUser = {
-          id: u.id,
+          ...(matched || {}),
+          id: canonicalId,
+          authId: u.id,
           name: matched?.name || u.user_metadata?.name || u.user_metadata?.full_name || u.email?.split('@')[0] || 'Colaborador',
-          email: u.email || '',
+          email: u.email || matched?.email || '',
           role: matched?.role || u.user_metadata?.role || 'Colaborador',
           roleType: matched?.roleType || u.user_metadata?.role_type || 'colaborador',
           department: matched?.department || u.user_metadata?.department || 'Comercial',
@@ -940,8 +947,53 @@ export default function App() {
         data: (resolvedCollaborators || []).find((u) => u?.id === activeChat?.id) || (resolvedCollaborators || [])[1] || INITIAL_COLLABORATORS[1],
       };
 
+  const getMessagesForChat = (chat, userId, allMessages) => {
+    if (!chat?.id || !allMessages) return [];
+    const uid = userId || 'u1';
+    const primaryKey = getChatKey(chat, uid);
+    if (Array.isArray(allMessages[primaryKey]) && allMessages[primaryKey].length > 0) {
+      return allMessages[primaryKey];
+    }
+    if (chat.type === 'dm') {
+      const pId = chat.id;
+      const candidates = [
+        `dm-${uid}-${pId}`,
+        `dm-${pId}-${uid}`,
+        `dm-u1-${pId}`,
+        `dm-${pId}-u1`,
+        pId
+      ];
+      for (const k of candidates) {
+        if (Array.isArray(allMessages[k]) && allMessages[k].length > 0) {
+          return allMessages[k];
+        }
+      }
+    }
+    if (chat.type === 'channel') {
+      const stripped = chat.id.replace(/^c-/, '');
+      const candidates = [chat.id, stripped, `c-${stripped}`, `#${stripped}`];
+      for (const k of candidates) {
+        if (Array.isArray(allMessages[k]) && allMessages[k].length > 0) {
+          return allMessages[k];
+        }
+      }
+    }
+    if (chat.type === 'whatsapp') {
+      const cleanPhone = chat.id.replace(/^wa-/, '');
+      const candidates = [chat.id, `wa-${cleanPhone}`, cleanPhone];
+      for (const k of candidates) {
+        if (Array.isArray(allMessages[k]) && allMessages[k].length > 0) {
+          return allMessages[k];
+        }
+      }
+    }
+    return allMessages[primaryKey] || [];
+  };
+
   const currentChatKey = activeChat?.id ? getChatKey(activeChat, currentUser?.id || 'u1') : null;
-  const currentMessages = currentChatKey ? (messages[currentChatKey] || []) : [];
+  const currentMessages = React.useMemo(() => {
+    return getMessagesForChat(activeChat, currentUser?.id, messages);
+  }, [activeChat?.id, activeChat?.type, currentUser?.id, messages]);
 
   const customAIPromptRef = useRef(customAIPrompt);
   customAIPromptRef.current = customAIPrompt;
@@ -1541,7 +1593,7 @@ export default function App() {
           const partnerId = rawId;
           const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
           query = query
-            .or(`chat_id.eq.${targetChatKey},chat_id.eq.${reverseDmKey},and(sender_id.eq.${activeUserId},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${activeUserId})`)
+            .or(`chat_id.eq.${targetChatKey},chat_id.eq.${reverseDmKey},chat_id.eq.dm-u1-${partnerId},chat_id.eq.dm-${partnerId}-u1,and(sender_id.eq.${activeUserId},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${activeUserId}),and(sender_id.eq.u1,recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.u1)`)
             .not('chat_id', 'like', 'sys_%');
         } else if (activeChat.type === 'whatsapp') {
           const cleanPhone = rawId.replace(/^wa-/, '');
@@ -1556,7 +1608,7 @@ export default function App() {
           .order('created_at', { ascending: true })
           .limit(300);
 
-        if (isCancelled || activeChatRef.current?.id !== rawId) return;
+        if (activeChatRef.current?.id !== rawId) return;
 
         if (error) {
           console.warn('[Chat] Erro na consulta de mensagens isoladas:', error);
@@ -1583,13 +1635,34 @@ export default function App() {
               merged.push(s);
             }
           }
-          return {
+          const next = {
             ...prev,
             [targetChatKey]: merged
           };
+          if (activeChat.type === 'dm') {
+            const pId = rawId;
+            next[`dm-u1-${pId}`] = merged;
+            next[`dm-${pId}-u1`] = merged;
+            next[`dm-${activeUserId}-${pId}`] = merged;
+            next[`dm-${pId}-${activeUserId}`] = merged;
+            next[pId] = merged;
+          }
+          if (activeChat.type === 'channel') {
+            const stripped = rawId.replace(/^c-/, '');
+            next[rawId] = merged;
+            next[stripped] = merged;
+            next[`c-${stripped}`] = merged;
+          }
+          if (activeChat.type === 'whatsapp') {
+            const cleanPhone = rawId.replace(/^wa-/, '');
+            next[rawId] = merged;
+            next[`wa-${cleanPhone}`] = merged;
+            next[cleanPhone] = merged;
+          }
+          return next;
         });
       } catch (err) {
-        if (!isCancelled) {
+        if (activeChatRef.current?.id === rawId) {
           console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
         }
       }
@@ -1619,8 +1692,13 @@ export default function App() {
         return (
           row.chat_id === targetChatKey ||
           row.chat_id === reverseDmKey ||
+          row.chat_id === `dm-u1-${partnerId}` ||
+          row.chat_id === `dm-${partnerId}-u1` ||
           (row.sender_id === activeUserId && row.recipient_id === partnerId) ||
-          (row.sender_id === partnerId && row.recipient_id === activeUserId)
+          (row.sender_id === partnerId && row.recipient_id === activeUserId) ||
+          (row.sender_id === 'u1' && row.recipient_id === partnerId) ||
+          (row.sender_id === partnerId && row.recipient_id === 'u1') ||
+          (row.chat_id && row.chat_id.startsWith('dm-') && row.chat_id.includes(partnerId))
         );
       }
       if (activeChat.type === 'whatsapp') {
