@@ -334,24 +334,34 @@ export default function ChatArea({
   const handleSaveAssignment = () => {
     const targetChatId = target?.id || chatMeta?.data?.id || chatMeta?.id;
     if (onUpdateChatAssignment && targetChatId) {
-      let statusLabel = 'Carteira Ativa';
-      if (selectedStatus === 'lead_instagram') {
-        statusLabel = 'Lead Instagram - Expansão';
-      } else if (selectedStatus === 'veterano_retencao') {
-        statusLabel = 'Aluno Veterano';
-      } else if (selectedStatus === 'ura_inedito') {
-        statusLabel = 'Triagem Inicial';
-      } else if (selectedDept) {
-        statusLabel = `Carteira • ${selectedDept}`;
+      const isUnassigning = !selectedAssignee || selectedAssignee === '' || selectedAssignee === 'Fila Geral';
+
+      let statusLabel = 'Fila • Triagem Geral';
+      let status = 'ura_inedito';
+
+      if (!isUnassigning) {
+        status = selectedStatus || 'carteira_ativa';
+        if (selectedStatus === 'lead_instagram') {
+          statusLabel = 'Lead Instagram - Expansão';
+        } else if (selectedStatus === 'veterano_retencao') {
+          statusLabel = 'Aluno Veterano';
+        } else if (selectedStatus === 'ura_inedito') {
+          statusLabel = 'Triagem Inicial';
+        } else if (selectedDept) {
+          statusLabel = `Carteira • ${selectedDept}`;
+        }
+      } else {
+        statusLabel = selectedDept ? `Fila • ${selectedDept}` : 'Fila • Triagem Geral';
+        status = 'ura_inedito';
       }
 
-      const allAssignees = Array.from(new Set([selectedAssignee, ...selectedCoAssignees].filter(Boolean)));
+      const allAssignees = isUnassigning ? [] : Array.from(new Set([selectedAssignee, ...selectedCoAssignees].filter(Boolean)));
 
       onUpdateChatAssignment(targetChatId, {
-        department: selectedDept,
-        assignee: selectedAssignee,
+        department: selectedDept || 'Triagem URA',
+        assignee: isUnassigning ? null : selectedAssignee,
         assignees: allAssignees,
-        status: selectedStatus || 'carteira_ativa',
+        status,
         statusLabel
       });
     }
@@ -1625,7 +1635,10 @@ export default function ChatArea({
                   {/* Opção Fila Geral */}
                   <button
                     type="button"
-                    onClick={() => setSelectedAssignee('')}
+                    onClick={() => {
+                      setSelectedAssignee('');
+                      setSelectedCoAssignees([]);
+                    }}
                     className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2 cursor-pointer ${
                       !selectedAssignee
                         ? 'border-brand-500 bg-brand-50/90 dark:bg-brand-950/60 shadow-xs ring-1 ring-brand-500'

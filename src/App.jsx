@@ -355,8 +355,20 @@ export default function App() {
               );
               if (idx !== -1) {
                 const merged = {
-                  ...next[idx],
                   ...incoming,
+                  ...next[idx],
+                  // Preserva estritamente a atribuição e status definidos na aplicação (evita sobrescrever com dados brutos)
+                  assignee: next[idx].assignee !== undefined ? next[idx].assignee : (incoming.assignee || null),
+                  assigned_to: next[idx].assigned_to !== undefined ? next[idx].assigned_to : (incoming.assigned_to || null),
+                  assignees: Array.isArray(next[idx].assignees) ? next[idx].assignees : (incoming.assignees || []),
+                  department: next[idx].department || incoming.department || 'Triagem URA',
+                  status: next[idx].status || incoming.status || 'ura_inedito',
+                  statusLabel: next[idx].statusLabel || incoming.statusLabel || 'Fila • Triagem Geral',
+                  triageContext: next[idx].triageContext || incoming.triageContext,
+                  name: incoming.name && incoming.hasRealName ? incoming.name : (next[idx].name || incoming.name),
+                  phone: incoming.phone || next[idx].phone,
+                  lastInteraction: incoming.lastInteraction || next[idx].lastInteraction,
+                  lastMessageAt: incoming.lastMessageAt || next[idx].lastMessageAt,
                   remoteJid: incoming.remoteJid || next[idx].remoteJid,
                   remoteJidAlt: incoming.remoteJidAlt || next[idx].remoteJidAlt,
                   preferredTarget: incoming.preferredTarget || next[idx].preferredTarget || incoming.remoteJid || next[idx].remoteJid
@@ -433,20 +445,40 @@ export default function App() {
 
   const [whatsAppContacts, setWhatsAppContacts] = useState(() => {
     try {
-      // RESET GERAL: limpa caches locais com atribuições desatualizadas e timestamps de mensagens fantasmas
-      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v5');
+      // RESET GERAL V6: limpa caches locais com atribuições residuais e tickets indevidamente presos em Flávio Motta
+      const resetFlag = localStorage.getItem('educhat_reset_carteiras_v6');
       if (!resetFlag) {
         localStorage.removeItem('educhat_whatsapp_contacts');
         localStorage.removeItem('educhat_chat_assignments');
         localStorage.removeItem('educhat_messages_cache');
-        localStorage.setItem('educhat_reset_carteiras_v5', 'true');
-        return INITIAL_WHATSAPP_CONTACTS;
+        localStorage.setItem('educhat_reset_carteiras_v6', 'true');
+        return INITIAL_WHATSAPP_CONTACTS.map((c) => ({
+          ...c,
+          assignee: null,
+          assigned_to: null,
+          assignees: [],
+          status: 'ura_inedito',
+          statusLabel: 'Fila • Triagem Geral'
+        }));
       }
       const saved = localStorage.getItem('educhat_whatsapp_contacts');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const list = [...parsed];
+          const list = parsed.map((c) => {
+            // Assegura que tickets sem atribuição deliberada fiquem 100% limpos na Fila Geral
+            if (c.assignee === 'Flávio Motta' || c.assigned_to === 'u1') {
+              return {
+                ...c,
+                assignee: null,
+                assigned_to: null,
+                assignees: [],
+                status: 'ura_inedito',
+                statusLabel: 'Fila • Triagem Geral'
+              };
+            }
+            return c;
+          });
           INITIAL_WHATSAPP_CONTACTS.forEach((iw) => {
             const idx = list.findIndex((c) => c.id === iw.id);
             if (idx === -1) {
@@ -455,8 +487,8 @@ export default function App() {
               // Garante sincronização dos dados canônicos de atribuição
               list[idx] = {
                 ...list[idx],
-                assigned_to: iw.assigned_to !== undefined ? iw.assigned_to : list[idx].assigned_to,
-                assignee: iw.assignee !== undefined ? iw.assignee : list[idx].assignee,
+                assigned_to: list[idx].assigned_to !== undefined ? list[idx].assigned_to : iw.assigned_to,
+                assignee: list[idx].assignee !== undefined ? list[idx].assignee : iw.assignee,
                 department: iw.department || list[idx].department
               };
             }
@@ -6311,37 +6343,45 @@ export default function App() {
     }
   };
 
-  // Reatribuição Manual / Automática de Fila e Consultor Responsável com Suporte a Round-Robin e Co-atribuição
+  // Reatribuição Manual / Automática de Fila e Consultor Responsável com Suporte a Desatribuição (Fila Geral) e Co-atribuição
   const handleUpdateChatAssignment = async (chatId, { department, assignee, assignees = [], assigned_to, status, statusLabel }) => {
     if (!chatId) return;
     const timeStr = getSaoPauloTime();
 
-    const allAssignees = Array.isArray(assignees) && assignees.length > 0
-      ? Array.from(new Set(assignees.filter(Boolean)))
-      : (assignee ? [assignee] : []);
-    const primaryAssignee = allAssignees[0] || assignee || null;
-    const assignedToId = assigned_to || (collaboratorsRef.current.find((c) => c.name === primaryAssignee)?.id) || null;
+    const isUnassigning = !assignee || assignee === '' || assignee === 'Fila Geral' || assignee === 'sem_responsavel';
+    const allAssignees = isUnassigning
+      ? []
+      : (Array.isArray(assignees) && assignees.length > 0
+          ? Array.from(new Set(assignees.filter(Boolean)))
+          : (assignee ? [assignee] : []));
+    const primaryAssignee = isUnassigning ? null : (allAssignees[0] || assignee || null);
+    const assignedToId = isUnassigning ? null : (assigned_to || (collaboratorsRef.current.find((c) => c.name === primaryAssignee)?.id) || null);
+    const finalDepartment = department || 'Triagem URA';
+    const finalStatus = isUnassigning ? 'ura_inedito' : (status || 'carteira_ativa');
+    const finalStatusLabel = isUnassigning
+      ? (department ? `Fila • ${department}` : 'Fila • Triagem Geral')
+      : (statusLabel || `Carteira • ${primaryAssignee}`);
 
     // 1. Atualizar contatos locais imediatamente (Optimistic Update)
     setWhatsAppContacts((prev) => {
       const exists = prev.some((c) => c.id === chatId);
       const triageContextText = primaryAssignee
         ? (allAssignees.length > 1
-            ? `Co-atribuído a ${allAssignees.join(' e ')} (${department}) por ${currentUser?.name || 'Gestão'}.`
-            : `Atribuído a ${primaryAssignee} (${department}) por ${currentUser?.name || 'Gestão'}.`)
-        : `Fila de ${department || 'Triagem'}: Aguardando atendente disponível.`;
+            ? `Co-atribuído a ${allAssignees.join(' e ')} (${finalDepartment}) por ${currentUser?.name || 'Gestão'}.`
+            : `Atribuído a ${primaryAssignee} (${finalDepartment}) por ${currentUser?.name || 'Gestão'}.`)
+        : `Fila de ${finalDepartment}: Aguardando atendente disponível na Fila Geral.`;
 
       if (exists) {
         return prev.map((c) => {
           if (c.id !== chatId) return c;
           return {
             ...c,
-            department: department || c.department,
+            department: finalDepartment,
             assignee: primaryAssignee,
             assignees: allAssignees,
             assigned_to: assignedToId,
-            status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
-            statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : c.statusLabel)),
+            status: finalStatus,
+            statusLabel: finalStatusLabel,
             triageContext: triageContextText
           };
         });
@@ -6355,12 +6395,12 @@ export default function App() {
           name: `WhatsApp (${formattedPhone})`,
           phone: formattedPhone,
           avatar: '👤',
-          department: department || 'Triagem URA',
+          department: finalDepartment,
           assignee: primaryAssignee,
           assignees: allAssignees,
           assigned_to: assignedToId,
-          status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
-          statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
+          status: finalStatus,
+          statusLabel: finalStatusLabel,
           aiActive: false,
           lastInteraction: 'Agora',
           triageContext: triageContextText
@@ -6380,7 +6420,7 @@ export default function App() {
             assignee: primaryAssignee,
             assignees: allAssignees,
             assigned_to: assignedToId,
-            department: department || s.department
+            department: finalDepartment
           };
         }
         return s;
@@ -6397,12 +6437,12 @@ export default function App() {
     try {
       const stored = JSON.parse(localStorage.getItem('educhat_chat_assignments') || '{}');
       const asgnObj = {
-        department,
+        department: finalDepartment,
         assignee: primaryAssignee,
         assignees: allAssignees,
         assigned_to: assignedToId,
-        status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
-        statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
+        status: finalStatus,
+        statusLabel: finalStatusLabel,
         updatedBy: currentUser?.name || 'Gestão',
         updatedAt: new Date().toISOString()
       };
@@ -6415,21 +6455,21 @@ export default function App() {
 
     // 4. Montar payload de auditoria e evento de sistema no Supabase
     const assignmentPayload = {
-      department,
+      department: finalDepartment,
       assignee: primaryAssignee,
       assignees: allAssignees,
       assigned_to: assignedToId,
-      status: status || (primaryAssignee ? 'carteira_ativa' : 'fila_departamento'),
-      statusLabel: statusLabel || (primaryAssignee ? `Carteira • ${primaryAssignee}` : (department ? `Fila • ${department}` : 'Fila')),
+      status: finalStatus,
+      statusLabel: finalStatusLabel,
       updatedBy: currentUser?.name || 'Gestão',
       timestamp: timeStr
     };
 
     const auditNotice = primaryAssignee
       ? (allAssignees.length > 1
-          ? `📌 [Co-atribuição de Fila & Responsáveis] Atendimento compartilhado entre ${allAssignees.join(' e ')} (Fila: ${department}) por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
-          : `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${department}" com o consultor "${primaryAssignee}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`)
-      : `📌 [Fila de Espera URA] Atendimento encaminhado para a fila "${department}" (Nenhum consultor disponível no momento).\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
+          ? `📌 [Co-atribuição de Fila & Responsáveis] Atendimento compartilhado entre ${allAssignees.join(' e ')} (Fila: ${finalDepartment}) por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`
+          : `📌 [Reatribuição de Fila & Responsável] Atendimento transferido para a fila "${finalDepartment}" com o consultor "${primaryAssignee}" por ${currentUser?.name || 'Gestão'}.\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`)
+      : `📌 [Fila Geral / Triagem] Atendimento retornado para Fila Geral (${finalDepartment}).\n<!-- ASSIGNMENT:${JSON.stringify(assignmentPayload)} -->`;
 
     const systemMsg = {
       id: 'asgn_' + Date.now(),

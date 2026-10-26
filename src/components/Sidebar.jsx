@@ -331,33 +331,36 @@ export default function Sidebar({
   const totalInternalUnread = accessibleChannels.reduce((sum, c) => {
     if (!c) return sum;
     const strippedId = (c.id || '').replace(/^c-/, '');
-    const channelMessages = Array.isArray(messages?.[c.id])
-      ? messages[c.id]
-      : (Array.isArray(messages?.[`c-${strippedId}`])
-          ? messages[`c-${strippedId}`]
-          : (Array.isArray(messages?.[strippedId]) ? messages[strippedId] : []));
-    const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === strippedId || activeChat?.id === `c-${strippedId}`);
-    const lastReadAt =
-      channelReadReceipts?.[c.id] ||
-      channelReadReceipts?.[c.name] ||
-      channelReadReceipts?.[strippedId] ||
-      channelReadReceipts?.[`c-${strippedId}`];
-    const count = isChannelActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
-    return sum + Number(count || 0);
+    const isChannelActive = activeView === 'chat' && activeChat?.type === 'channel' && (activeChat?.id === c.id || activeChat?.id === strippedId || activeChat?.id === `c-${strippedId}` || activeChat?.id === c.name);
+    if (isChannelActive) return sum;
+
+    const count =
+      Number(safeUnread[c.id]) ||
+      Number(safeUnread[strippedId]) ||
+      Number(safeUnread[`c-${strippedId}`]) ||
+      Number(safeUnread[c.name]) ||
+      Number(c.unread_count) ||
+      Number(c.unread) ||
+      0;
+    return sum + count;
   }, 0) + filteredCollaborators.reduce((sum, u) => {
     if (!u) return sum;
     const dmKey = getChatKey({ type: 'dm', id: u.id }, currentUserId);
     const reverseDmKey = `dm-${u.id}-${currentUserId}`;
-    const sessionMessages = Array.isArray(messages?.[dmKey])
-      ? messages[dmKey]
-      : (Array.isArray(messages?.[reverseDmKey])
-          ? messages[reverseDmKey]
-          : (Array.isArray(messages?.[u.id]) ? messages[u.id] : []));
     const isDmActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === u.id;
-    const lastReadAt = dmReadReceipts?.[u.id] || dmReadReceipts?.[dmKey] || dmReadReceipts?.[reverseDmKey];
-    const count = isDmActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
-    return sum + Number(count || 0);
+    if (isDmActive) return sum;
+
+    const count =
+      Number(safeUnread[u.id]) ||
+      Number(safeUnread[dmKey]) ||
+      Number(safeUnread[reverseDmKey]) ||
+      Number(u.unread_count) ||
+      Number(u.unread) ||
+      0;
+    return sum + count;
   }, 0);
+
+  const totalUnreadAll = totalInternalUnread + currentScopeUnread;
 
   return (
     <aside className="w-84 bg-chatSidebar border-r border-chatBorder flex flex-col h-full select-none transition-colors">
@@ -446,6 +449,11 @@ export default function Sidebar({
         >
           <MessageSquare size={15} />
           Conversas
+          {totalUnreadAll > 0 && (
+            <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-1 ring-white/60">
+              {totalUnreadAll}
+            </span>
+          )}
         </button>
         <button
           onClick={() => setActiveView('kanban')}
@@ -521,7 +529,7 @@ export default function Sidebar({
           <Users size={13} />
           Equipe Interna
           {totalInternalUnread > 0 && (
-            <span className="bg-white text-brand-700 text-[10px] font-bold px-1.5 rounded-full">
+            <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.2 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-1 ring-white/60">
               {totalInternalUnread}
             </span>
           )}
@@ -820,13 +828,17 @@ export default function Sidebar({
 
                   {(() => {
                     const botDmKey = getChatKey({ type: 'dm', id: botCollaborator?.id || 'u_ia_copilot' }, currentUserId);
-                    const botMessages = Array.isArray(messages?.[botDmKey]) ? messages[botDmKey] : [];
                     const isBotActive = activeView === 'chat' && activeChat?.type === 'dm' && activeChat?.id === (botCollaborator?.id || 'u_ia_copilot');
-                    const botLastRead = dmReadReceipts?.[botCollaborator?.id || 'u_ia_copilot'];
-                    const botUnread = isBotActive ? 0 : countUnreadMessages(botMessages, currentUserId, botLastRead);
+                    const botUnread = isBotActive
+                      ? 0
+                      : (Number(safeUnread[botCollaborator?.id || 'u_ia_copilot']) ||
+                         Number(safeUnread[botDmKey]) ||
+                         Number(botCollaborator?.unread_count) ||
+                         Number(botCollaborator?.unread) ||
+                         0);
 
                     return botUnread > 0 ? (
-                      <span className="bg-purple-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                      <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce ring-2 ring-red-200 dark:ring-red-900/60">
                         {botUnread}
                       </span>
                     ) : (
@@ -871,7 +883,17 @@ export default function Sidebar({
                       channelReadReceipts?.[c.name] ||
                       channelReadReceipts?.[strippedId] ||
                       channelReadReceipts?.[`c-${strippedId}`];
-                    const channelUnread = isActive ? 0 : countUnreadMessages(channelMessages, currentUserId, lastReadAt);
+                    const fallbackCount = countUnreadMessages(channelMessages, currentUserId, lastReadAt);
+                    const channelUnread = isActive
+                      ? 0
+                      : (Number(safeUnread[c.id]) ||
+                         Number(safeUnread[strippedId]) ||
+                         Number(safeUnread[`c-${strippedId}`]) ||
+                         Number(safeUnread[c.name]) ||
+                         Number(c.unread_count) ||
+                         Number(c.unread) ||
+                         fallbackCount ||
+                         0);
                     return (
                       <button
                         type="button"
@@ -899,7 +921,7 @@ export default function Sidebar({
                           </div>
                         </div>
                         {channelUnread > 0 && (
-                          <span className="bg-brand-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse">
+                          <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-pulse ring-2 ring-red-200 dark:ring-red-900/60">
                             {channelUnread}
                           </span>
                         )}
@@ -944,7 +966,16 @@ export default function Sidebar({
                           : []);
 
                     const lastReadAt = dmReadReceipts?.[user.id] || dmReadReceipts?.[dmKey] || dmReadReceipts?.[reverseDmKey];
-                    const dmUnread = isActive ? 0 : countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
+                    const fallbackCount = countUnreadMessages(sessionMessages, currentUserId, lastReadAt);
+                    const dmUnread = isActive
+                      ? 0
+                      : (Number(safeUnread[user.id]) ||
+                         Number(safeUnread[dmKey]) ||
+                         Number(safeUnread[reverseDmKey]) ||
+                         Number(user.unread_count) ||
+                         Number(user.unread) ||
+                         fallbackCount ||
+                         0);
                     return (
                        <div
                         key={user.id}
@@ -983,7 +1014,7 @@ export default function Sidebar({
 
                           <div className="flex items-center gap-1.5 shrink-0">
                             {dmUnread > 0 ? (
-                              <span className="bg-brand-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce">
+                              <span className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full min-w-4 text-center shadow-xs animate-bounce ring-2 ring-red-200 dark:ring-red-900/60">
                                 {dmUnread}
                               </span>
                             ) : (
