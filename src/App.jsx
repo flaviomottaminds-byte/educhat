@@ -3629,86 +3629,61 @@ export default function App() {
           }
         };
 
-    // 1. FILTRO DE SUBSCRIPTION REALTIME PARA DMs RECEBIDAS (Filtro por recipient_id)
+    // CANAL GLOBAL UNIFICADO DE MENSAGENS EM TEMPO REAL:
+    // Escuta todos os INSERTs na tabela 'messages' e despacha com verificação de autorização e escopo local
     channel.on(
       'postgres_changes',
       {
         event: 'INSERT',
         schema: 'public',
-        table: 'messages',
-        filter: `recipient_id=eq.${activeUserId}`
+        table: 'messages'
       },
-      (payload) => handleIncomingMessageRow(payload.new)
-    );
+      (payload) => {
+        const row = payload.new;
+        if (!row || !row.chat_id) return;
 
-    // 2. FILTRO DE SUBSCRIPTION REALTIME PARA DMs ENVIADAS (Sincronização entre abas e dispositivos)
-    channel.on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: `sender_id=eq.${activeUserId}`
-      },
-      (payload) => handleIncomingMessageRow(payload.new)
-    );
-
-    // 3. FILTRO DE SUBSCRIPTION PARA CANAIS EM QUE O USUÁRIO ESTÁ INSCRITO
-    const allowedChannels = (channelsRef.current || INITIAL_CHANNELS || []).filter((ch) =>
-      canUserViewChannel(ch.id, initialUser, channelsRef.current)
-    );
-    allowedChannels.forEach((ch) => {
-      channel.on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages',
-          filter: `chat_id=eq.${ch.id}`
-        },
-        (payload) => handleIncomingMessageRow(payload.new)
-      );
-    });
-
-    // 4. REGISTROS DE SISTEMA (Alunos EduControl e Colaboradores)
-    channel.on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: 'chat_id=eq.sys_educontrol_students'
-      },
-      (payload) => handleIncomingMessageRow(payload.new)
-    );
-    channel.on(
-      'postgres_changes',
-      {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'messages',
-        filter: 'chat_id=eq.sys_collaborators'
-      },
-      (payload) => handleIncomingMessageRow(payload.new)
-    );
-
-    // 5. ATENDIMENTOS DE WHATSAPP (Apenas para equipe autorizada: Diretor ou Comercial)
-    if (hasFullPortfolioAccess(initialUser) || initialUser?.department === 'Comercial') {
-      channel.on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'messages'
-        },
-        (payload) => {
-          const r = payload.new;
-          if (r?.chat_id?.startsWith('wa-')) {
-            handleIncomingMessageRow(r);
-          }
+        // A. Mensagens de sistema (Alunos EduControl, Colaboradores, Presença)
+        if (row.chat_id.startsWith('sys_')) {
+          handleIncomingMessageRow(row);
+          return;
         }
-      );
-    }
+
+        const activeUser = currentUserRef.current || initialUser;
+        const myId = activeUser?.id || activeUserId;
+        const isMgr = hasFullPortfolioAccess(activeUser);
+
+        // B. Atendimentos de WhatsApp
+        if (row.chat_id.startsWith('wa-')) {
+          if (isMgr || activeUser?.department === 'Comercial' || canUserViewChat(row, activeUser)) {
+            handleIncomingMessageRow(row);
+          }
+          return;
+        }
+
+        // C. Mensagens Diretas (DMs)
+        if (row.chat_id.startsWith('dm-')) {
+          const isSender = row.sender_id === myId;
+          const isRecipient = row.recipient_id === myId;
+          const isInChatId = row.chat_id.includes(myId);
+
+          if (isSender || isRecipient || isInChatId || isMgr) {
+            handleIncomingMessageRow(row);
+          }
+          return;
+        }
+
+        // D. Canais Internos (c-geral, c-secretaria, etc.)
+        if (row.chat_id.startsWith('c-') || row.chat_id.startsWith('#') || row.chat_id === 'geral') {
+          if (canUserViewChannel(row.chat_id, activeUser, channelsRef.current)) {
+            handleIncomingMessageRow(row);
+          }
+          return;
+        }
+
+        // E. Fallback genérico para qualquer outra mensagem
+        handleIncomingMessageRow(row);
+      }
+    );
 
     channel.on(
       'postgres_changes',
@@ -4347,14 +4322,16 @@ export default function App() {
           }
         } else {
           try {
+            const dmRecipientId = activeChat.type === 'dm' ? activeChat.id : null;
             const { error: insertError } = await supabase.from('messages').insert([{
               id: newMsg.id,
               chat_id: currentChatKey,
               sender_id: verifiedSenderId,
               sender_name: verifiedSenderName,
+              recipient_id: dmRecipientId,
               text: payloadText,
               timestamp: newMsg.timestamp
-            }]).select();
+            }]);
 
             if (insertError) {
               console.error("Erro no Insert:", insertError);
