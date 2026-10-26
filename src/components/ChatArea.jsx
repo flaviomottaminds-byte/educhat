@@ -56,6 +56,9 @@ export default function ChatArea({
   activeView,
   chatMeta, // { type: 'channel' | 'dm' | 'whatsapp', data: Channel | Collaborator | WhatsAppContact }
   messages,
+  historyStatus = 'ok',
+  historyError = null,
+  onRetryHistory,
   onSendMessage,
   onCreateTaskFromMessage,
   onDeleteTaskFromMessage,
@@ -515,12 +518,48 @@ export default function ChatArea({
         return 0;
       });
 
+      // Rede de segurança: se os filtros de isolamento descartaram TODAS as mensagens que o estado entregou,
+      // nunca mostra o "Empty State" (nova conversa) — exibe as mensagens deduplicadas por id e registra o alerta.
+      if (result.length === 0 && messages.length > 0) {
+        console.warn('[ChatTrace] Filtros do ChatArea descartaram 100% das mensagens; exibindo fallback sem filtro', {
+          recebidas: messages.length,
+          activeChat: activeChat?.id,
+          targetId: target?.id
+        });
+        const seen = new Set();
+        const fallback = messages.filter((m) => {
+          if (!m || typeof m !== 'object') return false;
+          if (m.id && seen.has(m.id)) return false;
+          if (m.id) seen.add(m.id);
+          return true;
+        });
+        fallback.sort(
+          (a, b) =>
+            new Date(a.created_at || a.timestampRaw || 0).getTime() -
+            new Date(b.created_at || b.timestampRaw || b.timestampRaw || 0).getTime()
+        );
+        return fallback;
+      }
+
       return result;
     } catch (err) {
       console.warn('[ChatArea] uniqueMessages fallback seguro:', err);
       return Array.isArray(messages) ? messages.filter(Boolean) : [];
     }
   }, [messages, currentUser?.id, isDM, isWhatsApp, target?.id]);
+
+  // Rastreamento (console) do array de mensagens recebido vs. renderizado. A tela "Conversa com X" (vazia)
+  // só pode aparecer quando historyStatus === 'ok' E a contagem for estritamente zero.
+  useEffect(() => {
+    console.log('[ChatTrace] ChatArea render-state', {
+      chat: activeChat?.id,
+      tipo: activeChat?.type,
+      historyStatus,
+      mensagensRecebidas: Array.isArray(messages) ? messages.length : 'invalido',
+      mensagensRenderizadas: uniqueMessages.length,
+      telaVazia: uniqueMessages.length === 0 && historyStatus !== 'loading' && historyStatus !== 'error'
+    });
+  }, [activeChat?.id, historyStatus, messages?.length, uniqueMessages.length]);
 
   const scrollToBottom = (instant = true) => {
     if (messagesContainerRef.current) {
@@ -1307,7 +1346,26 @@ export default function ChatArea({
 
       {/* Área de Mensagens com Textura Oficial do WhatsApp */}
       <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-2.5 whatsapp-bg">
-        {(uniqueMessages || []).length === 0 ? (
+        {(uniqueMessages || []).length === 0 && historyStatus === 'loading' ? (
+          <div className="flex flex-col items-center justify-center h-full text-center text-[#667781]" data-testid="chat-loading">
+            <div className="w-8 h-8 border-4 border-slate-300 border-t-brand-600 rounded-full animate-spin mb-3" />
+            <p className="text-xs font-medium">Carregando histórico da conversa…</p>
+          </div>
+        ) : (uniqueMessages || []).length === 0 && historyStatus === 'error' ? (
+          <div className="flex flex-col items-center justify-center h-full text-center" data-testid="chat-error">
+            <div className="bg-white/90 dark:bg-chatCard/90 p-5 rounded-2xl border border-red-200 dark:border-red-900/50 max-w-sm shadow-sm space-y-2">
+              <p className="text-sm font-bold text-red-600">Não foi possível carregar o histórico</p>
+              <p className="text-xs text-[#667781]">{historyError || 'Falha de comunicação com o servidor.'}</p>
+              <button
+                type="button"
+                onClick={() => onRetryHistory && onRetryHistory()}
+                className="mt-1 px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold cursor-pointer"
+              >
+                Tentar novamente
+              </button>
+            </div>
+          </div>
+        ) : (uniqueMessages || []).length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center text-[#667781]">
             <div className="bg-white/85 dark:bg-chatCard/90 backdrop-blur-xs p-5 rounded-2xl border border-slate-200 dark:border-chatBorder max-w-sm shadow-sm space-y-2">
               <span className="text-4xl block">{target?.avatar || '💬'}</span>

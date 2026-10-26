@@ -512,6 +512,10 @@ export default function App() {
     return {};
   });
 
+  // Estado do carregamento do histórico da conversa ativa: distingue "carregando" de "vazio real"
+  const [chatHistoryStatus, setChatHistoryStatus] = useState({ key: null, status: 'idle', count: null });
+  const [historyRetryTick, setHistoryRetryTick] = useState(0);
+
   // Persistência contínua e segura de canais e conversas WhatsApp (apenas metadados, NUNCA mensagens)
   useEffect(() => {
     try {
@@ -1549,11 +1553,51 @@ export default function App() {
     });
   };
 
-  // Ao trocar de conversa ativa: limpa não lidas e hidrata anexos pesados apenas da conversa aberta (Regra 4)
-  // 1. ASSEPSIA DEFINITIVA & CICLO DE VIDA DO CHAT ATIVO:
-  // - Esvazia o estado imediatamente antes do fetch (setMessages([]))
-  // - Filtra estritamente pelo chat_id / channel_id ativo no Supabase
-  // - Canal Realtime dedicado com remoção obrigatória (supabase.removeChannel) no cleanup
+  // Ao trocar de conversa ativa: limpa não lidas e carrega o histórico.
+  // ARQUITETURA (sem race condition):
+  //  - EFFECT A (histórico): faz o SELECT e SÓ escreve em `messages` depois que a Promise resolve com sucesso.
+  //    NUNCA executa setMessages([]) — o que já estiver em memória permanece visível até o banco responder.
+  //    Controla `chatHistoryStatus` ('loading' | 'ok' | 'error') para a UI distinguir "carregando" de "vazio real".
+  //  - EFFECT B (realtime): subscrição isolada. Só faz merge incremental (por id) e jamais substitui a lista.
+  const getChatAliasKeys = (chat, userId) => {
+    const rawId = chat.id;
+    const primary = getChatKey(chat, userId);
+    const keys = new Set([primary]);
+    if (chat.type === 'dm') {
+      keys.add(`dm-u1-${rawId}`);
+      keys.add(`dm-${rawId}-u1`);
+      keys.add(`dm-${userId}-${rawId}`);
+      keys.add(`dm-${rawId}-${userId}`);
+      keys.add(rawId);
+    } else if (chat.type === 'channel') {
+      const stripped = rawId.replace(/^c-/, '');
+      keys.add(rawId);
+      keys.add(stripped);
+      keys.add(`c-${stripped}`);
+    } else if (chat.type === 'whatsapp') {
+      const cleanPhone = rawId.replace(/^wa-/, '');
+      keys.add(rawId);
+      keys.add(`wa-${cleanPhone}`);
+      keys.add(cleanPhone);
+    }
+    return Array.from(keys);
+  };
+
+  const mergeMessageLists = (a = [], b = []) => {
+    const byId = new Map();
+    [...a, ...b].forEach((m) => {
+      if (!m || !m.id) return;
+      const prevM = byId.get(m.id);
+      byId.set(m.id, prevM ? { ...prevM, ...m } : m);
+    });
+    return Array.from(byId.values()).sort(
+      (x, y) =>
+        new Date(x.created_at || x.timestampRaw || 0).getTime() -
+        new Date(y.created_at || y.timestampRaw || 0).getTime()
+    );
+  };
+
+  // EFFECT A — HISTÓRICO
   useEffect(() => {
     // Se após o F5 nenhum chat estiver em foco, o estado deve permanecer vazio
     if (!activeChat?.id) return;
@@ -1561,41 +1605,38 @@ export default function App() {
     clearUnread(activeChat.id);
     markMessagesAsRead(activeChat);
 
+    const chat = activeChat;
     const activeUserId = currentUserRef.current?.id || 'u1';
-    const targetChatKey = getChatKey(activeChat, activeUserId);
-    const rawId = activeChat.id;
+    const targetChatKey = getChatKey(chat, activeUserId);
+    const rawId = chat.id;
+    let isStale = false;
+    const abortCtl = new AbortController();
 
-    // 1. ISOLAMENTO E PRESERVAÇÃO DE ESTADO:
-    // Garante inicialização da chave sem piscar a tela caso já existam mensagens em memória
-    setMessages((prev) => {
-      if (prev[targetChatKey] && prev[targetChatKey].length > 0) return prev;
-      return {
-        ...prev,
-        [targetChatKey]: []
-      };
+    console.log('[ChatTrace] Abrindo conversa', {
+      type: chat.type,
+      id: rawId,
+      chatKey: targetChatKey,
+      mensagensEmMemoria: (messagesRef.current?.[targetChatKey] || []).length
     });
 
-    let isCancelled = false;
+    setChatHistoryStatus({ key: targetChatKey, status: 'loading', count: null });
 
-    // 2. QUERY DE ISOLAMENTO:
-    // Garante que a requisição inicial filtra ESTRITAMENTE pelo chat_id ativo
     const queryActiveChatMessages = async () => {
       try {
-        let query = supabase.from('messages').select('*');
+        let query = supabase.from('messages_light').select('*');
 
-        if (activeChat.type === 'channel') {
+        if (chat.type === 'channel') {
           const stripped = rawId.replace(/^c-/, '');
-          const prefixed = `c-${stripped}`;
           query = query
-            .or(`chat_id.eq.${rawId},chat_id.eq.${stripped},chat_id.eq.${prefixed},chat_id.eq.#${stripped}`)
+            .or(`chat_id.eq.${rawId},chat_id.eq.${stripped},chat_id.eq.c-${stripped},chat_id.eq.#${stripped}`)
             .not('chat_id', 'like', 'sys_%');
-        } else if (activeChat.type === 'dm') {
+        } else if (chat.type === 'dm') {
           const partnerId = rawId;
           const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
           query = query
             .or(`chat_id.eq.${targetChatKey},chat_id.eq.${reverseDmKey},chat_id.eq.dm-u1-${partnerId},chat_id.eq.dm-${partnerId}-u1,and(sender_id.eq.${activeUserId},recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.${activeUserId}),and(sender_id.eq.u1,recipient_id.eq.${partnerId}),and(sender_id.eq.${partnerId},recipient_id.eq.u1)`)
             .not('chat_id', 'like', 'sys_%');
-        } else if (activeChat.type === 'whatsapp') {
+        } else if (chat.type === 'whatsapp') {
           const cleanPhone = rawId.replace(/^wa-/, '');
           query = query
             .or(`chat_id.eq.${rawId},chat_id.eq.wa-${cleanPhone},chat_id.eq.${cleanPhone}`)
@@ -1604,80 +1645,100 @@ export default function App() {
           query = query.eq('chat_id', rawId).not('chat_id', 'like', 'sys_%');
         }
 
-        const { data: fetchedDbMessages, error } = await query
-          .order('created_at', { ascending: true })
-          .limit(300);
+        // As 300 mensagens MAIS RECENTES (desc + reverse). Antes era asc+limit => pegava as 300 mais ANTIGAS.
+        const { data: fetched, error } = await query
+          .order('created_at', { ascending: false })
+          .limit(300)
+          .abortSignal(abortCtl.signal);
 
-        if (activeChatRef.current?.id !== rawId) return;
-
-        if (error) {
-          console.warn('[Chat] Erro na consulta de mensagens isoladas:', error);
+        // Resposta de uma conversa que não está mais em foco: descarta sem tocar no estado
+        if (isStale || activeChatRef.current?.id !== rawId) {
+          console.log('[ChatTrace] Resposta descartada (usuário trocou de conversa)', rawId);
           return;
         }
 
-        const parsedList = (fetchedDbMessages || []).map((m) =>
-          parseDatabaseMessage(m, { stripHeavyAttachments: false })
-        );
+        if (error) {
+          console.warn('[ChatTrace] Erro no SELECT do histórico — estado NÃO foi alterado', error);
+          setChatHistoryStatus({ key: targetChatKey, status: 'error', count: null, error: error.message });
+          return;
+        }
 
-        parsedList.sort((a, b) => {
-          const timeA = new Date(a.created_at || a.timestampRaw || a.timestamp || 0).getTime();
-          const timeB = new Date(b.created_at || b.timestampRaw || b.timestamp || 0).getTime();
-          return timeA - timeB;
+        const parsedList = (fetched || [])
+          .reverse()
+          .map((m) => parseDatabaseMessage(m, { stripHeavyAttachments: false }));
+
+        console.log('[ChatTrace] Histórico carregado do banco', {
+          chatKey: targetChatKey,
+          totalNoBanco: parsedList.length
         });
 
-        // Hidratação estrita: substitui pelo conteúdo limpo do banco e preserva eventuais mensagens 'sending'
         setMessages((prev) => {
+          const aliasKeys = getChatAliasKeys(chat, activeUserId);
           const existing = prev[targetChatKey] || [];
-          const sendingMsgs = existing.filter((m) => m.status === 'sending');
-          const merged = [...parsedList];
-          for (const s of sendingMsgs) {
-            if (!merged.some((m) => m.id === s.id)) {
-              merged.push(s);
-            }
-          }
-          const next = {
-            ...prev,
-            [targetChatKey]: merged
-          };
-          if (activeChat.type === 'dm') {
-            const pId = rawId;
-            next[`dm-u1-${pId}`] = merged;
-            next[`dm-${pId}-u1`] = merged;
-            next[`dm-${activeUserId}-${pId}`] = merged;
-            next[`dm-${pId}-${activeUserId}`] = merged;
-            next[pId] = merged;
-          }
-          if (activeChat.type === 'channel') {
-            const stripped = rawId.replace(/^c-/, '');
-            next[rawId] = merged;
-            next[stripped] = merged;
-            next[`c-${stripped}`] = merged;
-          }
-          if (activeChat.type === 'whatsapp') {
-            const cleanPhone = rawId.replace(/^wa-/, '');
-            next[rawId] = merged;
-            next[`wa-${cleanPhone}`] = merged;
-            next[cleanPhone] = merged;
-          }
+          // Merge por id: preserva mensagens otimistas ('sending') e eventos realtime que chegaram durante o SELECT
+          const merged = mergeMessageLists(parsedList, existing);
+          const next = { ...prev };
+          aliasKeys.forEach((k) => {
+            next[k] = merged;
+          });
           return next;
         });
+        setChatHistoryStatus({ key: targetChatKey, status: 'ok', count: parsedList.length });
+
+        // FASE 2 (background): mensagens com anexos base64 pesados vêm truncadas da view leve.
+        // Busca o corpo completo uma a uma e faz merge por id — nunca bloqueia nem zera a lista.
+        const heavyIds = (fetched || []).filter((m) => m.is_heavy).map((m) => m.id);
+        for (const hid of heavyIds) {
+          if (isStale || activeChatRef.current?.id !== rawId) break;
+          try {
+            const { data: full } = await supabase.from('messages').select('*').eq('id', hid).abortSignal(abortCtl.signal).maybeSingle();
+            if (!full || isStale || activeChatRef.current?.id !== rawId) continue;
+            const parsedFull = parseDatabaseMessage(full, { stripHeavyAttachments: false });
+            setMessages((prev) => {
+              const next = { ...prev };
+              getChatAliasKeys(chat, activeUserId).forEach((k) => {
+                if (Array.isArray(next[k])) {
+                  next[k] = next[k].map((m) => (m.id === hid ? { ...m, ...parsedFull } : m));
+                }
+              });
+              return next;
+            });
+          } catch (heavyErr) {
+            console.warn('[ChatTrace] Falha ao carregar anexo pesado', hid, heavyErr);
+          }
+        }
       } catch (err) {
-        if (activeChatRef.current?.id === rawId) {
-          console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
+        if (!isStale && activeChatRef.current?.id === rawId) {
+          console.warn('[ChatTrace] Exceção ao carregar histórico — estado NÃO foi alterado', err);
+          setChatHistoryStatus({ key: targetChatKey, status: 'error', count: null, error: String(err?.message || err) });
         }
       }
     };
 
     queryActiveChatMessages();
 
-    // 4. GHOST LISTENERS DO REALTIME:
-    // Cria um canal de escuta exclusivo para a conversa ativa
+    return () => {
+      isStale = true;
+      try { abortCtl.abort(); } catch {}
+    };
+  }, [activeChat?.id, activeChat?.type, currentUser?.id, historyRetryTick]);
+
+  // EFFECT B — REALTIME (isolado do histórico; apenas merge incremental, nunca substitui nem zera a lista)
+  useEffect(() => {
+    if (!activeChat?.id) return;
+
+    const chat = activeChat;
+    const activeUserId = currentUserRef.current?.id || 'u1';
+    const targetChatKey = getChatKey(chat, activeUserId);
+    const rawId = chat.id;
+    let isCancelled = false;
+
     const activeChatChannelName = `chat_active_${targetChatKey.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}`;
     const activeChatChannel = supabase.channel(activeChatChannelName);
 
     const isMessageBelongsToActive = (row) => {
       if (!row || !row.chat_id || String(row.chat_id).startsWith('sys_')) return false;
-      if (activeChat.type === 'channel') {
+      if (chat.type === 'channel') {
         const stripped = rawId.replace(/^c-/, '');
         return (
           row.chat_id === rawId ||
@@ -1686,7 +1747,7 @@ export default function App() {
           row.chat_id === `#${stripped}`
         );
       }
-      if (activeChat.type === 'dm') {
+      if (chat.type === 'dm') {
         const partnerId = rawId;
         const reverseDmKey = `dm-${partnerId}-${activeUserId}`;
         return (
@@ -1701,7 +1762,7 @@ export default function App() {
           (row.chat_id && row.chat_id.startsWith('dm-') && row.chat_id.includes(partnerId))
         );
       }
-      if (activeChat.type === 'whatsapp') {
+      if (chat.type === 'whatsapp') {
         const cleanPhone = rawId.replace(/^wa-/, '');
         return (
           row.chat_id === rawId ||
@@ -1725,11 +1786,9 @@ export default function App() {
           setMessages((prev) => {
             const currentList = prev[targetChatKey] || [];
             if (currentList.some((m) => m.id === parsed.id)) return prev;
-            const next = [...currentList, parsed];
-            next.sort((a, b) => new Date(a.created_at || a.timestamp || 0) - new Date(b.created_at || b.timestamp || 0));
             return {
               ...prev,
-              [targetChatKey]: next
+              [targetChatKey]: mergeMessageLists(currentList, [parsed])
             };
           });
         }
@@ -1745,6 +1804,7 @@ export default function App() {
           const parsed = parseDatabaseMessage(row, { stripHeavyAttachments: false });
           setMessages((prev) => {
             const currentList = prev[targetChatKey] || [];
+            if (!currentList.some((m) => m.id === parsed.id)) return prev;
             return {
               ...prev,
               [targetChatKey]: currentList.map((m) => (m.id === parsed.id ? { ...m, ...parsed } : m))
@@ -1754,7 +1814,7 @@ export default function App() {
       )
       .subscribe();
 
-    // Cleanup function: removeChannel obrigatório ao desmontar ou trocar de chat para eliminar ghost listeners!
+    // removeChannel obrigatório ao desmontar ou trocar de chat (elimina ghost listeners)
     return () => {
       isCancelled = true;
       try {
@@ -2325,20 +2385,22 @@ export default function App() {
 
       let recentDbMessages = null;
       try {
+        // IMPORTANTE: busca as mensagens MAIS RECENTES (desc) e reordena depois. Antes era asc+limit(1000),
+        // o que retornava apenas as 1000 mais ANTIGAS (banco tem 6.7k+) e ignorava reatribuições/leituras recentes.
         let { data, error } = await supabase
-          .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id')
+          .from('messages_light')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id')
           .not('chat_id', 'like', 'sys_%')
-          .order('created_at', { ascending: true })
+          .order('created_at', { ascending: false })
           .limit(1000);
 
-        // Fallback defensivo se a coluna channel_id ou read_by ainda não existir no schema cache do PostgREST
+        // Fallback defensivo se a coluna read_by ainda não existir no schema cache do PostgREST
         if (error) {
           const fbWithoutChannel = await supabase
-            .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id')
+            .from('messages_light')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id')
             .not('chat_id', 'like', 'sys_%')
-            .order('created_at', { ascending: true })
+            .order('created_at', { ascending: false })
             .limit(1000);
 
           if (!fbWithoutChannel.error && Array.isArray(fbWithoutChannel.data)) {
@@ -2347,14 +2409,33 @@ export default function App() {
           } else {
             // Fallback básico mais conservador
             const fbBasic = await supabase
-              .from('messages')
+              .from('messages_light')
               .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
               .not('chat_id', 'like', 'sys_%')
-              .order('created_at', { ascending: true })
+              .order('created_at', { ascending: false })
               .limit(1000);
             data = fbBasic.data;
             error = fbBasic.error;
           }
+        }
+
+        // Eventos de atribuição de fila (asgn_*) são a fonte da verdade de "Meus/Geral":
+        // buscados à parte para nunca ficarem fora da janela das últimas 1000 mensagens.
+        if (!error && Array.isArray(data)) {
+          try {
+            const { data: asgnRows } = await supabase
+              .from('messages_light')
+              .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
+              .like('id', 'asgn_%')
+              .order('created_at', { ascending: false })
+              .limit(400);
+            if (Array.isArray(asgnRows) && asgnRows.length > 0) {
+              const known = new Set(data.map((r) => r.id));
+              asgnRows.forEach((r) => {
+                if (!known.has(r.id)) data.push(r);
+              });
+            }
+          } catch {}
         }
 
         if (!error && Array.isArray(data)) {
@@ -2362,10 +2443,10 @@ export default function App() {
         } else if (error) {
           console.error('[Supabase] Erro na consulta de mensagens, tentando fallback de segurança:', error);
           const { data: fallbackData } = await supabase
-            .from('messages')
+            .from('messages_light')
             .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at')
             .not('chat_id', 'like', 'sys_%')
-            .order('created_at', { ascending: true })
+            .order('created_at', { ascending: false })
             .limit(500);
 
           if (Array.isArray(fallbackData)) {
@@ -6596,9 +6677,13 @@ export default function App() {
       }]);
       if (error) {
         console.warn('Aviso ao gravar reatribuição no Supabase:', error);
+        toast.error('Não foi possível salvar a reatribuição no servidor. Tente novamente.');
+      } else {
+        console.log('[Fila] Reatribuição persistida', { chatId, assigned_to: assignedToId, assignee: primaryAssignee });
       }
     } catch (err) {
       console.warn('Erro ao inserir reatribuição no Supabase:', err);
+      toast.error('Falha de rede ao salvar a reatribuição.');
     }
 
     // 5. Se houver um card no Kanban associado a este chat, atualiza o responsável e departamento no Kanban também
@@ -6780,6 +6865,9 @@ export default function App() {
             activeView={activeView}
             chatMeta={chatMeta}
             messages={currentMessages}
+            historyStatus={chatHistoryStatus.key === currentChatKey ? chatHistoryStatus.status : 'loading'}
+            historyError={chatHistoryStatus.key === currentChatKey ? chatHistoryStatus.error : null}
+            onRetryHistory={() => setHistoryRetryTick((t) => t + 1)}
             onSendMessage={handleSendMessage}
             onCreateTaskFromMessage={handleCreateTaskFromMessage}
             onDeleteTaskFromMessage={handleDeleteTaskFromMessage}
