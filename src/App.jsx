@@ -1108,8 +1108,13 @@ export default function App() {
     const rawDate = m.created_at || m.timestamp || new Date().toISOString();
     return {
       id: m.id,
+      chat_id: m.chat_id,
+      chatId: m.chat_id,
       senderId: m.sender_id,
+      sender_id: m.sender_id,
       senderName: m.sender_name,
+      recipientId: m.recipient_id,
+      recipient_id: m.recipient_id,
       text: cleanText,
       timestamp: getSaoPauloTime(rawDate),
       created_at: rawDate,
@@ -1508,17 +1513,20 @@ export default function App() {
     const targetChatKey = getChatKey(activeChat, activeUserId);
     const rawId = activeChat.id;
 
-    // 1. LIMPEZA OBRIGATÓRIA DE ESTADO (CLEANUP):
-    // Esvazia imediatamente a tela antes de iniciar o novo SELECT
-    setMessages((prev) => ({
-      ...prev,
-      [targetChatKey]: []
-    }));
+    // 1. ISOLAMENTO E PRESERVAÇÃO DE ESTADO:
+    // Garante inicialização da chave sem piscar a tela caso já existam mensagens em memória
+    setMessages((prev) => {
+      if (prev[targetChatKey] && prev[targetChatKey].length > 0) return prev;
+      return {
+        ...prev,
+        [targetChatKey]: []
+      };
+    });
 
     let isCancelled = false;
 
     // 2. QUERY DE ISOLAMENTO:
-    // Garante que a requisição inicial filtra ESTRITAMENTE pelo chat_id / channel_id ativo
+    // Garante que a requisição inicial filtra ESTRITAMENTE pelo chat_id ativo
     const queryActiveChatMessages = async () => {
       try {
         let query = supabase.from('messages').select('*');
@@ -1527,7 +1535,7 @@ export default function App() {
           const stripped = rawId.replace(/^c-/, '');
           const prefixed = `c-${stripped}`;
           query = query
-            .or(`chat_id.eq.${rawId},chat_id.eq.${stripped},chat_id.eq.${prefixed},channel_id.eq.${rawId},channel_id.eq.${stripped}`)
+            .or(`chat_id.eq.${rawId},chat_id.eq.${stripped},chat_id.eq.${prefixed},chat_id.eq.#${stripped}`)
             .not('chat_id', 'like', 'sys_%');
         } else if (activeChat.type === 'dm') {
           const partnerId = rawId;
@@ -1548,7 +1556,7 @@ export default function App() {
           .order('created_at', { ascending: true })
           .limit(300);
 
-        if (isCancelled) return;
+        if (isCancelled || activeChatRef.current?.id !== rawId) return;
 
         if (error) {
           console.warn('[Chat] Erro na consulta de mensagens isoladas:', error);
@@ -1565,11 +1573,21 @@ export default function App() {
           return timeA - timeB;
         });
 
-        // Hidratação estrita: substitui pelo conteúdo limpo do banco (sem resíduos de outras conversas)
-        setMessages((prev) => ({
-          ...prev,
-          [targetChatKey]: parsedList
-        }));
+        // Hidratação estrita: substitui pelo conteúdo limpo do banco e preserva eventuais mensagens 'sending'
+        setMessages((prev) => {
+          const existing = prev[targetChatKey] || [];
+          const sendingMsgs = existing.filter((m) => m.status === 'sending');
+          const merged = [...parsedList];
+          for (const s of sendingMsgs) {
+            if (!merged.some((m) => m.id === s.id)) {
+              merged.push(s);
+            }
+          }
+          return {
+            ...prev,
+            [targetChatKey]: merged
+          };
+        });
       } catch (err) {
         if (!isCancelled) {
           console.warn('[Chat] Falha ao hidratar mensagens da conversa ativa:', err);
@@ -1592,8 +1610,7 @@ export default function App() {
           row.chat_id === rawId ||
           row.chat_id === stripped ||
           row.chat_id === `c-${stripped}` ||
-          row.channel_id === rawId ||
-          row.channel_id === stripped
+          row.chat_id === `#${stripped}`
         );
       }
       if (activeChat.type === 'dm') {
@@ -2232,7 +2249,7 @@ export default function App() {
       try {
         let { data, error } = await supabase
           .from('messages')
-          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id, channel_id')
+          .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, read_by, recipient_id')
           .not('chat_id', 'like', 'sys_%')
           .order('created_at', { ascending: true })
           .limit(1000);
@@ -3828,7 +3845,7 @@ export default function App() {
         let { data: latestRows, error } = await withTimeout(
           supabase
             .from('messages')
-            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, channel_id')
+            .select('id, chat_id, sender_id, sender_name, text, timestamp, created_at, recipient_id, read_by')
             .not('chat_id', 'like', 'sys_%')
             .gt('created_at', lastPolledTimestamp)
             .order('created_at', { ascending: true })
@@ -4001,8 +4018,14 @@ export default function App() {
     const messageId = 'm_' + Date.now();
     const newMsg = {
       id: messageId,
+      chat_id: currentChatKey,
+      chatId: currentChatKey,
       senderId: verifiedSenderId,
+      sender_id: verifiedSenderId,
       senderName: verifiedSenderName,
+      recipientId: activeChat.type === 'dm' ? activeChat.id : null,
+      recipient_id: activeChat.type === 'dm' ? activeChat.id : null,
+      created_at: new Date().toISOString(),
       text: rawText,
       timestamp: timeStr,
       attachment: attachment ? {
@@ -4200,26 +4223,9 @@ export default function App() {
             if (recId) {
               insertPayload.recipient_id = recId;
             }
-          } else if (activeChat.type === 'channel') {
-            const chId = options.channelId || currentChatKey;
-            if (chId) {
-              insertPayload.channel_id = chId;
-            }
           }
 
           let { error: insertError } = await supabase.from('messages').insert([insertPayload]).select();
-
-          if (
-            insertError &&
-            (insertError.message?.includes('channel_id') ||
-              insertError.code === 'PGRST204' ||
-              insertError.message?.includes('schema cache'))
-          ) {
-            console.warn('[handleSendMessage] Retentando insert sem channel_id devido ao schema cache:', insertError.message);
-            delete insertPayload.channel_id;
-            const retryRes = await supabase.from('messages').insert([insertPayload]).select();
-            insertError = retryRes.error;
-          }
 
           if (
             insertError &&

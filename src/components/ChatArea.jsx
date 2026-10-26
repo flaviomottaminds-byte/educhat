@@ -465,26 +465,29 @@ export default function ChatArea({
           const existingIdx = seenSignatures.get(signature);
           const existing = result[existingIdx];
 
-          const existingIsOptimistic = String(existing?.id || '').startsWith('m_') || String(existing?.id || '').startsWith('opt_');
-          const incomingIsReal = String(m.id || '').startsWith('wa_');
+          const existingIsOptimistic = (String(existing?.id || '').startsWith('m_') && existing?.status === 'sending') || String(existing?.id || '').startsWith('opt_');
+          const incomingIsReal = String(m.id || '').startsWith('wa_') || (m.status !== 'sending' && !String(m.id || '').startsWith('opt_'));
 
-          const statusWeight = { failed: 0, sent: 1, delivered: 2, read: 3 };
-          const existingWeight = statusWeight[existing?.status] || 1;
-          const incomingWeight = statusWeight[m.status] || (incomingIsReal ? 2 : 1);
+          // Só reconcilia/funde se for a mesma mensagem (mesmo ID) ou se uma delas for envio otimista local
+          if (existing.id === m.id || existingIsOptimistic || (existing.status === 'sending' && incomingIsReal)) {
+            const statusWeight = { failed: 0, sent: 1, delivered: 2, read: 3 };
+            const existingWeight = statusWeight[existing?.status] || 1;
+            const incomingWeight = statusWeight[m.status] || (incomingIsReal ? 2 : 1);
 
-          // Se a nova mensagem é do servidor ou tem status mais recente/confirmado, funde nela
-          if (incomingIsReal || incomingWeight >= existingWeight || existingIsOptimistic) {
-            result[existingIdx] = {
-              ...existing,
-              ...m,
-              id: incomingIsReal ? m.id : (existing?.id || m.id),
-              status: incomingWeight >= existingWeight ? (m.status || 'delivered') : existing?.status,
-              senderId: existing?.senderId || m.senderId,
-              senderName: existing?.senderName || m.senderName,
-            };
-            if (m.id) seenIds.add(m.id);
+            // Se a nova mensagem é do servidor ou tem status mais recente/confirmado, funde nela
+            if (incomingIsReal || incomingWeight >= existingWeight || existingIsOptimistic) {
+              result[existingIdx] = {
+                ...existing,
+                ...m,
+                id: incomingIsReal ? m.id : (existing?.id || m.id),
+                status: incomingWeight >= existingWeight ? (m.status || 'delivered') : existing?.status,
+                senderId: existing?.senderId || m.senderId,
+                senderName: existing?.senderName || m.senderName,
+              };
+              if (m.id) seenIds.add(m.id);
+            }
+            continue;
           }
-          continue;
         }
 
         if (m.id) seenIds.add(m.id);
