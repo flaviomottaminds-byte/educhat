@@ -7,7 +7,13 @@ import {
   ArrowLeft,
   Shield,
   Maximize2,
-  Paperclip
+  Paperclip,
+  Trash2,
+  CheckSquare,
+  Square,
+  Check,
+  X,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { supabase } from '../lib/supabase';
@@ -64,6 +70,7 @@ export function normalizeTaskStatus(rawStatus) {
 export default function KanbanBoard({
   tasks = [],
   onUpdateTaskStatus,
+  onDeleteTasksBatch,
   onAddTask,
   onCreateTasksBatch,
   onCardClick,
@@ -76,9 +83,125 @@ export default function KanbanBoard({
   // Estado local sincronizado com Realtime para movimentação instantânea entre abas e usuários
   const [boardTasks, setBoardTasks] = useState(tasks || []);
 
+  // Estado para seleção múltipla e ações em massa
+  const [selectedTaskIds, setSelectedTaskIds] = useState(new Set());
+  const [bulkConfirmModal, setBulkConfirmModal] = useState({
+    isOpen: false,
+    type: 'delete', // 'delete' | 'clear_column'
+    columnTitle: '',
+    taskIds: [],
+    count: 0
+  });
+  const [isBatchOperating, setIsBatchOperating] = useState(false);
+
   useEffect(() => {
     setBoardTasks(tasks || []);
   }, [tasks]);
+
+  const toggleSelectCard = (taskId) => {
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      const strId = String(taskId);
+      if (next.has(strId)) {
+        next.delete(strId);
+      } else {
+        next.add(strId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectColumn = (columnTasks) => {
+    const colIds = (columnTasks || []).map((t) => String(t.id));
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = colIds.every((id) => next.has(id));
+      if (allSelected) {
+        colIds.forEach((id) => next.delete(id));
+      } else {
+        colIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const handleClearColumn = (colId, colTitle, colTasks) => {
+    if (!colTasks || colTasks.length === 0) return;
+    setBulkConfirmModal({
+      isOpen: true,
+      type: 'clear_column',
+      columnTitle: colTitle,
+      taskIds: colTasks.map((t) => String(t.id)),
+      count: colTasks.length
+    });
+  };
+
+  const handleRequestBulkDelete = (ids) => {
+    if (!ids || ids.length === 0) return;
+    setBulkConfirmModal({
+      isOpen: true,
+      type: 'delete',
+      columnTitle: '',
+      taskIds: ids.map(String),
+      count: ids.length
+    });
+  };
+
+  const executeBulkDelete = async (idsToDelete) => {
+    if (!idsToDelete || idsToDelete.length === 0) return;
+    const ids = idsToDelete.map(String);
+
+    // Atualização otimista imediata na visualização do Kanban
+    setBoardTasks((prev) => prev.filter((t) => !ids.includes(String(t.id))));
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    if (onDeleteTasksBatch) {
+      onDeleteTasksBatch(ids);
+    } else {
+      supabase
+        .from('tasks')
+        .delete()
+        .in('id', ids)
+        .then(({ error }) => {
+          if (error) console.warn('Erro ao deletar tarefas em lote no Supabase:', error);
+        });
+    }
+  };
+
+  const executeBulkMoveStatus = async (idsToMove, newStatus) => {
+    if (!idsToMove || idsToMove.length === 0) return;
+    const ids = idsToMove.map(String);
+
+    // Atualização otimista imediata
+    setBoardTasks((prev) =>
+      prev.map((t) => (ids.includes(String(t.id)) ? { ...t, status: newStatus } : t))
+    );
+    setSelectedTaskIds(new Set());
+
+    ids.forEach((id) => {
+      if (onUpdateTaskStatus) onUpdateTaskStatus(id, newStatus);
+    });
+
+    supabase
+      .from('tasks')
+      .update({ status: newStatus })
+      .in('id', ids)
+      .then(({ error }) => {
+        if (error) console.warn('Erro ao mover tarefas em lote no Supabase:', error);
+      });
+
+    if (newStatus === 'done') {
+      confetti({
+        particleCount: 60,
+        spread: 60,
+        origin: { y: 0.7 }
+      });
+    }
+  };
 
   // Subscrição em Tempo Real (Realtime Subscription) na tabela 'tasks'
   // Escuta UPDATE, INSERT e DELETE em tempo real sem exigir F5
@@ -562,15 +685,52 @@ export default function KanbanBoard({
               className="bg-slate-200/50 dark:bg-chatSidebar border border-slate-300 dark:border-chatBorder rounded-xl flex flex-col h-full overflow-hidden shadow-xs transition-colors"
             >
               {/* Cabeçalho da Coluna */}
-              <div className="p-3 bg-white dark:bg-chatCard border-b border-slate-200 dark:border-chatBorder flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded border ${col.color}`}>
+              <div className="p-3 bg-white dark:bg-chatCard border-b border-slate-200 dark:border-chatBorder flex items-center justify-between gap-1.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  {colTasks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => toggleSelectColumn(colTasks)}
+                      className="text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 transition cursor-pointer p-0.5 rounded"
+                      title={
+                        colTasks.every((t) => selectedTaskIds.has(String(t.id)))
+                          ? 'Desmarcar todos desta coluna'
+                          : 'Selecionar todos desta coluna'
+                      }
+                    >
+                      {colTasks.every((t) => selectedTaskIds.has(String(t.id))) ? (
+                        <CheckSquare size={15} className="text-brand-600 dark:text-brand-400" />
+                      ) : (
+                        <Square size={15} />
+                      )}
+                    </button>
+                  )}
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded border truncate ${col.color}`}>
                     {col.title}
                   </span>
                 </div>
-                <span className="text-xs font-bold text-chatTextMuted bg-slate-100 dark:bg-chatSidebar px-2 py-0.5 rounded-full border border-slate-200 dark:border-chatBorder">
-                  {colTasks.length}
-                </span>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {colTasks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => handleClearColumn(col.id, col.title, colTasks)}
+                      className={`text-[11px] font-semibold px-2 py-0.5 rounded flex items-center gap-1 transition cursor-pointer ${
+                        col.id === 'done'
+                          ? 'bg-red-50 hover:bg-red-100 dark:bg-red-950/40 dark:hover:bg-red-900/50 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50'
+                          : 'bg-slate-100 hover:bg-red-50 dark:bg-chatSidebar dark:hover:bg-red-950/30 text-chatTextMuted hover:text-red-600 border border-slate-200 dark:border-chatBorder'
+                      }`}
+                      title={`Limpar e excluir todos os ${colTasks.length} cards desta coluna`}
+                    >
+                      <Trash2 size={12} />
+                      <span>Limpar</span>
+                    </button>
+                  )}
+
+                  <span className="text-xs font-bold text-chatTextMuted bg-slate-100 dark:bg-chatSidebar px-2 py-0.5 rounded-full border border-slate-200 dark:border-chatBorder">
+                    {colTasks.length}
+                  </span>
+                </div>
               </div>
 
               {/* Lista de Cards da Coluna */}
@@ -580,36 +740,57 @@ export default function KanbanBoard({
                     Nenhuma tarefa
                   </div>
                 ) : (
-                  colTasks.map((t) => (
-                    <div
-                      key={t.id}
-                      onClick={() => onCardClick && onCardClick(t)}
-                      className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder hover:border-brand-500 hover:shadow-md rounded-lg p-3.5 shadow-xs space-y-2.5 transition group cursor-pointer"
-                      title="Clique para ampliar, delegar ou transferir entre departamentos"
-                    >
-                      {/* Topo do Card: Prioridade, Setor e Canal */}
-                      <div className="flex items-center justify-between gap-1 flex-wrap">
-                        <div className="flex items-center gap-1.5">
-                          {getPriorityBadge(t.priority, t.isVip)}
-                          {t.department && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-chatSidebar text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-chatBorder">
-                              🏢 {t.department}
+                  colTasks.map((t) => {
+                    const isCardSelected = selectedTaskIds.has(String(t.id));
+                    return (
+                      <div
+                        key={t.id}
+                        onClick={() => onCardClick && onCardClick(t)}
+                        className={`bg-white dark:bg-chatCard border hover:border-brand-500 hover:shadow-md rounded-lg p-3.5 shadow-xs space-y-2.5 transition group cursor-pointer ${
+                          isCardSelected
+                            ? 'border-brand-500 ring-2 ring-brand-500/20 bg-brand-50/20 dark:bg-brand-950/20'
+                            : 'border-slate-200 dark:border-chatBorder'
+                        }`}
+                        title="Clique para ampliar, delegar ou transferir entre departamentos"
+                      >
+                        {/* Topo do Card: Checkbox, Prioridade, Setor e Canal */}
+                        <div className="flex items-center justify-between gap-1 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelectCard(t.id);
+                              }}
+                              className={`p-0.5 rounded transition cursor-pointer ${
+                                isCardSelected
+                                  ? 'text-brand-600 dark:text-brand-400'
+                                  : 'text-slate-300 dark:text-slate-600 hover:text-brand-600'
+                              }`}
+                              title={isCardSelected ? 'Desmarcar' : 'Selecionar para ação em massa'}
+                            >
+                              {isCardSelected ? <CheckSquare size={15} /> : <Square size={15} />}
+                            </button>
+                            {getPriorityBadge(t.priority, t.isVip)}
+                            {t.department && (
+                              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 dark:bg-chatSidebar text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-chatBorder">
+                                🏢 {t.department}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-[10px] font-semibold ${
+                                t.channel?.includes('Privado')
+                                  ? 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30'
+                                  : 'text-brand-600 dark:text-brand-500'
+                              }`}
+                            >
+                              {t.channel}
                             </span>
-                          )}
+                            <Maximize2 size={12} className="text-chatTextMuted group-hover:text-brand-600 transition" />
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`text-[10px] font-semibold ${
-                              t.channel?.includes('Privado')
-                                ? 'text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-950/40 px-1.5 py-0.5 rounded border border-purple-200 dark:border-purple-500/30'
-                                : 'text-brand-600 dark:text-brand-500'
-                            }`}
-                          >
-                            {t.channel}
-                          </span>
-                          <Maximize2 size={12} className="text-chatTextMuted group-hover:text-brand-600 transition" />
-                        </div>
-                      </div>
 
                       {/* Título da Demanda */}
                       <div>
@@ -703,13 +884,129 @@ export default function KanbanBoard({
                         </button>
                       </div>
                     </div>
-                  ))
-                )}
+                  );
+                }))}
               </div>
             </div>
           );
         })}
       </div>
+
+      {/* Barra Flutuante de Ações em Massa (Batch Action Bar) */}
+      {selectedTaskIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-40 bg-white dark:bg-chatCard border border-brand-500/40 shadow-2xl rounded-2xl px-5 py-3 flex items-center gap-3 sm:gap-4 animate-in fade-in slide-in-from-bottom-4">
+          <div className="flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-brand-600 text-white flex items-center justify-center text-xs font-bold">
+              {selectedTaskIds.size}
+            </span>
+            <span className="text-xs font-bold text-chatTextTitle whitespace-nowrap">
+              {selectedTaskIds.size} card{selectedTaskIds.size > 1 ? 's' : ''} selecionado{selectedTaskIds.size > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div className="h-4 w-px bg-slate-200 dark:bg-chatBorder hidden sm:block" />
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleRequestBulkDelete(Array.from(selectedTaskIds))}
+              className="bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+              title="Excluir todos os cards selecionados"
+            >
+              <Trash2 size={13} />
+              <span>Excluir</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => executeBulkMoveStatus(Array.from(selectedTaskIds), 'done')}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition shadow-xs cursor-pointer"
+              title="Mover selecionados para Concluídos"
+            >
+              <Check size={13} />
+              <span>Concluir</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedTaskIds(new Set())}
+              className="text-xs text-chatTextMuted hover:text-chatTextTitle px-2 py-1 transition cursor-pointer"
+              title="Limpar seleção"
+            >
+              <X size={14} className="inline sm:hidden" />
+              <span className="hidden sm:inline">Desmarcar</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Ação em Massa */}
+      {bulkConfirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-chatCard border border-slate-200 dark:border-chatBorder rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-red-600 dark:text-red-400">
+              <div className="p-2.5 rounded-full bg-red-100 dark:bg-red-950/50">
+                <Trash2 size={24} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-chatTextTitle">
+                  {bulkConfirmModal.type === 'clear_column'
+                    ? `Limpar Coluna "${bulkConfirmModal.columnTitle}"?`
+                    : `Excluir ${bulkConfirmModal.count} Card${bulkConfirmModal.count > 1 ? 's' : ''}?`}
+                </h3>
+                <p className="text-xs text-chatTextMuted">
+                  {bulkConfirmModal.type === 'clear_column'
+                    ? 'Esta ação removerá permanentemente todos os cards desta coluna.'
+                    : 'Esta ação removerá permanentemente os cards selecionados.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="text-xs text-chatTextBody bg-slate-50 dark:bg-chatSidebar p-3.5 rounded-xl border border-slate-200 dark:border-chatBorder space-y-1">
+              <div className="flex items-center gap-1.5 font-semibold text-amber-700 dark:text-amber-400">
+                <AlertTriangle size={14} />
+                <span>Confirmação necessária</span>
+              </div>
+              <p>
+                Você está prestes a excluir <strong>{bulkConfirmModal.count}</strong> demanda(s) do banco de dados. Os cards serão removidos em tempo real para toda a equipe.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isBatchOperating}
+                onClick={() =>
+                  setBulkConfirmModal({ isOpen: false, type: 'delete', columnTitle: '', taskIds: [], count: 0 })
+                }
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-chatTextMuted hover:text-chatTextTitle bg-slate-100 dark:bg-chatSidebar hover:bg-slate-200 dark:hover:bg-slate-700 transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={isBatchOperating}
+                onClick={async () => {
+                  setIsBatchOperating(true);
+                  await executeBulkDelete(bulkConfirmModal.taskIds);
+                  setIsBatchOperating(false);
+                  setBulkConfirmModal({ isOpen: false, type: 'delete', columnTitle: '', taskIds: [], count: 0 });
+                }}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-red-600 hover:bg-red-700 transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                {isBatchOperating ? (
+                  <span>Excluindo...</span>
+                ) : (
+                  <>
+                    <Trash2 size={14} />
+                    <span>Confirmar Exclusão ({bulkConfirmModal.count})</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

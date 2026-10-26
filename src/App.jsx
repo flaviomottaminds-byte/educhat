@@ -5147,6 +5147,20 @@ export default function App() {
       });
   };
 
+  // Exclusão em Massa de Cards no Kanban
+  const handleDeleteTasksBatch = async (taskIds = []) => {
+    if (!taskIds || taskIds.length === 0) return;
+    const ids = taskIds.map(String);
+    setTasks((prev) => prev.filter((t) => !ids.includes(String(t.id))));
+    const { error } = await supabase
+      .from('tasks')
+      .delete()
+      .in('id', ids);
+    if (error) {
+      console.warn('Erro ao excluir tarefas em lote no Supabase:', error);
+    }
+  };
+
   // Excluir mensagem do chat e do Supabase (Item 2)
   const handleDeleteMessage = async (messageId) => {
     if (!messageId) return;
@@ -6720,6 +6734,7 @@ export default function App() {
           currentUser={currentUser}
           collaborators={resolvedCollaborators}
           onUpdateTaskStatus={handleUpdateTaskStatus}
+          onDeleteTasksBatch={handleDeleteTasksBatch}
           onCreateTasksBatch={handleCreateMeetTasksBatch}
           vipClients={vipClients}
           slas={slas}
