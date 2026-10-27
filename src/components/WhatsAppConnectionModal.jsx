@@ -59,7 +59,7 @@ export default function WhatsAppConnectionModal({
     status: 'checking',
     pingMs: null,
     webhookEnabled: false,
-    webhookUrl: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook',
+    webhookUrl: 'https://resourceful-edu-chat-flow.base44.app/functions/whatsappWebhook?token=Marila12@',
     totalMessages: null,
     totalContacts: null,
     lastVerifiedAt: null
@@ -608,7 +608,7 @@ export default function WhatsAppConnectionModal({
     handleFetchFromEvolutionEndpoint();
   };
 
-  // Configuração explícita do Webhook Global da Evolution API para o Supabase
+  // Configuração explícita do Webhook Global da Evolution API
   const handleConfigureWebhook = async () => {
     setIsLoadingQR(true);
     setErrorMessage('');
@@ -619,9 +619,9 @@ export default function WhatsAppConnectionModal({
         setConnectedInfo((prev) => ({
           ...prev,
           webhookEnabled: true,
-          webhookUrl: 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook'
+          webhookUrl: 'https://resourceful-edu-chat-flow.base44.app/functions/whatsappWebhook?token=Marila12@'
         }));
-        setSuccessFeedback('✅ Webhook da Evolution API religado e verificado com sucesso para https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook!');
+        setSuccessFeedback('✅ Webhook da Evolution API atualizado e verificado com sucesso para a Base44!');
       } else {
         throw new Error(result.error || 'Falha ao registrar webhook no Railway.');
       }
@@ -1405,7 +1405,7 @@ export default function WhatsAppConnectionModal({
                   </button>
                 </div>
                 <code className="block bg-white dark:bg-chatCard p-2 rounded-lg border border-slate-200 dark:border-chatBorder text-[11px] font-mono text-chatTextMuted break-all select-all">
-                  https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook
+                  https://resourceful-edu-chat-flow.base44.app/functions/whatsappWebhook
                 </code>
                 <p className="text-[11px] text-chatTextMuted">
                   Eventos ativos: <code>MESSAGES_UPSERT</code>, <code>MESSAGES_UPDATE</code>, <code>CONNECTION_UPDATE</code>, <code>SEND_MESSAGE</code>. As mensagens recebidas são gravadas no Supabase em tempo real.

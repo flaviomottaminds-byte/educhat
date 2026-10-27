@@ -4,7 +4,7 @@ const https = require('https');
 const EVO_URL = process.env.VITE_EVOLUTION_API_URL || 'https://evolution-api-production-3fb2.up.railway.app';
 const EVO_KEY = process.env.VITE_EVOLUTION_API_KEY || 'e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f';
 const EVO_INSTANCE = process.env.VITE_EVOLUTION_INSTANCE || 'EduChat-Matriz-01';
-const WEBHOOK_URL = 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook';
+const WEBHOOK_URL = 'https://resourceful-edu-chat-flow.base44.app/functions/whatsappWebhook?token=Marila12@';
 
 async function setupWebhook() {
   console.log('====================================================');

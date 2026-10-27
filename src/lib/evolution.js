@@ -4,7 +4,7 @@ import { canonicalizeChatId, canonicalizeWhatsAppPhone } from '../data/initialDa
 const DEFAULT_URL = 'https://evolution-api-production-3fb2.up.railway.app';
 const DEFAULT_KEY = 'e0e80ca25b168c9b0e559b1b7949f80ea06a94b920cb911acddc7b9a9b02475f';
 const DEFAULT_INSTANCE = 'EduChat-Matriz-01';
-export const EVOLUTION_WEBHOOK_URL = 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook';
+export const EVOLUTION_WEBHOOK_URL = 'https://resourceful-edu-chat-flow.base44.app/functions/whatsappWebhook?token=Marila12@';
 const WEBHOOK_EVENTS = [
   'MESSAGES_UPSERT',
   'MESSAGES_UPDATE',
