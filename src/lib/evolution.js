@@ -70,51 +70,12 @@ export async function getEvolutionState() {
   }
 }
 
-/** Garante (e força, se necessário) o webhook ativo apontando para a Edge Function do Supabase. */
-export async function ensureEvolutionWebhook({ force = false } = {}) {
-  const { instance } = getEvolutionConfig();
-  try {
-    if (!force) {
-      const res = await evoFetch(`/webhook/find/${instance}`, { method: 'GET' }, 8000);
-      if (res.ok) {
-        const d = await res.json().catch(() => ({}));
-        const w = d?.webhook || d;
-        if (w?.enabled && w?.url === EVOLUTION_WEBHOOK_URL && (w?.events || []).includes('MESSAGES_UPSERT')) {
-          return true;
-        }
-      }
-    }
-    // Suporte universal a Evolution API v1.x e v2.x (Railway) com desencriptação de mídia ativa (base64: true)
-    const webhookPayload = {
-      enabled: true,
-      url: EVOLUTION_WEBHOOK_URL,
-      webhook_by_events: false,
-      byEvents: false,
-      base64: true,
-      webhook_base64: true,
-      events: WEBHOOK_EVENTS,
-      webhook: {
-        enabled: true,
-        url: EVOLUTION_WEBHOOK_URL,
-        byEvents: false,
-        base64: true,
-        webhook_by_events: false,
-        webhook_base64: true,
-        events: WEBHOOK_EVENTS
-      }
-    };
-    const set = await evoFetch(
-      `/webhook/set/${instance}`,
-      {
-        method: 'POST',
-        body: JSON.stringify(webhookPayload)
-      },
-      10000
-    );
-    return set.ok;
-  } catch {
-    return false;
-  }
+/**
+ * DESATIVADO DEFINITIVAMENTE: O sistema foi migrado para uma plataforma externa.
+ * Não altera nem sobrescreve o webhook da Evolution API sob nenhuma hipótese.
+ */
+export async function ensureEvolutionWebhook() {
+  return true;
 }
 
 /** Helper para formatar número brasileiro */

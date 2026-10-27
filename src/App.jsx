@@ -85,10 +85,7 @@ import {
   sendWhatsAppText,
   sendWhatsAppAudio,
   sendWhatsAppMedia,
-  cleanMediaPayload,
-  ensureEvolutionWebhook,
-  getEvolutionState,
-  fetchEvolutionRecentMessages
+  cleanMediaPayload
 } from './lib/evolution';
 import {
   publishInternalMessage,
@@ -301,122 +298,6 @@ export default function App() {
     return () => {
       cancelled = true;
       clearInterval(id);
-    };
-  }, []);
-  // Religamento forçado do WhatsApp (Evolution API): ao abrir força o webhook -> Supabase e revalida a cada 5 min
-  useEffect(() => {
-    let cancelled = false;
-    const check = async (force) => {
-      try {
-        await ensureEvolutionWebhook({ force });
-      } catch (err) {
-        console.warn('[WhatsApp Webhook] Erro ao sincronizar webhook:', err);
-      }
-      const state = await getEvolutionState();
-      if (cancelled) return;
-      if (state !== 'open') {
-        console.warn('[WhatsApp] Evolution API estado atual: ' + state);
-      }
-    };
-    check(true);
-    const id = setInterval(() => check(false), 5 * 60 * 1000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  // Sincronização Direta e Contínua com a Evolution API (WhatsApp Real):
-  // Lê os chats e mensagens reais da instância 'EduChat-Matriz-01' a cada 3.5 segundos
-  useEffect(() => {
-    let cancelled = false;
-
-    const syncLiveEvolution = async () => {
-      try {
-        const { contacts: liveContacts, messagesByChat: liveMessages } =
-          await fetchEvolutionRecentMessages({ limit: 50 });
-
-        if (cancelled) return;
-
-        setLastSyncTime(getSaoPauloTime());
-        setRealtimeStatus('connected');
-
-        if (Array.isArray(liveContacts) && liveContacts.length > 0) {
-          const activeUser = currentUserRef.current || currentUser;
-          const isMgr = hasFullPortfolioAccess(activeUser);
-
-          setWhatsAppContacts((prev) => {
-            const next = [...prev];
-            liveContacts.forEach((incoming) => {
-              const incomingKey = getCanonicalPhoneKey(incoming);
-              const idx = next.findIndex(
-                (c) =>
-                  c.id === incoming.id ||
-                  (incoming.remoteJid && c.remoteJid === incoming.remoteJid) ||
-                  (incomingKey && getCanonicalPhoneKey(c) === incomingKey) ||
-                  (c.phone && incoming.phone && c.phone.replace(/\D/g, '') === incoming.phone.replace(/\D/g, ''))
-              );
-              if (idx !== -1) {
-                const merged = {
-                  ...incoming,
-                  ...next[idx],
-                  // Preserva estritamente a atribuição e status definidos na aplicação (evita sobrescrever com dados brutos)
-                  assignee: next[idx].assignee !== undefined ? next[idx].assignee : (incoming.assignee || null),
-                  assigned_to: next[idx].assigned_to !== undefined ? next[idx].assigned_to : (incoming.assigned_to || null),
-                  assignees: Array.isArray(next[idx].assignees) ? next[idx].assignees : (incoming.assignees || []),
-                  department: next[idx].department || incoming.department || 'Triagem URA',
-                  status: next[idx].status || incoming.status || 'ura_inedito',
-                  statusLabel: next[idx].statusLabel || incoming.statusLabel || 'Fila • Triagem Geral',
-                  triageContext: next[idx].triageContext || incoming.triageContext,
-                  name: incoming.name && incoming.hasRealName ? incoming.name : (next[idx].name || incoming.name),
-                  phone: incoming.phone || next[idx].phone,
-                  lastInteraction: incoming.lastInteraction || next[idx].lastInteraction,
-                  lastMessageAt: incoming.lastMessageAt || next[idx].lastMessageAt,
-                  remoteJid: incoming.remoteJid || next[idx].remoteJid,
-                  remoteJidAlt: incoming.remoteJidAlt || next[idx].remoteJidAlt,
-                  preferredTarget: incoming.preferredTarget || next[idx].preferredTarget || incoming.remoteJid || next[idx].remoteJid
-                };
-                if (!isMgr && !canUserViewChat(merged, activeUser)) {
-                  next.splice(idx, 1);
-                } else {
-                  next[idx] = merged;
-                }
-              } else {
-                if (isMgr || canUserViewChat(incoming, activeUser)) {
-                  next.unshift(incoming);
-                }
-              }
-            });
-            return next;
-          });
-        }
-
-        if (liveMessages && Object.keys(liveMessages).length > 0) {
-          // ASSEPSIA DEFINITIVA: Desativação total da injeção cega de mensagens de contatos em `setMessages`.
-          // O histórico de mensagens é gerenciado exclusivamente pelo Supabase / Realtime para o chat ativo.
-          // Aqui mantemos apenas a atualização de status de IA/metadados de contatos se necessário.
-          const timeInfo = getBrasiliaTime();
-          Object.keys(liveMessages).forEach((chatKey) => {
-            const msgs = liveMessages[chatKey] || [];
-            const studentMessages = msgs.filter((m) => m.fromStudent);
-            if (studentMessages.length > 0 && timeInfo.isAfterHours) {
-              setWhatsAppContacts((prevContacts) =>
-                prevContacts.map((c) => (c.id === chatKey ? { ...c, aiActive: true } : c))
-              );
-            }
-          });
-        }
-      } catch (err) {
-        console.warn('[Evolution Sync] Falha:', err);
-      }
-    };
-
-    syncLiveEvolution();
-    const evoInterval = setInterval(syncLiveEvolution, 3500);
-
-    return () => {
-      cancelled = true;
-      clearInterval(evoInterval);
     };
   }, []);
 

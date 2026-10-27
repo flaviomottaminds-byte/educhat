@@ -161,9 +161,8 @@ export default function WhatsAppConnectionModal({
     }
   };
 
-  // Garante que o Webhook de entrada na Evolution API esteja sempre ativo e apontando para o Supabase
+  // Consulta passiva do Webhook na Evolution API (sem modificar nem sobrescrever a URL externa)
   const ensureWebhookActive = async (cleanUrl, instName, headers) => {
-    const targetWebhookUrl = 'https://yuhtzkhoxnabrsrhqdni.supabase.co/functions/v1/evolution-webhook';
     try {
       const findRes = await fetchWithTimeout(`${cleanUrl}/webhook/find/${instName}`, {
         method: 'GET',
@@ -172,41 +171,14 @@ export default function WhatsAppConnectionModal({
 
       if (findRes.ok) {
         const findData = await findRes.json();
-        const currentUrl = findData?.url || findData?.webhook?.url;
+        const currentUrl = findData?.url || findData?.webhook?.url || '';
         const isEnabled = Boolean(findData?.enabled ?? findData?.webhook?.enabled);
-        const events = findData?.events || findData?.webhook?.events || [];
-        const base64Active = Boolean(findData?.base64 ?? findData?.webhook?.base64);
-        if (isEnabled && base64Active && currentUrl === targetWebhookUrl && events.includes('MESSAGES_UPSERT')) {
-          return { enabled: true, url: currentUrl, autoUpdated: false };
-        }
+        return { enabled: isEnabled, url: currentUrl, autoUpdated: false };
       }
-
-      // Religamento automático do Webhook com suporte obrigatório a Base64 desencriptado
-      const setRes = await fetchWithTimeout(`${cleanUrl}/webhook/set/${instName}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          webhook: {
-            enabled: true,
-            url: targetWebhookUrl,
-            byEvents: false,
-            base64: true,
-            webhook_by_events: false,
-            webhook_base64: true,
-            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'CONNECTION_UPDATE', 'SEND_MESSAGE']
-          }
-        })
-      }, 8000);
-
-      return {
-        enabled: setRes.ok,
-        url: targetWebhookUrl,
-        autoUpdated: setRes.ok
-      };
     } catch (whErr) {
-      console.warn('Aviso ao verificar/religar webhook na Evolution API:', whErr);
-      return { enabled: false, url: targetWebhookUrl, autoUpdated: false };
+      console.warn('Aviso ao consultar webhook na Evolution API:', whErr);
     }
+    return { enabled: false, url: '', autoUpdated: false };
   };
 
   // Inicialização ao abrir o modal: Faz checagem REAL imediata na Evolution API
@@ -614,10 +586,7 @@ export default function WhatsAppConnectionModal({
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      setSuccessFeedback(`2/3 Religando Webhook para o Supabase (/webhook/set/${instName})...`);
-      await callEvolutionApi('set-webhook');
-
-      setSuccessFeedback(`3/3 Gerando novo QR Code oficial na Evolution API (/instance/connect/${instName})...`);
+      setSuccessFeedback(`2/2 Gerando novo QR Code oficial na Evolution API (/instance/connect/${instName})...`);
       const result = await callEvolutionApi('connect');
       const payloadData = result?.data?.data || result?.data;
       const plotted = await handleConvertAndPlotQRCode(payloadData);
