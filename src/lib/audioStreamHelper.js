@@ -27,11 +27,14 @@ export function getSupportedAudioMimeType() {
   }
 
   // Array com a ordem exata de prioridade de compatibilidade cruzada
+  // WhatsApp e Evolution API exigem nativamente audio/ogg; codecs=opus para PTT
   const priorityTypes = [
-    { mimeType: 'audio/mp4', extension: 'mp4' },
-    { mimeType: 'audio/mpeg', extension: 'mp3' },
+    { mimeType: 'audio/ogg; codecs=opus', extension: 'ogg' },
+    { mimeType: 'audio/webm; codecs=opus', extension: 'webm' },
+    { mimeType: 'audio/ogg', extension: 'ogg' },
     { mimeType: 'audio/webm', extension: 'webm' },
-    { mimeType: 'audio/ogg', extension: 'ogg' }
+    { mimeType: 'audio/mp4', extension: 'mp4' },
+    { mimeType: 'audio/mpeg', extension: 'mp3' }
   ];
 
   for (const candidate of priorityTypes) {

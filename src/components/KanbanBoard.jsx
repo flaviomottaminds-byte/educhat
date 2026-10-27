@@ -13,7 +13,8 @@ import {
   Square,
   Check,
   X,
-  AlertTriangle
+  AlertTriangle,
+  Download
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { supabase } from '../lib/supabase';
@@ -65,6 +66,79 @@ export function normalizeTaskStatus(rawStatus) {
   if (s === 'in_progress' || s === 'andamento' || s === 'em andamento' || s === 'em_andamento') return 'in_progress';
   if (s === 'waiting' || s === 'aguardando' || s === 'aguardando retorno' || s === 'aguardando_retorno') return 'waiting';
   return 'backlog';
+}
+
+export function exportTasksToCSV(tasksToExport = [], filenamePrefix = 'kanban_demandas') {
+  if (!tasksToExport || tasksToExport.length === 0) {
+    alert('Nenhuma demanda disponível para exportação.');
+    return;
+  }
+
+  const statusMap = {
+    backlog: 'Pendente / A Fazer',
+    in_progress: 'Em Andamento',
+    waiting: 'Aguardando Retorno',
+    done: 'Concluído'
+  };
+
+  const headers = [
+    'ID',
+    'Título',
+    'Descrição',
+    'Status',
+    'Prioridade',
+    'Responsável',
+    'Solicitante',
+    'Departamento Solicitante',
+    'Departamento Executor',
+    'Canal de Origem',
+    'Data de Abertura',
+    'Prazo SLA',
+    'VIP',
+    'Qtd Notas',
+    'Qtd Anexos'
+  ];
+
+  const escapeCSV = (val) => {
+    if (val === null || val === undefined) return '""';
+    const str = String(val).replace(/"/g, '""').replace(/[\r\n]+/g, ' ');
+    return `"${str}"`;
+  };
+
+  const rows = tasksToExport.map((t) => {
+    const normStatus = normalizeTaskStatus(t.status);
+    return [
+      escapeCSV(t.id),
+      escapeCSV(t.title),
+      escapeCSV(t.desc || t.description || ''),
+      escapeCSV(statusMap[normStatus] || normStatus),
+      escapeCSV((t.priority || 'media').toUpperCase()),
+      escapeCSV(t.assignee || 'Não atribuído'),
+      escapeCSV(t.requester || 'Não especificado'),
+      escapeCSV(t.requesterDept || ''),
+      escapeCSV(t.department || 'Geral'),
+      escapeCSV(t.channel || '#geral'),
+      escapeCSV(formatCardDateTime(t.created_at || t.createdAt)),
+      escapeCSV(t.dueDate || 'A definir'),
+      escapeCSV(t.isVip ? 'Sim' : 'Não'),
+      escapeCSV(t.comments?.length || 0),
+      escapeCSV(t.attachments?.length || 0)
+    ].join(';');
+  });
+
+  // UTF-8 BOM (\uFEFF) garante que o Excel no Windows abra com acentuação correta
+  const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  link.setAttribute('href', url);
+  link.setAttribute('download', `${filenamePrefix}_${todayStr}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 export default function KanbanBoard({
@@ -518,6 +592,15 @@ export default function KanbanBoard({
             <h2 className="text-xl sm:text-2xl font-bold text-chatTextTitle flex items-center gap-2">
               📋 Quadro de Demandas
             </h2>
+            <button
+              type="button"
+              onClick={() => exportTasksToCSV(filteredTasks, viewMode === 'my' ? 'meus_kanbans' : 'kanban_equipe')}
+              className="bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 text-xs font-bold px-2.5 py-1 rounded-lg flex items-center gap-1 transition cursor-pointer shadow-2xs"
+              title={`Exportar ${filteredTasks.length} demandas visíveis diretamente em planilha CSV`}
+            >
+              <Download size={13} className="text-emerald-600 dark:text-emerald-400" />
+              <span>Exportar CSV ({filteredTasks.length})</span>
+            </button>
             <span
               className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1 border ${
                 isManager
@@ -683,6 +766,16 @@ export default function KanbanBoard({
               </div>
             </>
           )}
+
+          <button
+            type="button"
+            onClick={() => exportTasksToCSV(filteredTasks, viewMode === 'my' ? 'meus_kanbans' : 'kanban_equipe')}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-lg flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+            title={`Exportar ${filteredTasks.length} demandas visíveis em formato CSV para Excel`}
+          >
+            <Download size={15} />
+            <span>Exportar CSV</span>
+          </button>
 
           <button
             type="button"
@@ -947,6 +1040,19 @@ export default function KanbanBoard({
             >
               <Check size={13} />
               <span>Concluir</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                const selected = boardTasks.filter((t) => selectedTaskIds.has(String(t.id)));
+                exportTasksToCSV(selected, 'kanban_selecionados');
+              }}
+              className="bg-slate-100 hover:bg-slate-200 dark:bg-chatSidebar dark:hover:bg-slate-700 text-chatTextTitle text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 border border-slate-300 dark:border-chatBorder transition shadow-xs cursor-pointer"
+              title="Exportar os cards selecionados para CSV"
+            >
+              <Download size={13} className="text-emerald-600 dark:text-emerald-400" />
+              <span>Exportar CSV</span>
             </button>
 
             <button

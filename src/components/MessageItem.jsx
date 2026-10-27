@@ -125,7 +125,11 @@ function parseMessageContent(m) {
   const isAudioFlag = Boolean(m.isAudio || m.is_audio || m.duration);
   const isStrictAudio = !isImage && (isAudioMime || (isAudioFlag && (isAudioExt || !attachment)));
 
-  const isFile = Boolean(attachment && !isImage && !isStrictAudio);
+  const isVideoMime = mimeType.startsWith('video/');
+  const isVideoExt = !mimeType && attachment?.name && /\.(mp4|mov|avi|webm|mkv)$/i.test(attachment.name);
+  const isVideo = Boolean((isVideoMime || isVideoExt || m.isVideo || m.is_video || attachment?.isVideo) && !isImage && !isStrictAudio);
+
+  const isFile = Boolean(attachment && !isImage && !isStrictAudio && !isVideo);
 
   const cleanText = sanitizedText
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -151,6 +155,7 @@ function parseMessageContent(m) {
     isAudio: isStrictAudio,
     isOnlyAudioPlaceholder,
     isImage,
+    isVideo,
     isFile,
     attachment,
     audioUrl,
@@ -846,6 +851,30 @@ function MessageItemComponent({
                     type="button"
                     onClick={() => downloadDocument(parsed.attachment)}
                     className="text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1 font-semibold shrink-0 ml-2 cursor-pointer"
+                  >
+                    <Download size={13} /> Baixar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1.1 Vídeo anexado */}
+          {parsed.attachment && parsed.isVideo && (
+            <div className="mb-2">
+              <div className="rounded-xl overflow-hidden border border-black/10 dark:border-white/10 max-w-sm shadow-xs bg-black/90">
+                <video
+                  src={parsed.attachment.url || parsed.attachment.dataUrl}
+                  controls
+                  preload="metadata"
+                  className="w-full max-h-72 object-contain"
+                />
+                <div className="p-2 bg-black/40 dark:bg-black/60 flex items-center justify-between text-[11.5px] text-white">
+                  <span className="truncate font-medium">{parsed.attachment.name || 'Vídeo'}</span>
+                  <button
+                    type="button"
+                    onClick={() => downloadDocument(parsed.attachment)}
+                    className="text-brand-300 hover:underline flex items-center gap-1 font-semibold shrink-0 ml-2 cursor-pointer"
                   >
                     <Download size={13} /> Baixar
                   </button>

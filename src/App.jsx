@@ -83,6 +83,9 @@ import {
   toWhatsAppNumber,
   toWhatsAppTarget,
   sendWhatsAppText,
+  sendWhatsAppAudio,
+  sendWhatsAppMedia,
+  cleanMediaPayload,
   ensureEvolutionWebhook,
   getEvolutionState,
   fetchEvolutionRecentMessages
@@ -4147,6 +4150,13 @@ export default function App() {
       (!attMime && /\.(webm|ogg|mp3|wav|m4a|opus)$/i.test(attachment?.name || ''))
     );
 
+    const isVideoMsg = !isImageMsg && !isAudioMsg && Boolean(
+      attMime.startsWith('video/') ||
+      attachment?.isVideo ||
+      options.isVideo ||
+      (!attMime && /\.(mp4|mov|avi|webm|mkv)$/i.test(attachment?.name || ''))
+    );
+
     // 0. BLINDAGEM DO SENDER_ID NA INSERÇÃO:
     // Validação estrita da sessão isolada por perfil ativo
     const activeUser = currentUserRef.current || currentUser;
@@ -4178,11 +4188,13 @@ export default function App() {
       attachment: attachment ? {
         ...attachment,
         isImage: isImageMsg,
-        isAudio: isAudioMsg
+        isAudio: isAudioMsg,
+        isVideo: isVideoMsg
       } : null,
       replyTo: options.replyTo || null,
       isAudio: isAudioMsg,
       isImage: isImageMsg,
+      isVideo: isVideoMsg,
       audioUrl: isAudioMsg ? (attachment?.url || attachment?.dataUrl || options.audioUrl || null) : null,
       duration: isAudioMsg ? (options.duration || attachment?.duration || '0:14') : null,
       status: 'sending', // Provisório imediato: animação de envio rápido
@@ -4313,39 +4325,169 @@ export default function App() {
               ),
             }));
           }
-        } else {
+        } else if (attachment) {
+          // =========================================================================
+          // ENVIO DE MÍDIA OUTBOUND (WhatsApp / Evolution API):
+          // Envia áudio PTT (gravação de voz nativa), vídeo, imagem ou documento.
+          // Garante persistência no Supabase Storage e entrega auditada ao destinatário.
+          // =========================================================================
           try {
-            const dmRecipientId = activeChat.type === 'dm' ? activeChat.id : null;
-            const { error: insertError } = await supabase.from('messages').insert([{
-              id: newMsg.id,
-              chat_id: currentChatKey,
-              sender_id: verifiedSenderId,
-              sender_name: verifiedSenderName,
-              recipient_id: dmRecipientId,
-              text: payloadText,
-              timestamp: newMsg.timestamp
-            }]);
+            let mediaPublicUrl = attachment.url;
 
-            if (insertError) {
-              console.error("Erro no Insert:", insertError);
-              toast.error(insertError.message || 'Erro no banco de dados');
+            // Se houver arquivo associado e a URL ainda não for HTTP, faz o upload no bucket público chat-attachments
+            if (attachment.file && (!mediaPublicUrl || !mediaPublicUrl.startsWith('http'))) {
+              try {
+                const safeName = (attachment.name || 'arquivo').replace(/[^a-zA-Z0-9._-]/g, '_');
+                const storagePath = `whatsapp/${currentChatKey}/${Date.now()}_${safeName}`;
+                const { error: upErr } = await supabase.storage
+                  .from('chat-attachments')
+                  .upload(storagePath, attachment.file, {
+                    contentType: attachment.type || (isVideoMsg ? 'video/mp4' : isImageMsg ? 'image/jpeg' : 'application/octet-stream'),
+                    upsert: true
+                  });
+                if (!upErr) {
+                  const { data: pData } = supabase.storage.from('chat-attachments').getPublicUrl(storagePath);
+                  if (pData?.publicUrl) {
+                    mediaPublicUrl = pData.publicUrl;
+                    attachment.url = mediaPublicUrl;
+                    attachment.storagePath = storagePath;
+                  }
+                } else {
+                  console.warn('[Storage] Upload falhou no bucket chat-attachments:', upErr);
+                }
+              } catch (upEx) {
+                console.warn('[Storage] Erro ao fazer upload de anexo no storage:', upEx);
+              }
+            }
+
+            // Clona objeto de anexo garantindo que não contenha instâncias nativas não serializáveis
+            const serializableAttachment = { ...attachment };
+            delete serializableAttachment.file;
+            if (mediaPublicUrl) {
+              serializableAttachment.url = mediaPublicUrl;
+            }
+
+            let result;
+            if (isAudioMsg) {
+              // Áudio gravado pela equipe (Voice Note / PTT)
+              const audioSource = mediaPublicUrl || attachment.url || attachment.dataUrl || options.audioUrl;
+              console.log('[WhatsApp Outbound] Enviando áudio PTT para', primaryTarget, 'fonte:', typeof audioSource === 'string' ? audioSource.substring(0, 80) : audioSource);
+              result = await sendWhatsAppAudio(
+                primaryTarget,
+                audioSource,
+                {
+                  encoding: true,
+                  mimetype: attachment.type || 'audio/ogg; codecs=opus',
+                  fileName: attachment.name || 'audio.ogg'
+                },
+                fallbackTarget
+              );
+            } else if (isVideoMsg) {
+              // Vídeo outbound
+              const videoSource = mediaPublicUrl || attachment.url || attachment.dataUrl;
+              console.log('[WhatsApp Outbound] Enviando vídeo para', primaryTarget, 'fonte:', typeof videoSource === 'string' ? videoSource.substring(0, 80) : videoSource);
+              result = await sendWhatsAppMedia(
+                primaryTarget,
+                {
+                  mediatype: 'video',
+                  mimetype: attachment.type || 'video/mp4',
+                  caption: rawText || '',
+                  media: videoSource,
+                  fileName: attachment.name || 'video.mp4',
+                  isVideo: true
+                },
+                fallbackTarget
+              );
+            } else if (isImageMsg) {
+              // Imagem outbound
+              const imageSource = mediaPublicUrl || attachment.url || attachment.dataUrl;
+              console.log('[WhatsApp Outbound] Enviando imagem para', primaryTarget, 'fonte:', typeof imageSource === 'string' ? imageSource.substring(0, 80) : imageSource);
+              result = await sendWhatsAppMedia(
+                primaryTarget,
+                {
+                  mediatype: 'image',
+                  mimetype: attachment.type || 'image/jpeg',
+                  caption: rawText || '',
+                  media: imageSource,
+                  fileName: attachment.name || 'imagem.jpg',
+                  isImage: true
+                },
+                fallbackTarget
+              );
+            } else {
+              // Documento / PDF genérico
+              const docSource = mediaPublicUrl || attachment.url || attachment.dataUrl;
+              console.log('[WhatsApp Outbound] Enviando documento para', primaryTarget, 'fonte:', typeof docSource === 'string' ? docSource.substring(0, 80) : docSource);
+              result = await sendWhatsAppMedia(
+                primaryTarget,
+                {
+                  mediatype: 'document',
+                  mimetype: attachment.type || 'application/pdf',
+                  caption: rawText || '',
+                  media: docSource,
+                  fileName: attachment.name || 'documento.pdf'
+                },
+                fallbackTarget
+              );
+            }
+
+            if (!result || !result.ok || !result.messageId) {
+              console.error('[WhatsApp Outbound Mídia] Falha no envio:', result?.error);
+              toast.error(`Falha ao enviar mídia via WhatsApp: ${result?.error || 'Erro no servidor WhatsApp'}`);
               setMessages((prev) => ({
                 ...prev,
                 [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
                   m.id === messageId ? { ...m, status: 'error' } : m
                 ),
               }));
-            } else {
-              setMessages((prev) => ({
-                ...prev,
-                [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
-                  m.id === messageId ? { ...m, status: 'sent' } : m
-                ),
-              }));
+              return;
             }
-          } catch (dbErr) {
-            console.error("Erro no Insert:", dbErr);
-            toast.error(dbErr.message || 'Servidor indisponível');
+
+            const rawId = String(result.messageId);
+            const realId = rawId.startsWith('wa_') ? rawId : 'wa_' + rawId;
+            const updatedMsg = {
+              ...newMsg,
+              id: realId,
+              senderId: verifiedSenderId,
+              senderName: verifiedSenderName,
+              status: 'sent',
+              attachment: serializableAttachment
+            };
+
+            setMessages((prev) => ({
+              ...prev,
+              [currentChatKey]: (prev[currentChatKey] || []).map((m) =>
+                m.id === messageId ? updatedMsg : m
+              ),
+            }));
+
+            let finalPayloadText = rawText;
+            if (serializableAttachment) {
+              finalPayloadText = `${finalPayloadText ? finalPayloadText + '\n' : ''}[ARQUIVO_ANEXO:${JSON.stringify(serializableAttachment)}]`;
+            }
+            if (isAudioMsg && (mediaPublicUrl || serializableAttachment?.url || options.audioUrl)) {
+              const audioHref = mediaPublicUrl || serializableAttachment?.url || options.audioUrl;
+              finalPayloadText += `\n<!-- AUDIO_URL:${audioHref} -->\n<!-- IS_AUDIO:true -->`;
+            }
+            if (options.replyTo) {
+              finalPayloadText += `\n<!-- REPLY_TO:${JSON.stringify(options.replyTo)} -->`;
+            }
+
+            const { error: waInsertError } = await supabase.from('messages').insert([{
+              id: realId,
+              chat_id: currentChatKey,
+              sender_id: verifiedSenderId,
+              sender_name: verifiedSenderName,
+              text: finalPayloadText,
+              timestamp: updatedMsg.timestamp
+            }]).select();
+
+            if (waInsertError) {
+              console.error("Erro no Insert WhatsApp Media:", waInsertError);
+            }
+          } catch (mediaErr) {
+            console.error("Erro no envio de mídia WhatsApp:", mediaErr);
+            toast.error(mediaErr.message || 'Erro ao enviar mídia para o WhatsApp');
             setMessages((prev) => ({
               ...prev,
               [currentChatKey]: (prev[currentChatKey] || []).map((m) =>

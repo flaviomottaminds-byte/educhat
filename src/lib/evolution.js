@@ -215,6 +215,220 @@ export async function sendWhatsAppText(target, text, fallbackTarget = null) {
 }
 
 /**
+ * Normaliza e limpa payloads de mídia: remove prefixos "data:...;base64," deixando Base64 puro
+ * ou preserva a URL pública absoluta intacta.
+ */
+export function cleanMediaPayload(media) {
+  if (typeof media !== 'string') return media;
+  const str = media.trim();
+  if (str.startsWith('data:')) {
+    const commaIdx = str.indexOf(',');
+    if (commaIdx !== -1) {
+      return str.substring(commaIdx + 1);
+    }
+  }
+  return str;
+}
+
+/**
+ * Envia mensagem de áudio / PTT (Voice Note gravada) via Evolution API.
+ * 1º Tenta o endpoint nativo PTT: /message/sendWhatsAppAudio/${instance} com encoding: true
+ * 2º Se falhar, usa fallback para /message/sendMedia/${instance} com mediatype: 'audio' e ptt: true
+ * Retorna { ok, messageId, data, error }.
+ */
+export async function sendWhatsAppAudio(target, audioSource, options = {}, fallbackTarget = null) {
+  const { instance } = getEvolutionConfig();
+  const to = toWhatsAppTarget(target);
+  if (!to) return { ok: false, error: 'Número/Destinatário inválido para envio de áudio' };
+
+  const cleanedAudio = cleanMediaPayload(audioSource);
+  if (!cleanedAudio) return { ok: false, error: 'Fonte de áudio ausente ou inválida' };
+
+  const attemptSend = async (dest) => {
+    try {
+      console.log(`[Evolution API] Enviando áudio PTT para ${dest}...`);
+      // Tentativa 1: Endpoint dedicado para PTT / WhatsApp Voice Note
+      const pttPayload = {
+        number: dest,
+        audio: cleanedAudio,
+        encoding: true, // Força conversão server-side pelo ffmpeg da Evolution para audio/ogg; codecs=opus
+        delay: options.delay || 1200
+      };
+
+      const res = await evoFetch(
+        `/message/sendWhatsAppAudio/${instance}`,
+        { method: 'POST', body: JSON.stringify(pttPayload) },
+        25000
+      );
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        const messageId =
+          data?.key?.id ||
+          data?.id ||
+          data?.messageId ||
+          data?.[0]?.key?.id ||
+          `wa_${Date.now()}`;
+        console.log(`[Evolution API] Áudio PTT enviado com sucesso para ${dest}: ${messageId}`);
+        return { ok: true, messageId, data };
+      }
+
+      console.warn(`[Evolution API] Falha no sendWhatsAppAudio (${res.status}), tentando fallback sendMedia...`, data);
+
+      // Tentativa 2: Fallback para /message/sendMedia com mediatype: 'audio' e ptt: true
+      const mediaPayload = {
+        number: dest,
+        mediatype: 'audio',
+        mimetype: options.mimetype || 'audio/ogg; codecs=opus',
+        media: cleanedAudio,
+        fileName: options.fileName || 'audio.ogg',
+        ptt: true
+      };
+
+      const resMedia = await evoFetch(
+        `/message/sendMedia/${instance}`,
+        { method: 'POST', body: JSON.stringify(mediaPayload) },
+        25000
+      );
+
+      const mediaData = await resMedia.json().catch(() => ({}));
+      if (resMedia.ok) {
+        const messageId =
+          mediaData?.key?.id ||
+          mediaData?.id ||
+          mediaData?.messageId ||
+          mediaData?.[0]?.key?.id ||
+          `wa_${Date.now()}`;
+        console.log(`[Evolution API] Áudio enviado via sendMedia para ${dest}: ${messageId}`);
+        return { ok: true, messageId, data: mediaData };
+      }
+
+      const errMsg =
+        mediaData?.response?.message?.[0] ||
+        mediaData?.response?.message ||
+        mediaData?.message ||
+        mediaData?.error ||
+        data?.response?.message?.[0] ||
+        data?.message ||
+        `HTTP ${res.status}`;
+      return { ok: false, status: resMedia.status, error: String(errMsg) };
+    } catch (err) {
+      console.error(`[Evolution API] Erro de rede ao enviar áudio para ${dest}:`, err);
+      return { ok: false, error: err.message };
+    }
+  };
+
+  const primaryResult = await attemptSend(to);
+  if (primaryResult.ok) return primaryResult;
+
+  if (fallbackTarget) {
+    const altDest = toWhatsAppTarget(fallbackTarget);
+    if (altDest && altDest !== to) {
+      console.warn(`[Evolution API] Reenviando áudio para fallback ${altDest}...`);
+      const fallbackResult = await attemptSend(altDest);
+      if (fallbackResult.ok) return fallbackResult;
+    }
+  }
+
+  return primaryResult;
+}
+
+/**
+ * Envia mídia (vídeo, imagem ou documento) via Evolution API.
+ * Endpoint: /message/sendMedia/${instance}
+ * Retorna { ok, messageId, data, error }.
+ */
+export async function sendWhatsAppMedia(target, mediaOptions = {}, fallbackTarget = null) {
+  const { instance } = getEvolutionConfig();
+  const to = toWhatsAppTarget(target);
+  if (!to) return { ok: false, error: 'Número/Destinatário inválido para envio de mídia' };
+
+  const cleanedMedia = cleanMediaPayload(mediaOptions.media || mediaOptions.url || mediaOptions.dataUrl);
+  if (!cleanedMedia) return { ok: false, error: 'Mídia ausente ou inválida' };
+
+  let mediatype = mediaOptions.mediatype;
+  if (!mediatype) {
+    if (mediaOptions.isVideo) mediatype = 'video';
+    else if (mediaOptions.isImage) mediatype = 'image';
+    else if (mediaOptions.isAudio) mediatype = 'audio';
+    else mediatype = 'document';
+  }
+
+  let mimetype = mediaOptions.mimetype || mediaOptions.type;
+  if (!mimetype) {
+    if (mediatype === 'video') mimetype = 'video/mp4';
+    else if (mediatype === 'image') mimetype = 'image/jpeg';
+    else if (mediatype === 'audio') mimetype = 'audio/ogg; codecs=opus';
+    else mimetype = 'application/pdf';
+  }
+
+  const fileName = mediaOptions.fileName || mediaOptions.name || (
+    mediatype === 'video' ? 'video.mp4' :
+    mediatype === 'image' ? 'imagem.jpg' :
+    mediatype === 'audio' ? 'audio.ogg' : 'documento.pdf'
+  );
+
+  const attemptSend = async (dest) => {
+    try {
+      console.log(`[Evolution API] Enviando mídia (${mediatype} - ${mimetype}) para ${dest}...`);
+      const payload = {
+        number: dest,
+        mediatype: mediatype,
+        mimetype: mimetype,
+        caption: mediaOptions.caption || mediaOptions.text || '',
+        media: cleanedMedia,
+        fileName: fileName
+      };
+
+      const res = await evoFetch(
+        `/message/sendMedia/${instance}`,
+        { method: 'POST', body: JSON.stringify(payload) },
+        35000 // Timeout expandido para uploads de vídeo e mídias pesadas
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const messageId =
+          data?.key?.id ||
+          data?.id ||
+          data?.messageId ||
+          data?.[0]?.key?.id ||
+          `wa_${Date.now()}`;
+        console.log(`[Evolution API] Mídia (${mediatype}) enviada com sucesso para ${dest}: ${messageId}`);
+        return { ok: true, messageId, data };
+      }
+
+      const errMsg =
+        data?.response?.message?.[0] ||
+        data?.response?.message ||
+        data?.message ||
+        data?.error ||
+        `HTTP ${res.status}`;
+      console.warn(`[Evolution API] Falha no sendMedia para ${dest}:`, errMsg);
+      return { ok: false, status: res.status, error: String(errMsg) };
+    } catch (err) {
+      console.error(`[Evolution API] Erro ao enviar mídia para ${dest}:`, err);
+      return { ok: false, error: err.message };
+    }
+  };
+
+  const primaryResult = await attemptSend(to);
+  if (primaryResult.ok) return primaryResult;
+
+  if (fallbackTarget) {
+    const altDest = toWhatsAppTarget(fallbackTarget);
+    if (altDest && altDest !== to) {
+      console.warn(`[Evolution API] Reenviando mídia para fallback ${altDest}...`);
+      const fallbackResult = await attemptSend(altDest);
+      if (fallbackResult.ok) return fallbackResult;
+    }
+  }
+
+  return primaryResult;
+}
+
+/**
  * Consulta as mensagens mais recentes diretamente do banco da Evolution API.
  * Retorna { contacts: Array, messagesByChat: Record<string, Array> }.
  */

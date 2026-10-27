@@ -847,17 +847,21 @@ export default function ChatArea({
     if (!file) return;
 
     const isImage = file.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
+    const isVideo = file.type?.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/i.test(file.name);
+    const isAudio = file.type?.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac)$/i.test(file.name);
 
     const reader = new FileReader();
     reader.onload = () => {
       setPendingAttachment({
         name: file.name,
         size: (file.size / 1024).toFixed(1) + ' KB',
-        type: file.type || (isImage ? 'image/jpeg' : 'application/octet-stream'),
+        type: file.type || (isImage ? 'image/jpeg' : isVideo ? 'video/mp4' : isAudio ? 'audio/ogg; codecs=opus' : 'application/octet-stream'),
         dataUrl: reader.result,
         url: reader.result,
         isImage: isImage,
-        isAudio: false
+        isVideo: isVideo,
+        isAudio: isAudio,
+        file: file
       });
     };
     reader.readAsDataURL(file);
@@ -909,16 +913,20 @@ export default function ChatArea({
       if (file && (file.type || file.size > 0)) {
         e.preventDefault();
         const isImage = file.type?.startsWith('image/') || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name);
+        const isVideo = file.type?.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/i.test(file.name);
+        const isAudio = file.type?.startsWith('audio/') || /\.(ogg|mp3|wav|m4a|aac)$/i.test(file.name);
         const reader = new FileReader();
         reader.onload = () => {
           setPendingAttachment({
-            name: file.name || (isImage ? 'imagem_colada.png' : 'arquivo_colado'),
+            name: file.name || (isImage ? 'imagem_colada.png' : isVideo ? 'video_colado.mp4' : 'arquivo_colado'),
             size: (file.size / 1024).toFixed(1) + ' KB',
-            type: file.type || (isImage ? 'image/png' : 'application/octet-stream'),
+            type: file.type || (isImage ? 'image/png' : isVideo ? 'video/mp4' : isAudio ? 'audio/ogg; codecs=opus' : 'application/octet-stream'),
             dataUrl: reader.result,
             url: reader.result,
             isImage: isImage,
-            isAudio: false
+            isVideo: isVideo,
+            isAudio: isAudio,
+            file: file
           });
         };
         reader.readAsDataURL(file);
